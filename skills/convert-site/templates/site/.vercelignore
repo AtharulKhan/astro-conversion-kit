@@ -1,5 +1,8 @@
-# Left out of a `vercel deploy` upload: run state, review output and the ignored screenshots and
-# reports. capture/ itself is uploaded, because the build reads it (hosting-vercel.md).
+# Left out of a `vercel deploy` upload. The CLI does not read .gitignore: without this file it
+# uploads everything that is ignored there too. The local build, run state, review output and the
+# ignored screenshots and reports stay out; capture/ itself is uploaded, because the remote build
+# reads it (hosting-vercel.md).
+/dist/
 /.conversion/
 /review/
 /capture/screens/

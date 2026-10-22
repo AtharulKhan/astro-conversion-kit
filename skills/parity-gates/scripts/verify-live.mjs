@@ -2,7 +2,8 @@
 // Live verifier: checks a deployed build (a preview or the production host) against the baseline
 // over HTTP. Routes answer 200, redirects resolve in one hop, the X-Robots-Tag header matches the
 // deploy's purpose, the sitemap answers, and a media sample has the captured sizes. Read-only and
-// paced; it stops after three consecutive blocked responses.
+// paced; it stops after three consecutive blocked responses, or at the first answer that is
+// Vercel's deployment protection.
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -44,10 +45,12 @@ Checks a deployed site against the baseline:
 Requests carry a browser user agent and ask for identity encoding. A 403, 429, 503 or network
 error is retried after twice the delay, doubling each time; three in a row stop the run. A
 request with no full response within 30 s is that check's failure (field "timeout"), not a
-block: the run goes on.
+block: the run goes on. A redirect to vercel.com/sso-api is Vercel's deployment protection, not
+the site: the run stops at the first one and says to pass --bypass, or to have the bypass secret
+created (Settings, Deployment Protection, Protection Bypass for Automation) and run it again.
 
 Exit codes: 0 every check passed, 1 a check failed, 2 usage or missing input, 3 stopped after
-three consecutive blocked responses (run it again later).`;
+three consecutive blocked responses (run it again later) or at deployment protection.`;
 
 const OPTIONS = {
   base: { type: 'string' },
@@ -71,6 +74,20 @@ const SITEMAPS = ['/sitemap-index.xml', '/sitemap_index.xml', '/sitemap.xml'];
 const PERMANENT = new Set([301, 308]);
 const TEMPORARY = new Set([302, 303, 307]);
 export const REQUEST_TIMEOUT_MS = 30_000;
+
+// Vercel Authentication answers a request without a valid bypass with a 302 to
+// https://vercel.com/sso-api?url=...: any redirect to a vercel.com host whose URL names sso-api.
+export function isVercelProtection(status, location) {
+  if (status < 300 || status > 399 || !location) return false;
+  let url;
+  try {
+    url = new URL(location);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  return (host === 'vercel.com' || host.endsWith('.vercel.com')) && url.href.includes('sso-api');
+}
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const show = (value) => JSON.stringify(value ?? null);
@@ -155,6 +172,16 @@ export function createVerifier({ base, bypass, delay = 500, timeout = REQUEST_TI
       }
       if (!reason) {
         blocks = 0;
+        const location = response.headers.get('location');
+        if (isVercelProtection(response.status, location)) {
+          const where = new URL(url);
+          const path = where.origin === baseUrl.origin ? `${where.pathname}${where.search}` : url;
+          throw new Stopped(
+            `deployment protection: ${path} answered ${response.status} to ${new URL(location).origin}/sso-api; ` +
+              'pass --bypass <secret>, or have the person create the bypass secret (Settings, Deployment Protection, ' +
+              'Protection Bypass for Automation) and run it again',
+          );
+        }
         return { status: response.status, headers: response.headers, body };
       }
       await response?.body?.cancel().catch(() => {});

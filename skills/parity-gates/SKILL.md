@@ -124,7 +124,9 @@ It checks every baseline route at 200 (or a `--sample`), every redirect in one h
 kind of status, noindex on pages iff `--expect-noindex`, the sitemap, and 20 media files by
 bytes (or `--media-manifest`, whose `url` may be the store's absolute URL or a site path checked
 at `<base><path>`). Every request times out after 30 s, a failure of that check rather than a
-block. Exit 3 means it was blocked: wait and rerun. A failure marked
+block. Exit 3 means it was blocked: wait and rerun. Exit 3 with `deployment protection:` means
+Vercel answered with its login redirect (302 to `vercel.com/sso-api`): pass `--bypass`, or the
+bypass secret has to be created first (a needs-you item), then rerun. A failure marked
 `unverified live` is a shortlink the capture never requested.
 
 ## Present the result

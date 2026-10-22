@@ -46,7 +46,8 @@ const TOOLS = {
   vercel: ['whoami'],
   wrangler: ['whoami'],
 };
-const NOT_LOGGED_IN_RE = /not (?:logged in|authenticated)|unauthenticated|please (?:run )?(?:\S+ )?login/i;
+// "Logged out." is what `vercel whoami` prints (exit 1, no prompt) when no one is logged in.
+const NOT_LOGGED_IN_RE = /not (?:logged in|authenticated)|unauthenticated|logged out|please (?:run )?(?:\S+ )?login/i;
 const DOTFILES = ['.gitconfig', '.ssh', '.npmrc', '.nvm', join('.config', 'gh')];
 
 function parseArgs(argv) {

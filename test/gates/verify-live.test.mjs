@@ -29,8 +29,9 @@ const TYPES = { '.html': 'text/html', '.xml': 'application/xml', '.jpg': 'image/
 // A static host for a built dist/, the way a deploy serves it: the baseline's redirects (or the
 // given ones) answered in one hop, <path>/index.html or index.xml for directory paths, 404 for anything else.
 // `noindex` adds X-Robots-Tag: noindex to every response, `blockAfter` answers 429 from then on.
-// `headers` records each request's headers.
-function serveDist(dist, { redirects, noindex = false, blockAfter = Infinity } = {}) {
+// `sso` answers every request the way Vercel Authentication does without a bypass: a 302 to
+// vercel.com/sso-api. `headers` records each request's headers.
+function serveDist(dist, { redirects, noindex = false, blockAfter = Infinity, sso = false } = {}) {
   const root = resolve(dist);
   const headers = [];
   const server = createServer((req, res) => {
@@ -40,6 +41,10 @@ function serveDist(dist, { redirects, noindex = false, blockAfter = Infinity } =
     if (headers.length > blockAfter) {
       res.writeHead(429, { 'Content-Type': 'text/plain' });
       return res.end('Too Many Requests');
+    }
+    if (sso) {
+      res.writeHead(302, { Location: `https://vercel.com/sso-api?url=${encodeURIComponent(url.href)}&nonce=x`, 'X-Robots-Tag': 'noindex' });
+      return res.end();
     }
     const rule = redirects.find((r) => r.from === `${url.pathname}${url.search}`) ?? redirects.find((r) => r.from === url.pathname);
     if (rule) {
@@ -318,6 +323,27 @@ test('three consecutive 429s stop the run with exit 3', async () => {
   assert.equal(result.code, 3, result.stdout + result.stderr);
   assert.match(result.stdout, /verify-live: stopped after 3 consecutive blocked responses \(429\)/);
   assert.equal(host.headers.length, 5);
+});
+
+test('a 302 to vercel.com/sso-api stops the run at the first answer with exit 3, naming deployment protection', async () => {
+  const host = await serve(good, { sso: true });
+  const result = await live(host.origin, ['--expect-noindex']);
+  assert.equal(result.code, 3, result.stdout + result.stderr);
+  assert.equal(host.headers.length, 1);
+  assert.doesNotMatch(result.stdout, /FAIL/);
+  assert.match(result.stdout, /^verify-live: 0 checked, 0 failed$/m);
+  assert.match(result.stdout, /^verify-live: deployment protection: \/ answered 302 to https:\/\/vercel\.com\/sso-api; pass --bypass <secret>, or have the person create the bypass secret \(Settings, Deployment Protection, Protection Bypass for Automation\) and run it again$/m);
+  const json = JSON.parse((await live(host.origin, ['--json'])).stdout);
+  assert.match(json.stopped, /^deployment protection: /);
+  assert.equal(json.checked, 0);
+});
+
+test('a redirect elsewhere on vercel.com is an ordinary redirect, not protection', async () => {
+  const redirects = [...baselineRedirects.filter((r) => r.from !== '/old-services'), { from: '/old-services', to: 'https://vercel.com/docs', status: 301 }];
+  const host = await serve(good, { redirects });
+  const result = await live(host.origin);
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stdout, /^ {2}FAIL redirect \/old-services location: expected "\/services\/", got "https:\/\/vercel\.com\/docs"$/m);
 });
 
 test('--help exits 0; a missing --base or baseline exits 2', async () => {

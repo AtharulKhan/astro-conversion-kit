@@ -140,6 +140,42 @@ test('vercel and wrangler are found through npx --no-install, then on PATH', (t)
   assert.ok(calls.every((c) => c.startsWith('--no-install ')), 'never lets npx install');
 });
 
+// Vercel CLI 65 logged out, as the live proof recorded it: `whoami` prints "> Logged out." and a
+// hint, exits 1, and never prompts. `exitCode` lets a shim that exits 0 be tested too.
+function fakeLoggedOutNpx(dir, log, exitCode) {
+  fakeBin(dir, 'npx', [
+    `echo "$@ HOME=$HOME" >> "${log}"`,
+    'if [ "$2" = "vercel" ] && [ "$3" = "--version" ]; then echo "Vercel CLI 65.1.0"; exit 0; fi',
+    'if [ "$2" = "vercel" ] && [ "$3" = "whoami" ]; then',
+    '  read -r answer && echo "read stdin: $answer"',
+    '  echo "> Logged out."',
+    '  echo "> Run \`vercel deploy --temporary\` to create a temporary deployment you can claim later, or \`vercel login\` to log in."',
+    `  exit ${exitCode}`,
+    'fi',
+    'echo "npm error could not determine executable to run" >&2; exit 1',
+  ].join('\n'));
+}
+
+test('a logged-out vercel (exit 1, "> Logged out.") is present and not logged in, probed with the real HOME', (t) => {
+  const bin = tempDir(t, 'preflight-bin-');
+  const home = tempDir(t, 'preflight-home-');
+  const log = join(home, 'npx.log');
+  fakeLoggedOutNpx(bin, log, 1);
+  const report = runJson(['--home', home, '--path-env', bin], { HOME: '/home/fixture-real' });
+  assert.deepEqual(report.tools.vercel, { present: true, version: '65.1.0', loggedIn: false, via: 'npx' });
+  const calls = readFileSync(log, 'utf8').trim().split('\n');
+  // The npx cache lives under HOME: the probe keeps the person's HOME, never --home or an empty one.
+  assert.ok(calls.every((c) => c.endsWith(' HOME=/home/fixture-real')), calls.join('\n'));
+});
+
+test('"> Logged out." means not logged in even when the CLI exits 0', (t) => {
+  const bin = tempDir(t, 'preflight-bin-');
+  const home = tempDir(t, 'preflight-home-');
+  fakeLoggedOutNpx(bin, join(home, 'npx.log'), 0);
+  const report = runJson(['--home', home, '--path-env', bin]);
+  assert.equal(report.tools.vercel.loggedIn, false);
+});
+
 test('a hanging login probe times out instead of blocking', { timeout: 30000 }, (t) => {
   const bin = tempDir(t, 'preflight-bin-');
   const home = tempDir(t, 'preflight-home-');
