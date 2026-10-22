@@ -157,3 +157,52 @@ test('SKILL.md: at most 200 lines; the read-only rule names every script that re
   }
   assert.match(rule, /[Aa]nalytics (are|is) blocked/);
 });
+
+const flat = (text) => text.replace(/\s+/g, ' ');
+
+test('PUBLIC_INDEXABLE=true in phases §7, §10 and the runbook is a local build-only variable, never the hosting setting', () => {
+  const phases = flat(read('references/phases.md'));
+  const gates = phases.split('## 7. gates')[1].split('## 8. visual')[0];
+  assert.match(gates, /`PUBLIC_INDEXABLE=true` here is a variable for that one local build, never the hosting setting/);
+  assert.match(gates, /still allows this build, `verify:release` and the pre-launch run/);
+  const prelaunch = phases.split('## 10. prelaunch')[1].split('## 11.')[0];
+  assert.match(prelaunch, /never the hosting setting: "leave it unset on the host" \(or in the intake\) still means run this command with it/);
+  assert.match(flat(read('references/runbook.md')), /`PUBLIC_INDEXABLE=true` in these commands sets it for that one local command only, never the host/);
+});
+
+test('build-rules.md: content links stay as captured; same-origin asset URLs are root-relative by default, one decision row', () => {
+  const rules = flat(read('references/build-rules.md'));
+  assert.match(rules, /\*\*Content links stay as captured\.\*\*/);
+  assert.match(rules, /never rewrite one to root-relative or to another host/);
+  assert.match(rules, /is a `links` exception/);
+  assert.match(rules, /\*\*Same-origin asset URLs are root-relative, by default\.\*\*/);
+  for (const part of ['`<script src>`', '`<img src>` and `srcset`', '`<source>`', 'preload']) assert.ok(rules.includes(part), part);
+  assert.match(rules, /a module script from live fails CORS/);
+  assert.match(rules, /One decision row covers the set/);
+});
+
+test('no live sitemap: build-rules and phases ship sitemap-index.xml as a decision row, and the routes gate allows it', () => {
+  const rules = flat(read('references/build-rules.md'));
+  assert.match(rules, /\*\*No live sitemap\.\*\*[^*]*Astro's `sitemap-index\.xml`[^*]*points at `\/sitemap-index\.xml`: one decision row/);
+  assert.match(rules, /Never build the robots-named file live did not serve/);
+  const phases = flat(read('references/phases.md'));
+  assert.match(phases, /The routes gate never calls `sitemap-index\.xml` or `sitemap-<n>\.xml` an extra/);
+});
+
+test('phases.md: wait for the preview to serve this build before shoot and styles, and stop it', () => {
+  const phases = read('references/phases.md');
+  assert.match(phases, /\*\*Serve, then wait\.\*\*/);
+  assert.match(phases, /^ {4}npm run preview -- --background --port 4321$/m);
+  assert.match(phases, /^ {4}node -e .*fetch\('http:\/\/localhost:4321\/preview-ready\.txt'\).*$/m);
+  assert.match(phases, /^ {4}rm dist\/preview-ready\.txt$/m);
+  assert.match(flat(phases.split('## 8. visual')[1]), /Serve the full build and wait for it first/);
+  assert.match(phases, /npx astro preview stop/);
+});
+
+test('SKILL.md: the post-plan status is required non-interactively, state.mjs calls one at a time with the reason, one commit per template, stop the preview', () => {
+  const skill = flat(read('SKILL.md'));
+  assert.match(skill, /required in a non-interactive run too/);
+  assert.match(skill, /never chained with `&&`: each rewrites `state\.json`/);
+  assert.match(skill, /One commit per template/);
+  assert.match(skill, /Stop any preview server you started \(`npx astro preview stop`\)/);
+});

@@ -225,7 +225,8 @@ representatives:
     node scripts/verify/seo.mjs --paths "$P"
     node scripts/verify/text.mjs --paths "$P"
 
-Add `--allow-extra /thank-you/` to the routes gate when that page is new (`forms.md`). Each of
+The media gate with `--paths` checks the media those pages reference (`referencedBy` in
+`baseline/media.json`), so "media: 0 checked" means those pages reference no media file. Add `--allow-extra /thank-you/` to the routes gate when that page is new (`forms.md`). Each of
 the seven must exit 0 before the commit (`feat: <template> template`). `links`,
 `redirects` and `sitemaps` are not run yet; they run in phase 7.
 
@@ -236,6 +237,18 @@ match. The proof is `npm run review:diff -- --a capture/screens/live --b review/
 review/diff` and `npm run review:styles -- --live $LIVE --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json` exiting 0 for the template set (with `npm run preview` serving the build). From here a fix goes
 in the template, never in one page.
 
+**Serve, then wait.** Before every `review:shoot` or `review:styles` against the build, start
+the preview in the background and wait until it serves this build's `dist/` (a sentinel file),
+never a server that is still starting or a leftover one; then remove the sentinel, so no gate
+counts it as an extra:
+
+    node -e "require('fs').writeFileSync('dist/preview-ready.txt', String(Date.now()))"
+    npm run preview -- --background --port 4321
+    node -e "const t=require('fs').readFileSync('dist/preview-ready.txt','utf8');(async()=>{for(let i=0;i<300;i++){try{const r=await fetch('http://localhost:4321/preview-ready.txt');if(r.ok&&(await r.text())===t)process.exit(0)}catch{}await new Promise(r=>setTimeout(r,200))}console.error('preview did not answer in 60 s');process.exit(1)})()"
+    rm dist/preview-ready.txt
+
+Stop it with `npx astro preview stop` when the review is done, and before the run ends.
+
 **Overrides.** A looser visual threshold lives in the committed `docs/visual-overrides.json`,
 keyed by route folder: `{ "<route>": { "id": "<decision id>", "threshold": <at most 2>,
 "reason": "<why>" } }`. Record the decision first (`S decision …`); its id goes in `id`.
@@ -244,8 +257,13 @@ a threshold above 2 %. Every override is listed in the PR body. Height differenc
 not ignored: the rows one screenshot has beyond the other count as differing pixels.
 
 **Rollout.** Every remaining page through its template's route, from captured markup
-(`build-rules.md`), plus sitemaps, feeds, the 404 page and robots. With subagents, one
-implementer per template.
+(`build-rules.md`), plus sitemaps, feeds, the 404 page and robots. Sitemaps follow
+`build-rules.md` ("Sitemaps, feeds, robots, 404"): the live names when live had them; when live
+publishes none (`baseline/sitemaps.json` is `[]`, a robots-named sitemap that 404s included),
+Astro's `sitemap-index.xml`, with the release robots.txt `Sitemap:` line pointing at it, as one
+decision row. The routes gate never calls `sitemap-index.xml` or `sitemap-<n>.xml` an extra,
+and does call a robots-named file live never served one. With subagents, one implementer per
+template.
 
 **Proof:** `npm run build` passes with every route built, and the seven path-scoped gates pass
 for every path.
@@ -268,6 +286,12 @@ passes the staging comparison, never this one), and rebuild staging:
     npm run verify:release -- <the same flags>
     npm run build
 
+`PUBLIC_INDEXABLE=true` here is a variable for that one local build, never the hosting
+setting: nothing is deployed from it, and the plain `npm run build` after it puts the staging
+build back. An instruction to leave `PUBLIC_INDEXABLE` unset (the intake's, the host's, the
+person's) is about the host's environment and still allows this build, `verify:release` and the
+pre-launch run in phase 10. Skipping them is not an option.
+
 **Proof:** `npm run verify` exits 0 on the full build, `npm run verify:release` on the
 `PUBLIC_INDEXABLE=true` build (and `verify:proposals` when there are proposals). No PR is opened
 before this holds.
@@ -276,6 +300,7 @@ before this holds.
 
     S phase visual
 
+Serve the full build and wait for it first (phase 6, "Serve, then wait"; after every rebuild).
 The template set is locked (phase 6); rerun its loop once on the full build to confirm it still
 passes. Then the `visual-review` reference, step 7: shoot live once more into
 `capture/screens/live-all` (a capture step, default pacing), shoot new into `review/new-all`,

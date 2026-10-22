@@ -66,6 +66,8 @@ Typical run-specific lines (keep the ones that apply):
    --dir . --production-url <live> --predecessor-url <live> --ignore-dir capture --out review/pre-launch`
    and `node <kit>/skills/convert-site/scripts/prelaunch-reconcile.mjs --findings
    review/pre-launch/gate.json --baseline baseline --plan docs/plan.md`, which must exit 0.
+   `PUBLIC_INDEXABLE=true` in these commands sets it for that one local command only, never
+   the host; the host's switch is step 6.
 6. Set the switch for production (Vercel: `npx vercel env add PUBLIC_INDEXABLE production`,
    value `true`; Cloudflare: it is on the local build). Vercel, when staging was
    protected (`publicStaging` `false`): restore the default protection, previews only, so the

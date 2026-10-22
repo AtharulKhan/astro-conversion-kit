@@ -71,7 +71,8 @@ does not answer, the defaults stand. Never send a second question message.
 
 The order is `docs/process.md`'s; `references/phases.md` has every command and each proof. At
 each boundary run `node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE phase <name>`; do
-not start a phase until the previous one's proof holds. Run `state.mjs` calls one at a time.
+not start a phase until the previous one's proof holds. Run `state.mjs` calls one at a time, never
+chained with `&&`: each rewrites `state.json`, and a chain failing partway leaves it out of step.
 
 | # | Phase (`<name>`) | What happens | Done when |
 |---|---|---|---|
@@ -101,8 +102,11 @@ original paths, fonts self-hosted, CSS by coverage pruning (`css-coverage.mjs` t
 `css-prune.mjs`), never a rewrite. Forms per `references/forms.md`, third-party scripts per
 `references/third-party.md`. `redirects.csv` is the single redirect source: a new redirect is a
 row whose `source` is `decision` and whose `note` names the decision id, then `npm run
-redirects:build`; never hand-edit the generated rules. The design is locked on the templates
-(visual-review) before the rollout to every page.
+redirects:build`; never hand-edit the generated rules. One commit per template (`feat:
+<template> template`, once its path-scoped gates pass), never one for the whole build. The
+design is locked on the templates (visual-review) before the rollout to every page. With
+subagents, one implementer per template or gate fix, never two on one file; each brief carries
+absolute paths and `build-rules.md`, and you review their commits before the next phase.
 
 ## Decisions, exceptions, proposals
 
@@ -133,17 +137,12 @@ Vercel by default, Cloudflare Pages on request: `references/hosting-vercel.md` a
 `PUBLIC_INDEXABLE=true`. Media is `repo`, `store` (`media-upload.mjs`) or `live-temporary`
 (staging only; gone before DNS moves), as `media-plan.mjs` decides (`references/phases.md` §3).
 
-## Splitting the work
-
-If your agent can run subagents, use one implementer per template (phase 6) or per gate fix,
-never two on one file; each brief carries absolute paths and `build-rules.md`, and you review
-their commits before the next phase. Without subagents, the same work one template at a time.
-
 ## The one message after the plan
 
 After phase 3, send one short status (not a question): platform, page and template counts, the
 media decision, out-of-scope features and the options, the decisions taken by default, and the
-needs-you list so far. Then carry on without waiting.
+needs-you list so far. It is required in a non-interactive run too (standing answers, nobody
+replying): progress lines do not replace it. Then carry on without waiting.
 
 ## The pull request (phase 12)
 
@@ -175,7 +174,8 @@ Lead with the PR link (and "draft: waiting on the form id" when it is one), then
 converted (counts), gates and visual review in one line each, the staging URL, the needs-you list
 under **Waiting on you** read from `state.mjs --dir $SITE get needsYou` (each item with the exact
 command or click, in runbook order), then every "Not covered" section verbatim. Say "PR open,
-waiting on your merge", never "done" or "live". Then stop.
+waiting on your merge", never "done" or "live". Stop any preview server you started (`npx astro
+preview stop`), then stop.
 
 ## Resuming
 

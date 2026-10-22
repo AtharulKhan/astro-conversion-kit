@@ -28,6 +28,24 @@ parity and this file is wrong: say so and fix this file.
 - **Components beyond the shared parts** are the optional pass (`components-optional.md`),
   after the visual review, never during the build.
 
+## URLs in the captured markup
+
+- **Content links stay as captured.** Every `<a href>` (and `<area href>`, a form `action`, and
+  the head's canonical, alternate, REST and oEmbed links) keeps the URL the capture saved, a
+  same-origin absolute one (`https://<live host>/team`) included: never rewrite one to
+  root-relative or to another host. The links gate counts same-origin absolute links as internal.
+  Dropping or changing one because it cannot work on a static site is a `links` exception
+  (`exceptions.json`, SKILL.md "Decisions, exceptions, proposals"), never an edit.
+- **Same-origin asset URLs are root-relative, by default.** A `<script src>`, a `<link href>` for
+  a stylesheet, icon or preload, an `<img src>` and `srcset`, and a `<video>`, `<audio>` or
+  `<source>` `src` (and `poster`) that the captured markup writes absolute to the live origin
+  become root-relative (`https://<live host>/wp-content/x.js` to `/wp-content/x.js`), so a local,
+  preview or staging build never loads an asset from live: a module script from live fails CORS
+  there and breaks styles parity, and the visual review would prove live's files instead of the
+  copies under `public/`. One decision row covers the set (topic "same-origin asset URLs
+  root-relative"). Other origins, and `<meta>` values such as `og:image`, stay as captured.
+  `css-prune.mjs` already rewrites the stylesheet's same-origin `url()` references the same way.
+
 ## CSS
 
 - Coverage first, then prune: `capture/css-coverage.json` (phase 2) and `css-prune.mjs` into
@@ -111,7 +129,16 @@ parity and this file is wrong: say so and fix this file.
   `capture/robots.txt` (sitemap URLs adjusted only if their file names changed).
 - `capture/sitemaps/` holds every sitemap robots.txt names (`state.json` fingerprint
   `robotsSitemaps`), including WordPress core's `/wp-sitemap.xml`, and their children; the
-  build serves each at its live URL.
+  build serves each at its live URL. `capture/sitemaps/index.json` lists every sitemap URL the
+  capture asked for with its status.
+- **No live sitemap.** When live publishes none (`baseline/sitemaps.json` is `[]`; a robots.txt
+  `Sitemap:` line whose file answered 404 counts as none), the build ships Astro's
+  `sitemap-index.xml` (and its `sitemap-<n>.xml`), and the release robots.txt's `Sitemap:` line
+  points at `/sitemap-index.xml`: one decision row (topic "no live sitemap"). Never build the
+  robots-named file live did not serve: the routes gate calls it an extra, while it always
+  allows `sitemap-index.xml` and `sitemap-<n>.xml`, and the sitemaps gate reads them. pre-launch
+  then finds no sitemap on live (`predecessor.coverage`), which `prelaunch-reconcile` accepts
+  when every crawled page is built (`phases.md` §10).
 - `src/pages/404.astro` holds the site's own 404 page in its layout: the markup is in
   `capture/pages/404.html` (visible text in `capture/text/404.txt`), named by `capture/meta.json`
   `notFound.snapshot`. The capture fetched it once from a path that cannot exist; it is not a
