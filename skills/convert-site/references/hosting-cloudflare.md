@@ -67,9 +67,10 @@ the environment (never in chat or the repo):
 
     node $KIT/skills/convert-site/scripts/media-upload.mjs --store r2 --dir .conversion/media-cache --manifest media-manifest.json --prefix /wp-content/uploads/ --media capture/media.json
 
-Rerun until it exits 0 (it resumes); commit `media-manifest.json`. Pages cannot rewrite to another
-origin, so a Pages Function serves the prefix from the bucket. No public bucket and no R2 custom
-domain are needed; the function reads the bucket through its binding:
+Rerun until it exits 0 (it resumes); commit `media-manifest.json`. Each entry's `url` is the
+file's site path (`/wp-content/uploads/…`), never the private API address. Pages cannot rewrite
+to another origin, so a Pages Function serves the prefix from the bucket. No public bucket and no
+R2 custom domain are needed; the function reads the bucket through its binding:
 
 1. Copy `$KIT/skills/convert-site/templates/cloudflare/r2-media-function.js` to
    `functions/<prefix without its leading slash>[[path]].js`, for example

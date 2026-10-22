@@ -1,6 +1,8 @@
 // Cloudflare R2 through its S3-compatible API, signed with AWS Signature V4
 // using node:crypto (no SDK). Path-style URLs: <endpoint>/<bucket>/<key>.
 // Secrets are only used to derive the signing key, never logged.
+// put() returns the site path (/<key>) as the url: the bucket is private and the site serves it
+// through the R2 media function at that path. head() takes that path back to the API object.
 import { createHash, createHmac } from 'node:crypto';
 import { fetchWithRetry } from './retry.mjs';
 
@@ -64,6 +66,7 @@ export function createR2Store({ env = process.env, endpoint } = {}) {
   const base = (endpoint ?? `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`).replace(/\/+$/, '');
   const creds = { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY };
   const objectUrl = (key) => `${base}/${encodeKey(env.R2_BUCKET)}/${encodeKey(key)}`;
+  const apiUrl = (url) => (url.startsWith('/') ? `${base}/${encodeKey(env.R2_BUCKET)}${url}` : url);
   return {
     async put(key, body, contentType) {
       const url = objectUrl(key);
@@ -77,9 +80,10 @@ export function createR2Store({ env = process.env, endpoint } = {}) {
       const res = await fetchWithRetry(url, { method: 'PUT', headers: withoutHost(headers), body });
       const text = await res.text();
       if (!res.ok) throw new Error(`R2 PUT ${key} answered ${res.status}: ${text.slice(0, 200)}`);
-      return { url, etag: res.headers.get('etag') };
+      return { url: `/${encodeKey(key)}`, etag: res.headers.get('etag') };
     },
-    async head(url) {
+    async head(sitePathOrUrl) {
+      const url = apiUrl(sitePathOrUrl);
       const headers = signV4({ method: 'HEAD', url, payloadHash: EMPTY_SHA256, ...creds });
       const res = await fetchWithRetry(url, { method: 'HEAD', headers: withoutHost(headers) });
       if (!res.ok) throw new Error(`HEAD ${url} answered ${res.status}`);

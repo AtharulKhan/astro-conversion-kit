@@ -21,6 +21,8 @@ Each upload is checked with a HEAD whose content-length must match the file.
 PUT and HEAD are retried twice (after 1 s, then 2 s) on 429 and 5xx.
 The manifest ([{ path, bytes, url, etag }]) is saved every 50 uploads and at
 the end; files already in it with the same size are skipped, so a rerun resumes.
+url is the object's public address on blob, and on r2 the site path the R2 media
+function serves (the bucket itself stays private).
 With --media, each file's content type comes from the captured media list;
 otherwise it is looked up from the file extension.
 

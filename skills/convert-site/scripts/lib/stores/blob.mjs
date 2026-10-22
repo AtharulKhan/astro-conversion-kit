@@ -5,13 +5,15 @@ import { fetchWithRetry } from './retry.mjs';
 export const BLOB_ENDPOINT = 'https://blob.vercel-storage.com';
 export const BLOB_ENV = ['BLOB_READ_WRITE_TOKEN'];
 
-// The full PUT header set; authorization and x-content-type are filled per request.
-// Verified against a real Blob store: pending.
+// The full PUT header set; authorization and x-content-type are filled per request. The names
+// are the ones @vercel/blob's put() sends; x-vercel-blob-access: public makes the object readable
+// at its returned url, which the media rewrite points at. Verified against a real Blob store: pending.
 // x-allow-overwrite lets a re-PUT succeed after a failed HEAD or a lost manifest.
 export const BLOB_PUT_HEADERS = Object.freeze({
   authorization: 'Bearer <BLOB_READ_WRITE_TOKEN>',
   'x-api-version': '7',
   'x-content-type': '<content type>',
+  'x-vercel-blob-access': 'public',
   'x-add-random-suffix': '0',
   'x-allow-overwrite': '1',
   'x-cache-control-max-age': '31536000',

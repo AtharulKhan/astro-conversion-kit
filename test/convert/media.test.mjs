@@ -242,6 +242,7 @@ function makeCache(name) {
 // A stand-in for the object store: records PUTs, serves HEADs of what it stored.
 async function startStoreStub({ lie = false, failPuts = 0, failHeads = 0 } = {}) {
   const puts = [];
+  const heads = [];
   const attempts = { PUT: 0, HEAD: 0 };
   const stored = new Map();
   let origin;
@@ -272,6 +273,7 @@ async function startStoreStub({ lie = false, failPuts = 0, failHeads = 0 } = {})
         return;
       }
       if (req.method === 'HEAD') {
+        heads.push({ path, headers: req.headers });
         const body = stored.get(path.replace(/^\/public/, ''));
         if (!body) {
           res.writeHead(404);
@@ -291,6 +293,7 @@ async function startStoreStub({ lie = false, failPuts = 0, failHeads = 0 } = {})
   return {
     origin,
     puts,
+    heads,
     attempts,
     close: () =>
       new Promise((r) => {
@@ -317,6 +320,7 @@ test('blob upload against a stub: 3 files, verified sizes, manifest written, sec
     assert.equal(put.headers.authorization, `Bearer ${token}`);
     assert.equal(put.headers['x-api-version'], '7');
     assert.equal(put.headers['x-content-type'], 'image/jpeg');
+    assert.equal(put.headers['x-vercel-blob-access'], 'public');
     assert.equal(put.headers['x-add-random-suffix'], '0');
     assert.equal(put.headers['x-allow-overwrite'], '1');
     assert.equal(put.headers['x-cache-control-max-age'], '31536000');
@@ -402,6 +406,12 @@ test('r2 upload against a stub: signed PUTs to /<bucket>/<key>, verified by HEAD
     assert.match(put.headers['x-amz-content-sha256'], /^[0-9a-f]{64}$/);
     const entries = JSON.parse(readFileSync(manifest, 'utf8'));
     assert.equal(entries.length, 3);
+    // The manifest url is the site path the R2 media function serves, never the private API address.
+    assert.equal(entries.find((e) => e.path === '/wp-content/uploads/2026/01/b.webp').url, '/wp-content/uploads/2026/01/b.webp');
+    assert.ok(entries.every((e) => e.url === e.path), JSON.stringify(entries));
+    const head = stub.heads.find((h) => h.path === '/media/wp-content/uploads/2026/01/b.webp');
+    assert.ok(head, 'verified by a HEAD on the API object');
+    assert.match(head.headers.authorization, /^AWS4-HMAC-SHA256 Credential=AKIDTEST\//);
     const second = await run(UPLOAD, args, env);
     assert.equal(second.code, 0, second.stderr);
     assert.equal(stub.puts.length, 3);
