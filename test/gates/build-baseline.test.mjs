@@ -113,9 +113,13 @@ test('seo: head fields per page answering 200', () => {
 test('redirects: capture redirects and shortlinks, as JSON and as redirects.csv', () => {
   const redirects = readJson(baseline, 'redirects.json');
   assert.equal(redirects.length, 14);
-  for (const r of redirects) assert.deepEqual(Object.keys(r), ['from', 'to', 'status', 'source']);
+  // Shortlinks keep verified, so the redirects gate can tell an unverified one apart.
+  for (const r of redirects) {
+    const keys = r.source === 'shortlink' ? ['from', 'to', 'status', 'source', 'verified'] : ['from', 'to', 'status', 'source'];
+    assert.deepEqual(Object.keys(r), keys);
+  }
   assert.deepEqual(redirects.find((r) => r.from === '/old-services'), { from: '/old-services', to: '/services/', status: 301, source: 'seed' });
-  assert.deepEqual(redirects.find((r) => r.from === '/?p=6'), { from: '/?p=6', to: '/contact/', status: 301, source: 'shortlink' });
+  assert.deepEqual(redirects.find((r) => r.from === '/?p=6'), { from: '/?p=6', to: '/contact/', status: 301, source: 'shortlink', verified: false });
 
   const lines = readFileSync(join(root, 'redirects.csv'), 'utf8').trimEnd().split('\n');
   assert.equal(lines[0], 'from,to,status,source,note');
@@ -193,6 +197,58 @@ test('--check passes on the built baseline and exits 1 after a route is deleted'
   const drifted = await build(['--out', copy, '--check']);
   assert.equal(drifted.code, 1);
   assert.match(drifted.stdout, /routes: expected 16, got 15/);
+});
+
+test('meta.json records the capture origin, times and platform', () => {
+  const meta = readJson(baseline, 'meta.json');
+  const captured = readJson(capture, 'meta.json');
+  assert.deepEqual(Object.keys(meta), ['origin', 'canonicalOrigin', 'capturedAt', 'builtAt', 'platform']);
+  assert.equal(meta.origin, captured.origin);
+  assert.equal(meta.canonicalOrigin, captured.canonicalOrigin);
+  assert.equal(meta.capturedAt, captured.finishedAt);
+  assert.ok(!Number.isNaN(Date.parse(meta.builtAt)));
+  assert.equal(meta.platform, 'wordpress');
+  // The absolute URLs in seo.json are on this origin.
+  assert.ok(readJson(baseline, 'seo.json')['/contact/'].canonical.startsWith(meta.canonicalOrigin));
+});
+
+for (const [file, script] of [['media.json', 'media.mjs'], ['templates.json', 'templates.mjs']]) {
+  test(`a capture without ${file} exits 2 and says to run ${script}`, async (t) => {
+    const copy = join(root, `no-${file}`);
+    t.after(() => rmSync(copy, { recursive: true, force: true }));
+    cpSync(capture, copy, { recursive: true });
+    rmSync(join(copy, file));
+    const result = await build(['--capture', copy, '--out', join(copy, '..', `no-${file}-baseline`)]);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, new RegExp(`run ${script.replace('.', '\\.')} first`));
+    assert.ok(!existsSync(join(root, `no-${file}-baseline`)), 'nothing written');
+  });
+}
+
+test('a capture without feeds or scripts warns and still builds; without wp-rest it is silent', async (t) => {
+  const copy = join(root, 'sparse');
+  const out = join(root, 'sparse-out', 'baseline');
+  t.after(() => {
+    rmSync(copy, { recursive: true, force: true });
+    rmSync(join(root, 'sparse-out'), { recursive: true, force: true });
+  });
+  cpSync(capture, copy, { recursive: true });
+  for (const p of ['feeds', 'scripts.json', 'wp-rest']) rmSync(join(copy, p), { recursive: true });
+  const result = await build(['--capture', copy, '--out', out]);
+  assert.equal(result.code, 0, result.stderr);
+  const warnings = result.stderr.trim().split('\n');
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /warning: no feeds\/index\.json/);
+  assert.match(warnings[1], /warning: no scripts\.json/);
+  assert.deepEqual(readJson(out, 'scripts.json'), {});
+});
+
+test('--out pointing at the capture folder exits 2 and leaves the capture alone', async () => {
+  const result = await build(['--capture', capture, '--out', capture]);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /capture folder/);
+  assert.ok(existsSync(join(capture, 'text', 'contact.txt')));
+  assert.ok(!existsSync(join(capture, 'routes.json')));
 });
 
 test('usage errors exit 2', async () => {

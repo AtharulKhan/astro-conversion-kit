@@ -16,13 +16,15 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
                   captured page, feed and linked file; kind is page|post|archive|feed|file|other
   seo.json        { "<path>": { title, description, canonical, robots, lang, h1[], h2[], og{},
                   twitter{}, jsonLd[] } } for every page answering 200
-  redirects.json  [{ from, to, status, source }] from the capture's redirects and shortlinks
+  redirects.json  [{ from, to, status, source, verified? }] from the capture's redirects and
+                  shortlinks; shortlinks keep verified (true when it was requested)
   media.json      [{ path, bytes, contentType }] for every media file answering 200
   forms.json      { "<path>": [{ action, method, fields[] }] }
   scripts.json    { "<vendor>": { id, ids[], pages[], keep } }; keep is true, set it to false
                   to drop a vendor from the build
   text/           the visible text of each page, copied from the capture
   counts.json     routes, byStatus, byTemplate, redirects (by source), media, forms, scripts
+  meta.json       { origin, canonicalOrigin, capturedAt, builtAt, platform } of the capture
 and redirects.csv (from,to,status,source,note) for the host. A redirect with no target (an
 unverified shortlink the site did not resolve) is left out and named on stderr.
 
@@ -31,6 +33,10 @@ unverified shortlink the site did not resolve) is left out and named on stderr.
   --csv <file>      where to write redirects.csv (default: redirects.csv beside --out)
   --check           recount the baseline in --out and compare with its counts.json
   --help            show this help
+
+The capture needs inventory.json, media.json (media.mjs) and templates.json (templates.mjs).
+A missing feeds/index.json or scripts.json is warned about; a missing wp-rest/ is normal off
+WordPress. --out must not be the capture folder.
 
 Exit codes: 0 written or counts match, 1 counts drifted, 2 usage error or missing input.`;
 
@@ -44,6 +50,10 @@ const OPTIONS = {
 
 const readJson = (file, fallback) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : fallback);
 const writeJson = (file, data) => writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+// The capture's foundBy order (capture.mjs SOURCE_ORDER).
+const SOURCE_ORDER = ['sitemap', 'rest', 'crawl', 'shortlink', 'seed'];
+const rank = (s) => (SOURCE_ORDER.includes(s) ? SOURCE_ORDER.indexOf(s) : SOURCE_ORDER.length);
+export const sortSources = (sources) => [...new Set(sources)].sort((a, b) => rank(a) - rank(b));
 const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 const sorted = (object) => Object.fromEntries(Object.entries(object).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 
@@ -95,7 +105,7 @@ export function buildRoutes({ inventory, feeds, media, templates, rest, foundBy 
   for (const f of feeds) {
     if (seen.has(f.path)) continue;
     seen.add(f.path);
-    routes.push({ path: f.path, status: f.status, kind: 'feed', template: 'other', noindex: false, snapshot: f.file ?? null, foundBy: foundBy[f.url] ?? [] });
+    routes.push({ path: f.path, status: f.status, kind: 'feed', template: 'other', noindex: false, snapshot: f.file ?? null, foundBy: sortSources(foundBy[f.url] ?? []) });
   }
   // Files the pages link to (a PDF in the footer) are URLs the new site has to answer too.
   const files = new Map(media.filter((m) => m.status === 200).map((m) => [m.path, m]));
@@ -138,7 +148,9 @@ export function buildRedirects(captured) {
       skipped.push(r);
       continue;
     }
-    redirects.push({ from: r.from, to: r.to, status: r.status, source: r.source });
+    const entry = { from: r.from, to: r.to, status: r.status, source: r.source };
+    if (typeof r.verified === 'boolean') entry.verified = r.verified;
+    redirects.push(entry);
     const note = r.source === 'shortlink' && r.verified === false ? 'unverified shortlink' : '';
     csvRows.push([r.from, r.to, r.status, r.source, note]);
   }
@@ -231,21 +243,44 @@ function check(out) {
   console.log(`baseline: counts match ${countsFile}`);
 }
 
+export function buildMeta(meta, state, builtAt = new Date().toISOString()) {
+  return {
+    origin: meta.origin ?? state.origin ?? null,
+    canonicalOrigin: meta.canonicalOrigin ?? state.canonicalOrigin ?? null,
+    capturedAt: meta.finishedAt ?? meta.startedAt ?? null,
+    builtAt,
+    platform: state.fingerprint?.platform ?? null,
+  };
+}
+
+// A skipped input is never a pass: a file every baseline needs stops the build.
+const REQUIRED = [
+  ['inventory.json', 'capture.mjs'],
+  ['media.json', 'media.mjs'],
+  ['templates.json', 'templates.mjs'],
+];
+const WARNED = [join('feeds', 'index.json'), 'scripts.json'];
+
 function build(capture, out, csvFile) {
-  const inventoryFile = join(capture, 'inventory.json');
-  if (!existsSync(inventoryFile)) {
-    console.error(`No inventory.json in ${capture}. Run capture.mjs first.`);
-    process.exit(2);
+  for (const [file, script] of REQUIRED) {
+    if (!existsSync(join(capture, file))) {
+      console.error(`No ${file} in ${capture}: run ${script} first.`);
+      process.exit(2);
+    }
   }
-  const inventory = readJson(inventoryFile);
-  const media = readJson(join(capture, 'media.json'), []);
+  for (const file of WARNED) {
+    if (!existsSync(join(capture, file))) console.error(`warning: no ${file} in ${capture}; the baseline records none.`);
+  }
+  const inventory = readJson(join(capture, 'inventory.json'));
+  const media = readJson(join(capture, 'media.json'));
+  const state = readJson(join(capture, 'state.json'), {});
   const routes = buildRoutes({
     inventory,
     feeds: readJson(join(capture, 'feeds', 'index.json'), []),
     media,
-    templates: readJson(join(capture, 'templates.json'), []),
+    templates: readJson(join(capture, 'templates.json')),
     rest: restKinds(capture),
-    foundBy: readJson(join(capture, 'state.json'), {}).foundBy ?? {},
+    foundBy: state.foundBy ?? {},
   });
   const { redirects, csvRows, skipped } = buildRedirects(readJson(join(capture, 'redirects.json'), []));
   const baseline = {
@@ -265,6 +300,7 @@ function build(capture, out, csvFile) {
   writeJson(join(out, 'forms.json'), baseline.forms);
   writeJson(join(out, 'scripts.json'), baseline.scripts);
   writeJson(join(out, 'counts.json'), counts);
+  writeJson(join(out, 'meta.json'), buildMeta(readJson(join(capture, 'meta.json'), {}), state));
   rmSync(join(out, 'text'), { recursive: true, force: true });
   if (existsSync(join(capture, 'text'))) cpSync(join(capture, 'text'), join(out, 'text'), { recursive: true });
   mkdirSync(dirname(csvFile), { recursive: true });
@@ -297,7 +333,12 @@ function main() {
     check(out);
     return;
   }
-  build(resolve(values.capture), out, resolve(values.csv ?? join(dirname(out), 'redirects.csv')));
+  const capture = resolve(values.capture);
+  if (capture === out) {
+    console.error(`--out ${out} is the capture folder; write the baseline somewhere else.`);
+    process.exit(2);
+  }
+  build(capture, out, resolve(values.csv ?? join(dirname(out), 'redirects.csv')));
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
