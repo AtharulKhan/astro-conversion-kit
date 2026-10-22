@@ -42,35 +42,47 @@ function writeMediaSamples(dir, origin) {
 let fixture;
 let dir;
 let bare;
+let missing;
 let assets;
 let bareAssets;
+let missingAssets;
 let readme;
 let bareReadme;
+let missingReadme;
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'readme-test-'));
   bare = mkdtempSync(join(tmpdir(), 'readme-bare-test-'));
+  missing = mkdtempSync(join(tmpdir(), 'readme-missing-test-'));
   fixture = await startFixture();
   const crawl = await run('capture.mjs', [fixture.origin, '--out', dir, '--delay', '0', '--no-rest', '--seed', '/private-page/']);
   assert.equal(crawl.code, 0, crawl.stderr);
   cpSync(dir, bare, { recursive: true });
+  cpSync(dir, missing, { recursive: true });
   writeMediaSamples(dir, fixture.origin);
+  // A stylesheet naming a font the site does not have.
+  mkdirSync(join(missing, 'css'), { recursive: true });
+  writeFileSync(join(missing, 'css', '1.css'), '@font-face { font-family: Gone; src: url("fonts/gone.woff2") format("woff2"); }\n');
+  const gone = [{ file: '1.css', href: `${fixture.origin}/wp-content/themes/fixture/style.css`, pages: ['/'] }];
+  writeFileSync(join(missing, 'css', 'manifest.json'), JSON.stringify(gone));
 
-  for (const d of [dir, bare]) {
+  for (const d of [dir, bare, missing]) {
     const t = await run('templates.mjs', ['--capture', d]);
     assert.equal(t.code, 0, t.stderr);
   }
   assets = await run('assets.mjs', ['--capture', dir, '--delay', '0']);
   bareAssets = await run('assets.mjs', ['--capture', bare, '--delay', '0']);
-  for (const d of [dir, bare]) {
+  missingAssets = await run('assets.mjs', ['--capture', missing, '--delay', '0']);
+  for (const d of [dir, bare, missing]) {
     const r = await run('readme.mjs', ['--capture', d]);
     assert.equal(r.code, 0, r.stderr);
   }
   readme = readFileSync(join(dir, 'README.md'), 'utf8');
   bareReadme = readFileSync(join(bare, 'README.md'), 'utf8');
+  missingReadme = readFileSync(join(missing, 'README.md'), 'utf8');
 });
 after(async () => {
   await fixture.close();
-  for (const d of [dir, bare]) rmSync(d, { recursive: true, force: true });
+  for (const d of [dir, bare, missing]) rmSync(d, { recursive: true, force: true });
 });
 
 const sameBytes = (saved, original) => assert.ok(readFileSync(saved).equals(readFileSync(original)), saved);
@@ -97,11 +109,11 @@ test('the README covers templates, vendors, indexing and the Wayback check', () 
   assert.match(readme, /Platform: wordpress 6\.6\.2/);
   assert.match(readme, /Theme: fixture/);
   assert.match(readme, /^## Templates$/m);
-  assert.match(readme, /\| page \| 7 \| /);
+  assert.match(readme, /\| home \| 1 \| \/ \|/);
   assert.match(readme, /\| archive \| 2 \| /);
   assert.match(readme, /G-FIXTURE1/);
   assert.match(readme, /GTM-FIXTURE/);
-  assert.match(readme, /noindex: 1/);
+  assert.match(readme, /meta noindex: 1/);
   assert.match(readme, /\/private-page\//);
   assert.match(readme, /\| seed \| 1 \|/, 'foundBy counts');
   // Eleven linked pages plus the seeded noindex page, each with its own ?p= shortlink.
@@ -112,11 +124,32 @@ test('the README covers templates, vendors, indexing and the Wayback check', () 
   assert.match(readme, /\/feed\//);
   assert.match(readme, /Iframes: none/);
   assert.match(readme, /Wayback unverified: 0/);
+  assert.match(readme, /^- logo: assets\/logo\.svg$/m);
+  assert.match(readme, /^- font: assets\/fonts\/fixture-serif\.woff2$/m);
+  assert.match(readme, /^- apple-touch-icon: none on the site$/m);
   assert.match(readme, /## Notes\n*$/);
+});
+
+test('a missing asset is a warning, not a failure, and the README lists it as missing', () => {
+  assert.equal(missingAssets.code, 0, missingAssets.stderr);
+  assert.match(missingAssets.stderr, /Warning: font missing: http:\/\/127\.0\.0\.1:\d+\/wp-content\/themes\/fixture\/fonts\/gone\.woff2 returned 404/);
+  assert.ok(existsSync(join(missing, 'assets', 'logo.svg')));
+  assert.match(missingReadme, /^- font: missing: \S+\/gone\.woff2 returned 404$/m);
+});
+
+test('re-running readme.mjs keeps what was written under ## Notes', async () => {
+  const note = 'The contact form posts to a plugin endpoint; check it by hand.';
+  writeFileSync(join(dir, 'README.md'), `${readme.trimEnd()}\n\n${note}\n`);
+  const again = await run('readme.mjs', ['--capture', dir]);
+  assert.equal(again.code, 0, again.stderr);
+  const text = readFileSync(join(dir, 'README.md'), 'utf8');
+  assert.ok(text.endsWith(`## Notes\n\n${note}\n`), text.slice(-200));
+  assert.equal(text.split(note).length, 2, 'the note appears once');
 });
 
 test('the README says plainly what was not captured', () => {
   assert.match(bareReadme, /Media: not captured/);
   assert.match(bareReadme, /Wayback unverified: not captured/);
+  assert.match(bareReadme, /^- fonts: not captured/m);
   assert.match(bareReadme, /^## Templates$/m);
 });

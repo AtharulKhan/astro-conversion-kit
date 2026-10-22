@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Capture README: one page a person (or the next agent) reads before planning the build.
 // Everything in it is counted from the capture's own files; a file the capture does not have
-// is reported as "not captured", never as zero. The ## Notes heading is left for the agent.
+// is reported as "not captured", never as zero. The ## Notes heading is left for the agent, and
+// whatever was written under it is carried over when the README is regenerated.
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,10 +11,11 @@ import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
 const USAGE = `Usage: node readme.mjs --capture <dir>
 
 Write <dir>/README.md summarising the capture: platform and theme, pages per template,
-pages per discovery source, redirects by source, media totals, third-party vendors with ids
-and page counts, forms, noindex pages, feeds, iframes, the Wayback unverified count, and an
-empty ## Notes heading. Run it after templates.mjs, assets.mjs and the media step; anything
-missing is reported as not captured.
+pages per discovery source, redirects by source, media totals, the saved and missing
+assets, third-party vendors with ids and page counts, forms, meta noindex pages, feeds,
+iframes, the Wayback unverified count, and a ## Notes heading (what is written under it is
+kept when the README is regenerated). Run it after templates.mjs, assets.mjs and the media
+step; anything missing is reported as not captured.
 
   --capture <dir>   the capture folder written by capture.mjs
   --help            show this help
@@ -141,9 +143,16 @@ function formsSection(inventory) {
 
 function indexingSection(inventory) {
   const noindex = inventory.filter((r) => /noindex/i.test(r.robots ?? '')).map((r) => r.path);
-  const lines = ['## Indexing', '', `- noindex: ${noindex.length}`];
-  if (noindex.length) lines.push(`- noindex pages: ${someOf(noindex)}`);
+  const lines = ['## Indexing', '', `- meta noindex: ${noindex.length}`];
+  if (noindex.length) lines.push(`- meta noindex pages: ${someOf(noindex)}`);
   return lines;
+}
+
+function assetsSection(index) {
+  const lines = ['## Assets', ''];
+  if (!index) return [...lines, 'Assets: not captured (run assets.mjs)'];
+  if (index.length === 0) return [...lines, 'Assets: none found'];
+  return [...lines, ...index.map((e) => `- ${e.kind}: ${e.file ?? e.note}`)];
 }
 
 function feedsSection(feeds) {
@@ -173,7 +182,17 @@ function waybackSection(dir) {
   return lines;
 }
 
+// What a person or agent wrote under ## Notes in an earlier README, kept on every re-run.
+function earlierNotes(dir) {
+  const file = join(dir, 'README.md');
+  if (!existsSync(file)) return '';
+  const text = readFileSync(file, 'utf8');
+  const heading = text.match(/^## Notes[ \t]*$/m);
+  return heading ? text.slice(heading.index + heading[0].length).trim() : '';
+}
+
 export function buildReadme(dir) {
+  const notes = earlierNotes(dir);
   const inventory = readJson(dir, 'inventory.json');
   const meta = readJson(dir, 'meta.json');
   const fingerprint = readJson(dir, 'state.json')?.fingerprint ?? null;
@@ -185,13 +204,14 @@ export function buildReadme(dir) {
     discoverySection(inventory),
     redirectsSection(readJson(dir, 'redirects.json')),
     mediaSection(readJson(dir, 'media.json')),
+    assetsSection(readJson(dir, 'assets/index.json')),
     vendorsSection(readJson(dir, 'scripts.json')),
     formsSection(inventory),
     indexingSection(inventory),
     feedsSection(readJson(dir, 'feeds/index.json')),
     iframesSection(inventory),
     waybackSection(dir),
-    ['## Notes', ''],
+    ['## Notes', '', ...(notes ? [notes] : [])],
   ];
   return `${sections.map((s) => s.join('\n')).join('\n\n')}\n`;
 }

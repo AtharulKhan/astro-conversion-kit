@@ -3,7 +3,8 @@
 // byte into <capture>/assets/ so the build can use the originals.
 // Sources: <link rel=icon|apple-touch-icon> and the first <img> inside <header> or .logo on the
 // home page snapshot, and every @font-face src in the stylesheets under <capture>/css/.
-// Requests are paced like the crawl; files already saved are kept, so a stopped run resumes.
+// Requests are paced like the crawl; fonts already saved are kept, so a stopped run resumes.
+// assets/index.json lists every asset looked for, saved or missing.
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +26,10 @@ media step; without it, fonts are reported as not captured).
   --ua "<string>"   user agent (default: a desktop Chrome)
   --help            show this help
 
-Exit codes: 0 done, 1 a file could not be downloaded, 2 usage error or no inventory.json,
+Writes <dir>/assets/index.json listing each asset looked for. An asset that does not answer
+200 is a warning on stderr and is listed there as missing.
+
+Exit codes: 0 done (missing assets included), 2 usage error or no inventory.json,
 3 stopped because the site is blocking requests (wait, then run the same command again).`;
 
 const TYPE_EXTENSIONS = {
@@ -167,13 +171,15 @@ async function main() {
   const home = homeRecord(dir, inventory);
   const origin = meta.canonicalOrigin ?? meta.origin ?? (home ? new URL(home.url).origin : null);
   const out = join(dir, 'assets');
-  const lines = [];
-  let failed = 0;
+  // One entry per asset looked for: { kind, url, file, status, note }. Written to
+  // assets/index.json so readme.mjs can list what was saved and what is missing.
+  const entries = [];
+  const warnings = [];
   http.resetBlocked();
 
-  // Saves url as <out>/<stem><ext> (or keeps an earlier download). Returns the saved name.
   const fontNames = new Map(); // file name -> url, so two fonts with one name do not overwrite
-  const save = async (url, stem, { keepName = false } = {}) => {
+  // Saves url as <out>/<stem><ext>, or fonts/<name> (kept when already saved).
+  const save = async (kind, url, stem, { keepName = false } = {}) => {
     let name = null;
     if (keepName) {
       const original = basename(new URL(url).pathname) || 'font';
@@ -184,54 +190,60 @@ async function main() {
       fontNames.set(name, url);
     }
     const known = keepName ? join(out, stem, name) : null;
-    if (known && existsSync(known)) return `${stem}/${name}`;
+    if (known && existsSync(known)) {
+      entries.push({ kind, url, file: `assets/${stem}/${name}`, status: 200, note: null });
+      return;
+    }
     const res = await fetchPaced(url, { delayMs: args.delayMs, ua: args.ua, redirect: 'follow' });
     if (http.blocked >= BLOCK_LIMIT) throw new Blocked();
     if (res.status !== 200) {
-      failed += 1;
-      return { error: `${url} returned ${res.status || res.error}` };
+      const note = `missing: ${url} returned ${res.status || res.error}`;
+      entries.push({ kind, url, file: null, status: res.status, note });
+      warnings.push(`${kind} ${note}`);
+      return;
     }
     const file = known ?? join(out, `${stem}${extensionFor(url, res.headers['content-type'])}`);
     mkdirSync(resolve(file, '..'), { recursive: true });
     writeFileSync(file, Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.body));
-    return file.slice(out.length + 1);
+    entries.push({ kind, url, file: `assets/${file.slice(out.length + 1)}`, status: 200, note: null });
   };
-  const report = (label, result) => lines.push(typeof result === 'string' ? `${label}: assets/${result}` : `${label}: ${result.error}`);
+  const absent = (kind, note) => entries.push({ kind, url: null, file: null, status: null, note });
+
+  const finish = () => {
+    mkdirSync(out, { recursive: true });
+    writeFileSync(join(out, 'index.json'), `${JSON.stringify(entries, null, 2)}\n`);
+    console.log(entries.map((e) => `${e.kind}: ${e.file ?? e.note}`).join('\n'));
+    for (const w of warnings) console.error(`Warning: ${w}`);
+  };
 
   try {
     if (!home) {
-      lines.push('logo, favicon, apple-touch-icon: not captured (no page snapshot answered 200)');
+      for (const kind of ['logo', 'favicon', 'apple-touch-icon']) absent(kind, 'not captured (no page snapshot answered 200)');
     } else {
       const document = parseHtml(readFileSync(join(dir, home.snapshot), 'utf8'));
       const img = logoImage(document);
       const targets = [
-        ['logo', img ? resolveUrl(imageSrc(img), home.url) : null, 'no <img> inside <header> or .logo'],
+        ['logo', img ? resolveUrl(imageSrc(img), home.url) : null, 'none (no <img> inside <header> or .logo)'],
         ['favicon', resolveUrl(iconHref(document, ['icon']), home.url), 'none on the site'],
         ['apple-touch-icon', resolveUrl(iconHref(document, ['apple-touch-icon', 'apple-touch-icon-precomposed']), home.url), 'none on the site'],
       ];
-      for (const [stem, url, missing] of targets) {
-        if (url) report(stem, await save(url, stem));
-        else lines.push(`${stem}: ${missing}`);
+      for (const [kind, url, missing] of targets) {
+        if (url) await save(kind, url, kind);
+        else absent(kind, missing);
       }
     }
 
     const fonts = origin ? fontUrls(dir, origin) : null;
-    if (fonts === null) {
-      lines.push('fonts: not captured (no css/manifest.json in the capture; run the media step first)');
-    } else if (fonts.length === 0) {
-      lines.push('fonts: none (no @font-face src in the captured CSS)');
-    } else {
-      for (const url of fonts) report('font', await save(url, 'fonts', { keepName: true }));
-    }
+    if (fonts === null) absent('fonts', 'not captured (no css/manifest.json in the capture; run the media step first)');
+    else if (fonts.length === 0) absent('fonts', 'none (no @font-face src in the captured CSS)');
+    else for (const url of fonts) await save('font', url, 'fonts', { keepName: true });
   } catch (err) {
     if (!(err instanceof Blocked)) throw err;
-    console.log(lines.join('\n'));
+    finish();
     console.error('Stopped: the site is blocking requests. Wait a while, then run the same command again.');
     process.exit(3);
   }
-
-  console.log(lines.join('\n'));
-  if (failed > 0) process.exit(1);
+  finish();
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
