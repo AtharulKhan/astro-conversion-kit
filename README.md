@@ -89,7 +89,20 @@ The default build reproduces the live site, faults included. Fixes are proposals
 
 ## Examples
 
-Real conversions, with their contact sheets, gate output and suggestions, are added here soon.
+Real conversions run with the kit. Numbers and the full write-up per site are in
+[docs/examples](docs/examples/README.md).
+
+| Site | Platform | Pages | Worst pixel diff | Gates | Run time |
+|---|---|---|---|---|---|
+| [jquery.com](docs/examples/README.md#jquerycom) | WordPress | 13 | 0.000 % | 10/10 | about 33 min |
+
+| jquery.com before (live, 390 px) | jquery.com after (Astro, 390 px) |
+|---|---|
+| ![jquery.com home page at 390 px, live](docs/examples/jquery-com/before-390.png) | ![jquery.com home page at 390 px, Astro build](docs/examples/jquery-com/after-390.png) |
+
+At 1440 px: [before](docs/examples/jquery-com/before-1440.png) and
+[after](docs/examples/jquery-com/after-1440.png). The converted site is a private repository;
+its preview at https://jquery-com-astro-v2.vercel.app is public.
 
 ## What it refuses
 
