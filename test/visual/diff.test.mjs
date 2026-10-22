@@ -9,7 +9,7 @@ import { run, readPng, TMP } from './helpers.mjs';
 const ROOT = join(TMP, 'visual-diff');
 const A = join(ROOT, 'a');
 const B = join(ROOT, 'b');
-const ROW_KEYS = ['heightA', 'heightB', 'heightMismatch', 'offset', 'pass', 'percent', 'percentUnaligned', 'reason', 'route', 'threshold', 'width'];
+const ROW_KEYS = ['decision', 'heightA', 'heightB', 'heightMismatch', 'offset', 'pass', 'percent', 'percentUnaligned', 'reason', 'route', 'threshold', 'width'];
 let fixture;
 
 const shoot = (routes, out) =>
@@ -25,7 +25,7 @@ before(async () => {
 });
 after(() => fixture.close());
 
-const diff = (a, b, out, extra = []) => run('diff.mjs', ['--a', a, '--b', b, '--out', out, ...extra]);
+const diff = (a, b, out, extra = [], options = {}) => run('diff.mjs', ['--a', a, '--b', b, '--out', out, ...extra], options);
 const readDiff = (out) => JSON.parse(readFileSync(join(out, 'diff.json'), 'utf8'));
 
 // A one-route tree holding a single home/<width>.png, for comparing different images.
@@ -74,6 +74,7 @@ test('shooting the same pages twice diffs to 0 percent and exits 0', async () =>
     assert.equal(row.heightMismatch, false);
     assert.equal(row.threshold, 0.5);
     assert.equal(row.reason, null);
+    assert.equal(row.decision, null);
   }
   assert.ok(existsSync(join(out, 'home', '1440.png')));
 });
@@ -163,34 +164,60 @@ test('a height difference of a few rows is counted, and passes when the count st
   assert.equal(row.heightMismatch, true);
 });
 
-function blackedOut() {
+// The home page with a magenta band across `fraction` of its rows: a difference of that size.
+function banded(fraction) {
   const original = readPng(join(A, 'home', '1440.png'));
   const noisy = new PNG({ width: original.width, height: original.height });
   original.data.copy(noisy.data);
-  noisy.data.fill(0, 0, original.width * 200 * 4); // black out the top 200 rows
+  const rows = Math.ceil(original.height * fraction);
+  for (let i = 0; i < original.width * rows * 4; i += 4) noisy.data.set([255, 0, 255, 255], i);
   return noisy;
 }
 
-test('--per-route overrides with a reason loosen the gate and are reported', async () => {
+const OVERRIDE = { id: 'd12', threshold: 2, reason: 'hero video differs per load' };
+
+test('--overrides entries with a decision id and a reason loosen the gate to at most 2 % and are reported', async () => {
   const overrides = join(ROOT, 'overrides.json');
-  writeFileSync(overrides, JSON.stringify({ home: { threshold: 100, reason: 'hero video differs per load' } }));
-  assert.equal((await diffHome('strict', blackedOut(), 1440)).result.code, 1);
-  const { result, row } = await diffHome('loose', blackedOut(), 1440, ['--per-route', overrides]);
-  assert.equal(result.code, 0);
-  assert.equal(row.threshold, 100);
+  writeFileSync(overrides, JSON.stringify({ home: OVERRIDE }));
+  assert.equal((await diffHome('strict', banded(0.01), 1440)).result.code, 1);
+  const { result, row } = await diffHome('loose', banded(0.01), 1440, ['--overrides', overrides]);
+  assert.equal(result.code, 0, result.stdout);
+  assert.ok(row.percent > 0.5 && row.percent <= 2, `percent ${row.percent}`);
+  assert.equal(row.threshold, 2);
   assert.equal(row.reason, 'hero video differs per load');
-  assert.match(result.stdout, /threshold 100%: hero video differs per load/);
-  assert.equal((await diffHome('global', blackedOut(), 1440, ['--threshold', '100'])).result.code, 0);
+  assert.equal(row.decision, 'd12');
+  assert.match(result.stdout, /threshold 2% \(d12\): hero video differs per load/);
+  assert.equal((await diffHome('global', banded(0.01), 1440, ['--threshold', '2'])).result.code, 0);
 });
 
-test('per-route overrides without a reason or with a non-numeric threshold exit 2', async () => {
+test('the overrides file defaults to docs/visual-overrides.json in the folder diff runs from', async () => {
+  const site = join(ROOT, 'site');
+  mkdirSync(join(site, 'docs'), { recursive: true });
+  writeFileSync(join(site, 'docs', 'visual-overrides.json'), JSON.stringify({ home: OVERRIDE }));
+  const out = join(ROOT, 'default-overrides-out');
+  const a = tree('default-overrides-a', join(A, 'home', '1440.png'));
+  const result = await diff(a, tree('default-overrides-b', banded(0.01)), out, [], { cwd: site });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(readDiff(out)[0].decision, 'd12');
+  rmSync(join(site, 'docs', 'visual-overrides.json'));
+  assert.equal((await diff(a, a, out, [], { cwd: site })).code, 0, 'no file there means no overrides');
+  assert.equal((await diff(a, a, out, ['--overrides', join(site, 'docs', 'visual-overrides.json')])).code, 2, 'a named file must exist');
+});
+
+test('an override without an id or a reason, a non-numeric threshold, or a threshold over 2 % exits 2', async () => {
   const a = tree('bad-override-a', join(A, 'home', '1440.png'));
-  for (const value of [null, 3, { threshold: 3 }, { threshold: null, reason: 'x' }, { threshold: '3', reason: 'x' }, { threshold: 3, reason: '' }]) {
+  for (const value of [
+    null, 3, { threshold: 1, reason: 'x' }, { id: '', threshold: 1, reason: 'x' }, { id: 'd1', threshold: 1 },
+    { id: 'd1', threshold: null, reason: 'x' }, { id: 'd1', threshold: '1', reason: 'x' }, { id: 'd1', threshold: 1, reason: '' },
+    { id: 'd1', threshold: 2.5, reason: 'x' }, { id: 'd1', threshold: 100, reason: 'x' }, { id: 'd1', threshold: -1, reason: 'x' },
+  ]) {
     const overrides = join(ROOT, 'bad-overrides.json');
     writeFileSync(overrides, JSON.stringify({ home: value }));
-    const result = await diff(a, a, join(ROOT, 'bad-override-out'), ['--per-route', overrides]);
+    const result = await diff(a, a, join(ROOT, 'bad-override-out'), ['--overrides', overrides]);
     assert.equal(result.code, 2, JSON.stringify(value));
   }
+  const old = await diff(a, a, join(ROOT, 'bad-override-out'), ['--per-route', join(ROOT, 'bad-overrides.json')]);
+  assert.equal(old.code, 2, '--per-route is gone');
 });
 
 test('a corrupt PNG becomes a failed row, not a crash', async () => {

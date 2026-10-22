@@ -9,13 +9,18 @@ import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 import { assertNodeVersion } from './lib/node-version.mjs';
 
-const HELP = `Usage: node diff.mjs --a <dir> --b <dir> --out <dir> [--threshold 0.5] [--per-route overrides.json]
+const PIXELMATCH = { threshold: 0.1, includeAA: false };
+const MAX_OVERRIDE = 2;
+const DEFAULT_OVERRIDES = 'docs/visual-overrides.json';
+
+const HELP = `Usage: node diff.mjs --a <dir> --b <dir> --out <dir> [--threshold 0.5]
+                     [--overrides docs/visual-overrides.json]
 
 Compares every <route>/<width>.png in --a with the same file in --b
 (pixelmatch threshold 0.1, anti-aliasing ignored) and writes
 <out>/<route>/<width>.png diff images and <out>/diff.json
 ([{ route, width, percent, pass, heightA, heightB, heightMismatch,
-percentUnaligned, offset, threshold, reason }]).
+percentUnaligned, offset, threshold, reason, decision }]).
 
 When the heights differ, the rows the taller image has and the shorter one
 lacks are counted as differing pixels (painted red at the foot of the diff
@@ -32,13 +37,17 @@ A pair passes when at most --threshold percent of pixels differ (default 0.5)
 and the widths match. A file present on only one side, or one that cannot be
 read as a PNG, fails.
 
-  --per-route  JSON object of per-route thresholds in percent, each with the
-               reason it is looser, for example
-               { "home": { "threshold": 1.5, "reason": "rotating testimonial" } }
+  --overrides  JSON object of per-route thresholds, committed with the site
+               (default docs/visual-overrides.json; when that file does not
+               exist there are none). Each entry names the decision that
+               allowed it, a threshold of at most ${MAX_OVERRIDE}% and why, e.g.
+               { "home": { "id": "d12", "threshold": 1.5,
+                           "reason": "rotating testimonial" } }
+               A named file that does not exist, an entry without an id or a
+               reason, or a threshold above ${MAX_OVERRIDE}% exits 2.
 
 Exit codes: 0 all pass, 1 any failure (listed on stdout), 2 usage error.`;
 
-const PIXELMATCH = { threshold: 0.1, includeAA: false };
 const OFFSETS = [-1, 0, 1].flatMap((dx) => [-1, 0, 1].map((dy) => [dx, dy])).filter(([dx, dy]) => dx || dy);
 
 class UsageError extends Error {}
@@ -49,22 +58,28 @@ function percentOption(value, name) {
   return n;
 }
 
-function readOverrides(file) {
-  if (!file) return {};
+// Per-route overrides: { route: { id, threshold, reason } }. The default file may be absent;
+// a file named on the command line may not.
+function readOverrides(file, named) {
+  if (!named && !existsSync(file)) return {};
   let raw;
   try {
     raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch (error) {
-    throw new UsageError(`cannot read --per-route ${file}: ${error.message}`);
+    throw new UsageError(`cannot read --overrides ${file}: ${error.message}`);
   }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new UsageError('--per-route must be a JSON object keyed by route');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new UsageError(`${file} must be a JSON object keyed by route`);
   return Object.fromEntries(Object.entries(raw).map(([route, value]) => {
+    const where = `${file} ${route}`;
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new UsageError(`--per-route ${route} must be { "threshold": <percent>, "reason": "<why>" }`);
+      throw new UsageError(`${where} must be { "id": "<decision id>", "threshold": <percent>, "reason": "<why>" }`);
     }
-    if (typeof value.reason !== 'string' || !value.reason.trim()) throw new UsageError(`--per-route ${route} needs a reason`);
-    if (typeof value.threshold !== 'number') throw new UsageError(`--per-route ${route} threshold must be a number`);
-    return [route, { threshold: percentOption(value.threshold, `--per-route ${route} threshold`), reason: value.reason.trim() }];
+    if (typeof value.id !== 'string' || !value.id.trim()) throw new UsageError(`${where} needs the id of the decision that allowed it`);
+    if (typeof value.reason !== 'string' || !value.reason.trim()) throw new UsageError(`${where} needs a reason`);
+    if (typeof value.threshold !== 'number' || !Number.isFinite(value.threshold) || value.threshold < 0 || value.threshold > MAX_OVERRIDE) {
+      throw new UsageError(`${where} threshold must be a number from 0 to ${MAX_OVERRIDE} (percent)`);
+    }
+    return [route, { id: value.id.trim(), threshold: value.threshold, reason: value.reason.trim() }];
   }));
 }
 
@@ -78,7 +93,7 @@ function parse(argv) {
         b: { type: 'string' },
         out: { type: 'string' },
         threshold: { type: 'string', default: '0.5' },
-        'per-route': { type: 'string' },
+        overrides: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
     }));
@@ -95,7 +110,7 @@ function parse(argv) {
     b: resolve(values.b),
     out: resolve(values.out),
     threshold: percentOption(values.threshold, '--threshold'),
-    overrides: readOverrides(values['per-route']),
+    overrides: readOverrides(resolve(values.overrides ?? DEFAULT_OVERRIDES), values.overrides !== undefined),
   };
 }
 
@@ -153,12 +168,13 @@ function compare(key, { a, b, out, threshold, overrides }, inA, inB) {
   const width = Number.parseInt(file, 10);
   const limit = overrides[route]?.threshold ?? threshold;
   const reason = overrides[route]?.reason ?? null;
+  const decision = overrides[route]?.id ?? null;
   const sideA = readSide(a, key, inA);
   const sideB = readSide(b, key, inB);
   const row = {
     route, width, percent: 100, pass: false,
     heightA: sideA.png?.height ?? null, heightB: sideB.png?.height ?? null, heightMismatch: false,
-    percentUnaligned: 100, offset: [0, 0], threshold: limit, reason,
+    percentUnaligned: 100, offset: [0, 0], threshold: limit, reason, decision,
   };
   if (sideA.error || sideB.error) {
     row.error = [sideA.error, sideB.error].filter(Boolean).join('; ');
@@ -193,7 +209,7 @@ function compare(key, { a, b, out, threshold, overrides }, inA, inB) {
 function describe(row) {
   const parts = [];
   if (row.offset[0] || row.offset[1]) parts.push(`offset ${row.offset.join(',')}, ${row.percentUnaligned}% unaligned`);
-  if (row.reason) parts.push(`threshold ${row.threshold}%: ${row.reason}`);
+  if (row.reason) parts.push(`threshold ${row.threshold}% (${row.decision}): ${row.reason}`);
   return parts.length ? ` [${parts.join('; ')}]` : '';
 }
 

@@ -10,9 +10,9 @@ export const SCRIPTS = join(ROOT, 'skills', 'visual-review', 'scripts');
 export const TMP = join(ROOT, 'test', 'tmp');
 
 // Runs a script asynchronously so the in-process fixture server keeps answering.
-export function run(script, args) {
+export function run(script, args, { cwd } = {}) {
   return new Promise((resolvePromise) => {
-    execFile(process.execPath, [join(SCRIPTS, script), ...args], (error, stdout, stderr) => {
+    execFile(process.execPath, [join(SCRIPTS, script), ...args], { cwd }, (error, stdout, stderr) => {
       resolvePromise({ code: error ? error.code : 0, stdout, stderr });
     });
   });

@@ -79,19 +79,20 @@ What it does to every page, on both sides alike, so the two are comparable:
 
     npm run review:diff -- --a capture/screens/live --b review/new --out review/diff
 
-Add `--per-route review/overrides.json` once that file exists; a missing file exits 2.
+Overrides are read from `docs/visual-overrides.json` when that file exists; there is nothing to
+add to the command.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--a`, `--b` | required | Screenshot folders (live, new) |
 | `--out` | required | Where diff images and `diff.json` go |
 | `--threshold` | `0.5` | Pass line in percent of differing pixels |
-| `--per-route` | none | Overrides file (below); leave it off when there are none |
+| `--overrides` | `docs/visual-overrides.json` | Overrides file (below); absent means none, but a file named here must exist |
 
 Every `<route>/<width>.png` in either folder is compared with pixelmatch threshold 0.1 and
 anti-aliasing ignored. Output: `review/diff/<route>/<width>.png` (differing pixels in red) and
 `review/diff/diff.json`, one row per pair:
-`{ route, width, percent, pass, heightA, heightB, heightMismatch, percentUnaligned, offset, threshold, reason }`,
+`{ route, width, percent, pass, heightA, heightB, heightMismatch, percentUnaligned, offset, threshold, reason, decision }`,
 plus `error` when a side is missing or unreadable.
 
 **Height differences are counted, not ignored.** When the two images differ in height, every row
@@ -200,17 +201,21 @@ re-shoot the live side to make a pair pass.
 ### Overrides
 
 Some pages cannot reach 0.5 % honestly: a rotating testimonial, a live map tile, a date that
-changes. Then and only then, add an entry to `review/overrides.json`, keyed by the route folder
-name (the template name, or the path slug with `--full`):
+changes. Then and only then, record a decision for it (its id, e.g. `d12`, is what the entry
+names) and add an entry to `docs/visual-overrides.json`, keyed by the route folder name (the
+template name, or the path slug with `--full`). The file is committed with the site, so every
+looser threshold is in the pull request for a person to see:
 
     {
-      "home": { "threshold": 1.5, "reason": "rotating testimonial changes per load" }
+      "home": { "id": "d12", "threshold": 1.5, "reason": "rotating testimonial changes per load" }
     }
 
-Both fields are required; an entry without a `reason`, or with a non-numeric `threshold`, makes
-`review:diff` exit 2. The threshold and reason are copied onto the row in `diff.json` and printed with
-it. Use the smallest threshold that covers the cause, and never use an override to hide a
-difference you could fix. Report every override.
+All three fields are required, and the threshold is at most **2 %**. An entry without an `id` or
+a `reason`, with a non-numeric `threshold`, or with one above 2 makes `review:diff` exit 2. A
+difference over 2 % is not something an override can carry: fix it. The decision id, threshold
+and reason are copied onto the row in `diff.json` and printed with it. Use the smallest
+threshold that covers the cause, and never use an override to hide a difference you could fix.
+Report every override.
 
 ### "Better" is not parity
 
@@ -237,8 +242,8 @@ pages at 390 and 1440:
 
        npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --full --widths 390,1440 --out review/new-all --delay 0
 
-3. Diff (add `--per-route review/overrides.json` once that file exists; with `--full` its keys
-   are path slugs) and build the sheet:
+3. Diff (overrides in `docs/visual-overrides.json` apply; with `--full` their keys are path
+   slugs) and build the sheet:
 
        npm run review:diff -- --a capture/screens/live-all --b review/new-all --out review/diff-all
        npm run review:sheet -- --live capture/screens/live-all --new review/new-all --diff review/diff-all/diff.json --out review/all.html

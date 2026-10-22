@@ -18,8 +18,9 @@ never a pass. Four more that follow from it:
    contact sheet. Fixing what you noticed first and skipping the rest is how a page ships wrong.
 2. **Parity, not better.** A deliberate improvement (a fixed typo, a tidier spacing, a sharper
    image) never goes into the default build. It goes into `proposals.json`.
-3. **A looser threshold needs a reason.** Per-route overrides live in `review/overrides.json`,
-   each with `{ "threshold": n, "reason": "..." }`. The reason is recorded on the diff row.
+3. **A looser threshold needs a decision.** Per-route overrides live in the committed file
+   `docs/visual-overrides.json`, each `{ "id": "<decision id>", "threshold": n, "reason": "..." }`
+   with `n` at most 2 (%). The decision id, threshold and reason are recorded on the diff row.
 4. **A failed or missing shot is a fail, not a skip.** A route that did not load, a screenshot
    present on one side only, or an unreadable PNG fails its row.
 
@@ -70,8 +71,10 @@ route that is not 2xx on either side fails with one `status` row.
     review/new/               new screenshots, from the dev or preview server
     review/diff/              diff images and diff.json
     review/styles.json        style rows
-    review/overrides.json     per-route thresholds with reasons (optional)
     review/index.html         the contact sheet
+    docs/visual-overrides.json
+                              per-route thresholds, each with its decision id and reason
+                              (optional; committed, so every looser threshold is reviewed)
 
 `capture/` holds the live evidence; `review/` is regenerable and not committed. The contact sheet
 embeds every image as data, so one file opens anywhere, and it can be tens of megabytes.
@@ -86,7 +89,7 @@ Read `references/review-procedure.md` before the first run. In short:
 
        npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/new --delay 0
 
-3. **Diff** (add `--per-route review/overrides.json` once that file exists):
+3. **Diff** (it reads `docs/visual-overrides.json` when that file exists):
 
        npm run review:diff -- --a capture/screens/live --b review/new --out review/diff
 
