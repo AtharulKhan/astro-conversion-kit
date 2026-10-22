@@ -104,15 +104,16 @@ test('the fixture against itself passes every row (routes from templates.json)',
   assert.equal(code, 0, stdout + stderr);
   const rows = JSON.parse(readFileSync(out, 'utf8'));
   assert.ok(rows.length > 100, `${rows.length} rows`);
-  assert.deepEqual([...new Set(rows.map((r) => r.route))], ['/', '/contact/']);
+  assert.deepEqual([...new Set(rows.map((r) => r.route))], ['home', 'page'], 'rows are keyed by template name, as shoot.mjs names folders');
+  assert.deepEqual([...new Set(rows.map((r) => r.path))], ['/', '/contact/']);
   assert.deepEqual([...new Set(rows.map((r) => r.width))], [390, 1440]);
-  for (const key of ['route', 'width', 'selector', 'property', 'live', 'new', 'pass']) {
+  for (const key of ['route', 'path', 'width', 'selector', 'property', 'live', 'new', 'pass']) {
     assert.ok(key in rows[0], key);
   }
   assert.equal(rows.filter((r) => !r.pass).length, 0);
-  const family = rows.find((r) => r.route === '/contact/' && r.selector === 'h1' && r.property === 'font-family');
+  const family = rows.find((r) => r.route === 'page' && r.selector === 'h1' && r.property === 'font-family');
   assert.equal(family.live, 'Fixture Serif');
-  const button = rows.find((r) => r.route === '/contact/' && r.selector === 'button' && r.property === 'padding-top');
+  const button = rows.find((r) => r.route === 'page' && r.selector === 'button' && r.property === 'padding-top');
   assert.ok(button, 'the contact button is sampled');
 });
 
@@ -134,9 +135,13 @@ test('a copy whose CSS sets h1 to 40px fails the h1 font-size row', async () => 
   assert.ok(rows.filter((r) => r.selector === 'p').every((r) => r.pass));
 });
 
-test('--routes / is a route, not a folder to read', async () => {
-  assert.deepEqual(parseRoutes('/'), ['/']);
-  assert.deepEqual(parseRoutes('/,/about/'), ['/', '/about/']);
+test('--routes / is a route, not a folder to read; a comma list is keyed by path slug', async () => {
+  assert.deepEqual(parseRoutes('/'), [{ route: 'home', path: '/' }]);
+  assert.deepEqual(parseRoutes('/,/about/,/services/roofing/'), [
+    { route: 'home', path: '/' },
+    { route: 'about', path: '/about/' },
+    { route: 'services__roofing', path: '/services/roofing/' },
+  ]);
   const out = join(TMP, 'root.json');
   const { code, stdout, stderr } = await run([
     '--live', fixture.origin, '--new', fixture.origin, '--routes', '/',
@@ -144,7 +149,7 @@ test('--routes / is a route, not a folder to read', async () => {
   ]);
   assert.equal(code, 0, stdout + stderr);
   const rows = JSON.parse(readFileSync(out, 'utf8'));
-  assert.ok(rows.length > 0 && rows.every((r) => r.route === '/' && r.pass));
+  assert.ok(rows.length > 0 && rows.every((r) => r.route === 'home' && r.path === '/' && r.pass));
 });
 
 test('a route missing on the new site fails one status row', async () => {
@@ -156,7 +161,7 @@ test('a route missing on the new site fails one status row', async () => {
   assert.equal(code, 1);
   const rows = JSON.parse(readFileSync(out, 'utf8'));
   assert.deepEqual(rows, [
-    { route: '/contact/', width: 390, selector: 'document', property: 'status', live: 200, new: 404, pass: false },
+    { route: 'contact', path: '/contact/', width: 390, selector: 'document', property: 'status', live: 200, new: 404, pass: false },
   ]);
 });
 
@@ -175,9 +180,9 @@ test('compareSamples: a selector on one side only fails a present row; letter-sp
   };
   const live = { status: 200, styles: { p: style, footer: style } };
   const next = { status: 200, styles: { p: { ...style, 'letter-spacing': '0px', 'font-size': '16.8px' }, footer: null } };
-  const rows = compareSamples('/', 390, live, next);
+  const rows = compareSamples({ route: 'home', path: '/' }, 390, live, next);
   assert.deepEqual(rows.filter((r) => !r.pass), [
-    { route: '/', width: 390, selector: 'footer', property: 'present', live: true, new: false, pass: false },
+    { route: 'home', path: '/', width: 390, selector: 'footer', property: 'present', live: true, new: false, pass: false },
   ]);
   assert.equal(rows.find((r) => r.property === 'letter-spacing').live, '0px');
 });

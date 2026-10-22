@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Computed-style parity: samples the first match of each selector on the live
 // and new site, per route and width, and compares typography, colour and spacing.
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { readRoutes, RoutesError } from './lib/routes.mjs';
 import { LENGTH_TOLERANCE_PX, PROPERTIES, SELECTORS } from './lib/selectors.mjs';
 
 const HELP = `Usage: node styles.mjs --live <origin> --new <origin> --routes <templates.json|list>
@@ -18,9 +19,12 @@ text-transform, margin-top/bottom and the four paddings. A route that is not
 2xx on either side gives one failing status row instead.
 Lengths pass within ${LENGTH_TOLERANCE_PX} px; colours and families must match exactly.
 
-  --routes   a templates.json path ([{ name, representative }]) or a comma list of paths
+  --routes   a templates.json path ([{ name, representative }]: the route is the
+             template name and the representative path is sampled) or a comma
+             list of paths (route is the path slug: / -> home, /a/b/ -> a__b),
+             the same route names shoot.mjs gives its folders
   --widths   viewport widths, comma separated (default 390,1440)
-  --out      where to write [{ route, width, selector, property, live, new, pass }]
+  --out      where to write [{ route, path, width, selector, property, live, new, pass }]
   --delay    milliseconds between page loads (default 2500)
 
 Exit codes: 0 every row passes, 1 a row fails, 2 usage or environment error.`;
@@ -34,18 +38,14 @@ class UsageError extends Error {}
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+// [{ route, path }] keyed exactly as shoot.mjs names its folders.
 export function parseRoutes(value) {
-  if (value.endsWith('.json') || (existsSync(value) && statSync(value).isFile())) {
-    let templates;
-    try {
-      templates = JSON.parse(readFileSync(value, 'utf8'));
-    } catch (err) {
-      throw new UsageError(`cannot read --routes ${value}: ${err.message}`);
-    }
-    if (!Array.isArray(templates)) throw new UsageError(`--routes ${value} is not a JSON array`);
-    return [...new Set(templates.map((t) => t.representative).filter(Boolean))];
+  try {
+    return readRoutes(value);
+  } catch (err) {
+    if (err instanceof RoutesError) throw new UsageError(err.message);
+    throw err;
   }
-  return [...new Set(value.split(',').map((r) => r.trim()).filter(Boolean))];
 }
 
 export function firstFamily(value) {
@@ -103,8 +103,8 @@ async function openPage(context, url) {
   return { page, status };
 }
 
-async function sample(context, origin, route) {
-  const { page, status } = await openPage(context, new URL(route, origin).href);
+async function sample(context, origin, path) {
+  const { page, status } = await openPage(context, new URL(path, origin).href);
   try {
     const styles = await page.evaluate(sampleInPage, {
       selectors: SELECTORS,
@@ -125,9 +125,9 @@ function normalise(name, value) {
 }
 
 // live and next are { status, styles }. A non-2xx side yields one failing status row.
-export function compareSamples(route, width, liveSample, nextSample) {
+export function compareSamples({ route, path }, width, liveSample, nextSample) {
   if (!isOk(liveSample.status) || !isOk(nextSample.status)) {
-    return [{ route, width, selector: 'document', property: 'status', live: liveSample.status, new: nextSample.status, pass: false }];
+    return [{ route, path, width, selector: 'document', property: 'status', live: liveSample.status, new: nextSample.status, pass: false }];
   }
   const live = liveSample.styles;
   const next = nextSample.styles;
@@ -137,13 +137,13 @@ export function compareSamples(route, width, liveSample, nextSample) {
     const b = next[selector];
     if (!a && !b) continue;
     if (!a || !b) {
-      rows.push({ route, width, selector, property: 'present', live: Boolean(a), new: Boolean(b), pass: false });
+      rows.push({ route, path, width, selector, property: 'present', live: Boolean(a), new: Boolean(b), pass: false });
       continue;
     }
     for (const { name, kind } of PROPERTIES) {
       const liveValue = kind === 'family' ? firstFamily(a[name]) : normalise(name, a[name]);
       const newValue = kind === 'family' ? firstFamily(b[name]) : normalise(name, b[name]);
-      rows.push({ route, width, selector, property: name, live: liveValue, new: newValue, pass: compareValue(kind, liveValue, newValue) });
+      rows.push({ route, path, width, selector, property: name, live: liveValue, new: newValue, pass: compareValue(kind, liveValue, newValue) });
     }
   }
   return rows;
@@ -214,7 +214,7 @@ export async function main(argv = process.argv.slice(2)) {
   const rows = [];
   try {
     let loads = 0;
-    for (const route of opts.routes) {
+    for (const target of opts.routes) {
       for (const width of opts.widths) {
         const context = await browser.newContext({ viewport: { width, height: VIEWPORT_HEIGHT }, userAgent: USER_AGENT });
         try {
@@ -222,9 +222,9 @@ export async function main(argv = process.argv.slice(2)) {
           for (const origin of [opts.live, opts.next]) {
             if (loads > 0 && opts.delay > 0) await sleep(opts.delay);
             loads += 1;
-            samples.push(await sample(context, origin, route));
+            samples.push(await sample(context, origin, target.path));
           }
-          rows.push(...compareSamples(route, width, samples[0], samples[1]));
+          rows.push(...compareSamples(target, width, samples[0], samples[1]));
         } finally {
           await context.close();
         }
@@ -243,7 +243,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   const failing = rows.filter((r) => !r.pass);
   for (const r of failing) {
-    console.log(`FAIL ${r.route} @${r.width} ${r.selector} ${r.property}: live ${r.live} | new ${r.new}`);
+    console.log(`FAIL ${r.route} (${r.path}) @${r.width} ${r.selector} ${r.property}: live ${r.live} | new ${r.new}`);
   }
   console.log(`${rows.length - failing.length}/${rows.length} style rows match; wrote ${out}`);
   return failing.length > 0 ? 1 : 0;

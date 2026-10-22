@@ -2,12 +2,13 @@
 // Full-page Chromium screenshots of a set of routes at a set of widths.
 // Exit 0 all shot, 1 a route failed, 2 usage or environment error,
 // 3 stopped after repeated blocks (the manifest holds what was shot).
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
 import { capture, launchBrowser, NavigationError, newShotContext, pngHeight } from './lib/browser.mjs';
+import { readRoutes, RoutesError } from './lib/routes.mjs';
 
 const HELP = `Usage: node shoot.mjs --base <origin> --routes <templates.json|/,/a/b/> --out <dir>
                       [--widths 390,768,1440] [--delay 2500] [--wait 1500] [--full] [--scale 1]
@@ -46,49 +47,17 @@ const HEIGHT_TOLERANCE_PX = 2;
 
 class UsageError extends Error {}
 
-export function slugFor(path) {
-  const trimmed = path.split(/[?#]/)[0].replace(/^\/+|\/+$/g, '');
-  if (!trimmed) return 'home';
-  return trimmed.split('/').map((part) => part.replace(/[^A-Za-z0-9_.-]/g, '-')).join('__');
-}
-
 // True when the PNG height is more than 2 px off the page height at this scale.
 export const heightMismatch = (heightPx, scrollHeight, scale) =>
   Math.abs(heightPx - Math.round(scrollHeight * scale)) > HEIGHT_TOLERANCE_PX;
 
-function templateFolder(name) {
-  const folder = typeof name === 'string' ? name : '';
-  if (!folder || /[/\\]/.test(folder) || folder.includes('..') || folder.startsWith('.')) {
-    throw new UsageError(`template name ${JSON.stringify(name)} cannot be a folder name (no /, \\, .. or leading .)`);
+function routesFrom(value, full) {
+  try {
+    return readRoutes(value, { full });
+  } catch (error) {
+    if (error instanceof RoutesError) throw new UsageError(error.message);
+    throw error;
   }
-  return folder;
-}
-
-function readRoutes(value, full) {
-  let routes;
-  if (value.endsWith('.json') || (existsSync(value) && statSync(value).isFile())) {
-    let templates;
-    try {
-      templates = JSON.parse(readFileSync(value, 'utf8'));
-    } catch (error) {
-      throw new UsageError(`cannot read --routes ${value}: ${error.message}`);
-    }
-    if (!Array.isArray(templates)) throw new UsageError('--routes JSON must be an array of { name, representative, paths }');
-    routes = full
-      ? templates.flatMap((t) => (t.paths ?? [t.representative]).map((path) => ({ route: slugFor(path), path })))
-      : templates.map((t) => {
-          if (!t.representative) throw new UsageError(`template ${JSON.stringify(t.name)} has no representative`);
-          return { route: templateFolder(t.name), path: t.representative };
-        });
-  } else {
-    routes = value.split(',').map((p) => p.trim()).filter(Boolean).map((path) => ({ route: slugFor(path), path }));
-  }
-  const seen = new Map();
-  for (const { route, path } of routes) {
-    if (seen.has(route)) throw new UsageError(`${seen.get(route)} and ${path} would both be saved in folder ${route}`);
-    seen.set(route, path);
-  }
-  return routes;
 }
 
 function number(value, name, { min, max, integer = false }) {
@@ -127,7 +96,7 @@ function parse(argv) {
     throw new UsageError(`--base is not a URL: ${values.base}`);
   }
   const widths = values.widths.split(',').map((w) => number(w.trim(), 'widths', { min: 100, max: 4000, integer: true }));
-  const routes = readRoutes(values.routes, values.full);
+  const routes = routesFrom(values.routes, values.full);
   if (!routes.length) throw new UsageError('--routes names no paths');
   return {
     base,
