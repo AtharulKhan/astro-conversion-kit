@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
 import { DIST_ORIGIN, edit, makeDist } from './fixtures/make-dist.mjs';
 import { runGate } from './fixtures/run-gate.mjs';
+import { checkSeo } from '../../skills/parity-gates/scripts/verify/seo.mjs';
 
 let root;
 let baseline;
@@ -76,6 +77,16 @@ test('a staging build (PUBLIC_INDEXABLE not true) needs noindex, nofollow on eve
   const extra = await seo(staging, ['--origin', DIST_ORIGIN, '--paths', '/about/'], { PUBLIC_INDEXABLE: '' });
   assert.equal(extra.code, 1);
   assert.match(extra.stdout, /^ {2}\/about\/ robots: expected "", got "noarchive"$/m);
+});
+
+test('the staging comparison leaves the baseline records as they were', () => {
+  const dist = makeDist(join(root, 'dist-staging-copy'), { staging: true });
+  const read = (file) => JSON.parse(readFileSync(join(baseline, file), 'utf8'));
+  const seoRecords = read('seo.json');
+  const before = structuredClone(seoRecords);
+  const result = checkSeo({ dist, routes: read('routes.json'), seo: seoRecords, meta: read('meta.json'), exceptions: [], origin: DIST_ORIGIN, staging: true });
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(seoRecords, before);
 });
 
 test('a release build (PUBLIC_INDEXABLE=true) compares robots exactly: the staging meta fails it', async () => {

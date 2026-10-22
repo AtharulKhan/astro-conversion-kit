@@ -148,13 +148,16 @@ export function checkSeo({ dist, routes, seo, meta, exceptions, origin = '', pat
       continue;
     }
     const html = readFileSync(join(dist, file), 'utf8');
-    const actual = seoOf(html);
+    let actual = seoOf(html);
+    let want = expected;
     if (staging) {
       const [failure, built, live] = stagingRobots(route.path, html, expected.robots);
       if (failure) failures.push(failure);
-      [actual.robots, expected.robots] = [built, live];
+      // Compared on copies: the baseline record is never changed.
+      actual = { ...actual, robots: built };
+      want = { ...expected, robots: live };
     }
-    failures.push(...compareSeo(route.path, expected, actual, context));
+    failures.push(...compareSeo(route.path, want, actual, context));
   }
   return { checked, failures };
 }
