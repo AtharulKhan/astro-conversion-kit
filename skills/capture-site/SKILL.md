@@ -5,58 +5,60 @@ description: Crawl a live website, read-only and paced, into a capture/ folder t
 
 # capture-site
 
-Save everything the live site serves, once, so every later step works from the capture and never
-from the live site.
+Save everything the live site serves, once, so every later step works from the capture.
 
 ## The golden rule
 
 **The live site is read-only, and the capture is read-only afterwards.** The scripts only make
-paced GET and HEAD requests; never submit a form, log in, or request anything by hand to fill a
-gap. Once the capture is finished and its notes written, nothing under `capture/` is edited: it is
-the evidence the gates and the visual review compare against.
+paced GET and HEAD requests; never submit a form, log in, or fetch by hand to fill a gap. Once the
+notes are written, nothing under `capture/` is edited: it is the evidence every gate reads.
 
 ## When to use
 
-- Step 2 of a conversion (`convert-site` runs it), or any time a live site has to be inventoried
-  (a staging or new site is `launch-audit`'s job). A capture that exited 3 resumes, as below.
+Step 2 of a conversion (`convert-site` runs it), or any time a live site has to be inventoried
+(a staging or new site is `launch-audit`'s job). A capture that exited 3 resumes, as below.
 
 ## Pacing
 
-Every script waits **2500 ms between requests** per host by default, sends a desktop Chrome user
-agent, doubles its wait after a 429 or 503 (up to 32 times), tries each URL 3 times, and stops
-after **3 different URLs blocked in a row** (403, 429, 503 or a network error) with its state
-saved. Keep the default `--delay` against a live site; `--delay 0` is for local fixtures only.
-Never change `--ua` to get past a block. The crawl never requests `wp-admin`, `wp-login`,
-`xmlrpc.php` or `?s=` searches.
+Every script waits **2500 ms between requests** by default and sends a desktop Chrome user agent.
+Keep the default `--delay` against a live site (`--delay 0` is for local fixtures only), and never
+change `--ua` to get past a block.
+
+- `capture` doubles its wait after a 429 or 503 (up to 32 times), tries each URL 3 times, and
+  stops after **3 different URLs blocked in a row** (403, 429, 503 or a network error), state
+  saved. It never requests `wp-admin`, `wp-login`, `xmlrpc.php` or `?s=` searches.
+- `media` tries each file 3 times: a persistent 429 or 503 stops it at once; a 403 or network
+  error is recorded as that file's status, and 3 such files in a row stop it.
+- `fingerprint` does not retry: a blocked home page is exit 3. `assets` and `shoot` back off and
+  stop after 3 blocked responses in a row.
 
 ## The command sequence
 
-Run from the folder that will hold `capture/` (the site repository's root). `<skill-dir>` is this
-skill's folder. Every script prints `--help`; run it rather than reading the source. Run each
-step as its own command, in this order:
+Run from the folder that will hold `capture/` (the site repository's root). `<skill-dir>` is the
+absolute path of this skill's folder, in a copy of the kit where `npm install` has run (the
+scripts import its packages). Every script prints `--help`; run it rather than reading the
+source. Run each step as its own command, in this order:
 
 1. **Fingerprint**, then read the platform reference for what it names (table below):
 
        node <skill-dir>/scripts/fingerprint.mjs https://www.example.com
 
-2. **Capture.** Discovery is the union of the sitemaps, the platform REST lists (WordPress, when
-   the fingerprint finds REST; `--no-rest` to skip), the link crawl, and `--seed <path>` for
-   paths the crawl cannot reach (old URLs from the person, an old `.htaccess`, a campaign link).
-   After the crawl it asks the Wayback Machine for archived paths (`--no-wayback` to skip) and
-   writes the ones it did not find to `wayback-unverified.txt`. `?p=` shortlinks are recorded as
-   unverified redirects and never fetched unless you pass `--verify-shortlinks`.
+2. **Capture.** Discovery is the sitemaps, the REST lists (WordPress, when the fingerprint finds
+   REST; `--no-rest` skips), the link crawl, and `--seed <path>` for paths the crawl cannot reach
+   (old URLs, an old `.htaccess`). After the crawl, Wayback paths it did not find go to
+   `wayback-unverified.txt` (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and
+   never fetched unless you pass `--verify-shortlinks`.
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
-3. **Media.** Lists every media file in `capture/media.json` with one paced HEAD each, and saves
-   them byte for byte under `media-cache/` (gitignored; it mirrors site paths):
+3. **Media.** Lists every media file in `capture/media.json` and saves it under `media-cache/`:
 
        node <skill-dir>/scripts/media.mjs --capture capture --download media-cache
 
-4. **Templates.** Clusters the 200 pages into `capture/templates.json`. On WordPress, pages group
-   by template body class first (`home`, `page`, `single-post`, `archive`, template classes) and a
-   page whose markup is clearly different (Jaccard below 0.5) splits off as `page-2`; other
-   platforms merge pages by markup at Jaccard 0.6 or more, as `template-<n>`:
+4. **Templates.** Clusters the pages that answered 200 into `capture/templates.json`. On
+   WordPress, pages group by template body class first (`home`, `page`, `single-post`,
+   `archive`, template classes) and a page whose markup is clearly different (Jaccard below 0.5)
+   splits off as `page-2`; other platforms merge by markup at Jaccard 0.6, as `template-<n>`:
 
        node <skill-dir>/scripts/templates.mjs --capture capture
 
@@ -69,8 +71,8 @@ step as its own command, in this order:
        node <skill-dir>/../visual-review/scripts/shoot.mjs --base https://www.example.com --routes capture/templates.json --widths 390,768,1440 --out capture/screens/live
 
 7. **Lighthouse (optional).** Only when `npx --no-install lighthouse --version` answers; never
-   install it unasked. If it is missing, say so in the notes: a skip, not a pass. One run per
-   template representative, one at a time:
+   install it unasked; if it is missing, say so in the notes (a skip, not a pass). Run `mkdir -p
+   capture/lighthouse-live`, then one run per `representative` in `templates.json`, in turn:
 
        npx --no-install lighthouse https://www.example.com/ --quiet --chrome-flags="--headless=new" --output json --output html --output-path capture/lighthouse-live/home
 
@@ -90,19 +92,18 @@ step as its own command, in this order:
 
 The site is blocking requests or cannot be reached. Wait (minutes, not seconds), then:
 
+- `fingerprint`: run it again.
 - `capture`: run the same command with `--resume`. URLs that answered 429, 503 or a network error
   are retried with a fresh set of tries; a URL that kept answering 403 is recorded with status 403
   (in `meta.json` `discoveryErrors` when it was a sitemap or REST list) and the crawl moves on.
 - `media`, `assets`: run the same command again; work already done is kept.
 - `shoot`: rerun with a longer `--delay`.
 
-Never retry in a tight loop. After two stops in a row, tell the person and carry on with the rest
-of the work; a site that blocks every request cannot be captured from here.
+Never retry in a tight loop. After two stops in a row, tell the person and carry on with the rest.
 
 ## What lands in capture/
 
-    inventory.json        one record per page: status, title, description, robots, canonical,
-                          alternates, Open Graph, JSON-LD, headings, forms, links, images, foundBy
+    inventory.json        one record per page: status, head tags, JSON-LD, headings, forms, links
     pages/  text/         raw HTML and visible text per page
     redirects.json        every redirect, chains collapsed, hops kept; shortlinks marked verified or not
     links.json            internal and external links, with the pages that carry them
@@ -113,7 +114,7 @@ of the work; a site that blocks every request cannot be captured from here.
     assets/               logo, icons, fonts, index.json
     screens/live/         live screenshots and manifest.json (gitignored)
     lighthouse-live/      Lighthouse reports, when run (gitignored)
-    sitemaps/  feeds/  robots.txt  wp-rest/  wayback-unverified.txt  meta.json  state.json
+    sitemaps/ feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 
 ## What you write by hand
@@ -123,8 +124,7 @@ why; every URL recorded 403 and every `discoveryErrors` entry; the Wayback statu
 `meta.json`; whether shortlinks were verified; seeds you passed and where they came from; media
 hosts other than the site's own (a platform CDN) seen in `pages/`; every `bannerClosed`,
 `heightMismatch` and `error` in `screens/live/manifest.json`; a template split or merge that looks
-wrong, with the paths; Lighthouse run or skipped; and the platform oddities from the reference.
-Facts with paths, not opinions. Write the notes before the capture is committed.
+wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, before the commit.
 
 ## Platform references
 
@@ -139,7 +139,7 @@ Facts with paths, not opinions. Write the notes before the capture is committed.
 
 ## Not covered
 
-Repeat this list to the person verbatim. None of it was captured.
+Repeat this list to the person verbatim. None of it was captured:
 
 - Classes and states added by JavaScript after load (open menus, sliders); coverage runs later.
 - CSS `@import` chains: imported stylesheets are not followed.

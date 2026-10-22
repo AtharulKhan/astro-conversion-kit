@@ -18,8 +18,8 @@ const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--ua "<str
 Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
 (logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is the first <img> inside
 <header> or .logo on the home page; the icons come from its <link rel=icon> and
-<link rel=apple-touch-icon>; the fonts are every @font-face src in <dir>/css/ (written by the
-media step; without it, fonts are reported as not captured).
+<link rel=apple-touch-icon>; the fonts are every @font-face src in <dir>/css/ (written by
+capture.mjs; without it, fonts are reported as not captured).
 
   --capture <dir>   the capture folder written by capture.mjs
   --delay <ms>      wait between requests (default ${DEFAULT_DELAY_MS})
@@ -234,7 +234,7 @@ async function main() {
     }
 
     const fonts = origin ? fontUrls(dir, origin) : null;
-    if (fonts === null) absent('fonts', 'not captured (no css/manifest.json in the capture; run the media step first)');
+    if (fonts === null) absent('fonts', 'not captured (no css/manifest.json in the capture; run capture.mjs first)');
     else if (fonts.length === 0) absent('fonts', 'none (no @font-face src in the captured CSS)');
     else for (const url of fonts) await save('font', url, 'fonts', { keepName: true });
   } catch (err) {

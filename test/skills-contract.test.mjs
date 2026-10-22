@@ -8,13 +8,20 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = join(ROOT, 'skills');
 
-// Skills whose SKILL.md has been written. Add each one as its task lands.
-const EXPECTED = ['capture-site', 'visual-review'];
+// Skill folders whose SKILL.md a later task writes. Remove each entry when its SKILL.md lands.
+const EXPECTED_MISSING = new Set(['convert-site', 'parity-gates', 'suggest-improvements']);
 
-const skills = readdirSync(SKILLS, { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && existsSync(join(SKILLS, entry.name, 'SKILL.md')))
+const folders = readdirSync(SKILLS, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
+const skills = folders.filter((name) => existsSync(join(SKILLS, name, 'SKILL.md')));
+
+// An agent product named as a word: case-sensitive, so `cursor: pointer` and `.claude/` pass, and
+// not a file or flag name such as `CLAUDE.md` or `Claude-Session`.
+const VENDOR_WORD = /\b(Claude|Codex|Cursor)\b(?!\.md|-)/g;
+// Abbreviations whose full stop does not end a sentence.
+const ABBREVIATIONS = /\b(e\.g|i\.e|etc|vs|cf)\.\s$/i;
 
 const skillText = (name) => readFileSync(join(SKILLS, name, 'SKILL.md'), 'utf8');
 
@@ -44,7 +51,7 @@ function sentenceAt(text, at) {
   let start = at;
   while (start > 0) {
     const before = text.slice(0, start);
-    if (/[.!?]\s$/.test(before) || /\n\s*\n$/.test(before) || /\n#+ $/.test(before) || /\n\s*[-*|] ?$/.test(before)) break;
+    if ((/[.!?]\s$/.test(before) && !ABBREVIATIONS.test(before)) || /\n\s*\n$/.test(before) || /\n#+ $/.test(before) || /\n\s*[-*|] ?$/.test(before)) break;
     start -= 1;
   }
   return text.slice(start, at + 40).replace(/^[\s#*>`|-]+/, '');
@@ -60,8 +67,12 @@ function namedScripts(name, text) {
   return [...found].sort();
 }
 
-test('every expected skill has a SKILL.md', () => {
-  for (const name of EXPECTED) assert.ok(skills.includes(name), `skills/${name}/SKILL.md is missing`);
+test('every folder under skills/ has a SKILL.md, apart from the ones a later task writes', () => {
+  for (const name of folders) {
+    const has = skills.includes(name);
+    if (EXPECTED_MISSING.has(name)) assert.ok(!has, `skills/${name}/SKILL.md exists: remove it from EXPECTED_MISSING`);
+    else assert.ok(has, `skills/${name}/SKILL.md is missing`);
+  }
 });
 
 for (const name of skills) {
@@ -78,7 +89,7 @@ for (const name of skills) {
     for (const { file, text } of skillDocs(name)) {
       assert.doesNotMatch(text, /superpowers/i, `${file} names superpowers`);
       assert.doesNotMatch(text, /mcp__/, `${file} names an mcp__ tool`);
-      for (const match of text.matchAll(/\b(Claude|Codex|Cursor)\b/gi)) {
+      for (const match of text.matchAll(VENDOR_WORD)) {
         const sentence = sentenceAt(text, match.index);
         assert.ok(
           sentence.startsWith('If your agent'),
@@ -99,9 +110,21 @@ for (const name of skills) {
   });
 }
 
-test('the sentence check accepts "If your agent" sentences and rejects others', () => {
-  const ok = 'Run it. If your agent is Claude Code, use its browser.';
-  const bad = 'Run it. This needs Claude Code.';
-  assert.ok(sentenceAt(ok, ok.indexOf('Claude')).startsWith('If your agent'));
-  assert.ok(!sentenceAt(bad, bad.indexOf('Claude')).startsWith('If your agent'));
+// Each sample's vendor words, each with whether its sentence starts "If your agent".
+function vendorSentences(text) {
+  return [...text.matchAll(VENDOR_WORD)].map((m) => [m[0], sentenceAt(text, m.index).startsWith('If your agent')]);
+}
+
+test('the vendor-word check allows "If your agent" sentences and flags others', () => {
+  assert.deepEqual(vendorSentences('Run it. If your agent is Claude Code, use its browser.'), [['Claude', true]]);
+  assert.deepEqual(vendorSentences('Run it. If your agent is, e.g. Codex, use it.'), [['Codex', true]]);
+  assert.deepEqual(vendorSentences('Run it. This needs Claude Code.'), [['Claude', false]]);
+  assert.deepEqual(vendorSentences('Install it.\n\nCursor works too.'), [['Cursor', false]]);
+});
+
+test('the vendor-word check ignores file names, folders and CSS', () => {
+  assert.deepEqual(vendorSentences('`CLAUDE.md` is a copy of `AGENTS.md`.'), []);
+  assert.deepEqual(vendorSentences('Do not commit `.claude/` or a Claude.md file.'), []);
+  assert.deepEqual(vendorSentences('a { cursor: pointer; }'), []);
+  assert.deepEqual(vendorSentences('No `Claude-Session:` trailer.'), []);
 });

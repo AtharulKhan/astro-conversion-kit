@@ -25,8 +25,9 @@ The first-class case.
   every registered size, referenced or not, because other sites and old emails may link to any of
   them and that cannot be known from the site itself.
 - **`?p=` shortlinks.** `/?p=123` redirects to the post or page with that id. The capture records
-  these from the API ids, and they become rows in `redirects.csv`; ids that 404 on the live site
-  stay 404.
+  these from each page's `<link rel=shortlink>` and from links, without requesting them unless
+  `--verify-shortlinks` is passed, and they become rows in `redirects.csv`; ids that 404 on the
+  live site stay 404.
 - **Category-base collisions.** `/category/news/` and a page called `/news/`, or a plugin that
   strips the category base so archives and pages share one namespace. The plan lists every slug
   claimed twice and which one the live site actually serves; the build serves the same one.
@@ -55,8 +56,9 @@ The first-class case.
 - **Media prefix.** Files live under `/sites/default/files/`, with image-style derivatives under
   `/sites/default/files/styles/<style>/public/`, often with an `?itok=` query. That prefix is the
   media prefix for the store decision.
-- **JSON:API.** When the `jsonapi` module is enabled, `/jsonapi` lists nodes and files and is used
-  as an extra source. Most sites do not enable it, and the capture does not need it.
+- **JSON:API.** When the `jsonapi` module is enabled, the fingerprint detects it, but the capture
+  does not read it: pages are found through the sitemaps, the crawl and `--seed`. Most sites do
+  not enable it, and the capture does not need it.
 - **Paged sitemaps.** Sitemap modules split large sitemaps as `sitemap.xml?page=2`. The capture
   follows every page; the new site's sitemap is a single plain file at `sitemap.xml`. A static
   host ignores the query string, so the old paged URLs all resolve to that one sitemap.
@@ -68,14 +70,15 @@ The first-class case.
 These render on the platform's servers and host assets on the platform's CDN.
 
 - **Media off the site's domain.** Images come from the platform CDN, not the site's own origin.
-  The capture lists them, and by default the build keeps pointing at the CDN, exactly as live.
+  The capture does not list them (`media.json` holds the site's own host only); the agent notes
+  each CDN host, and by default the build keeps pointing at the CDN, exactly as live.
   When the account closes, CDN media disappears, so the agent proposes mirroring it under a local
   prefix. Mirroring changes every one of those URLs, so it is a logged exception that a person
   approves, never a silent default.
 - **Script-driven layout.** Webflow interactions, Squarespace blocks and most of a Wix page are
-  built or animated by script. The capture saves the rendered DOM and screenshots with animations
-  disabled. Interactions that matter (menus, sliders, accordions) are rebuilt with a small script
-  and checked in the visual review.
+  built or animated by script. The capture saves the HTML the server sent, not a rendered DOM, and
+  screenshots with animations disabled. Interactions that matter (menus, sliders, accordions) are
+  rebuilt with a small script and checked in the visual review.
 - **Forms** post to the platform and are rewired to the chosen endpoint.
 - **Exports.** A Webflow code export or a Wix export can be read too, but the live site stays the
   source of truth: the gates compare against what visitors were served.

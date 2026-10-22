@@ -12,7 +12,8 @@ The goal is parity: the same URLs, content, head tags and look as the live site.
 - Do not retype content. Copy text, headings, alt text, titles, descriptions and JSON-LD from the
   captured HTML with a script or by moving the markup; never paraphrase or tidy it.
 - Do not fetch the live site again unless a capture step asks for it. It is read-only.
-- If something is missing from `capture/`, re-run the capture for that URL instead of guessing.
+- If something is missing from `capture/`, re-run the capture into a fresh folder and diff instead of
+  guessing; the committed capture stays as it was.
 
 ## Gates on every commit
 Run before each commit and fix every failure first:
