@@ -286,7 +286,9 @@ spaced; the live site is read-only.
 
 Say these out loud when you report; none of them were compared, and not covered is never a pass:
 
-- hover, focus and active states, open menus, modals and anything that needs a click;
+- hover, focus and active states, open menus, modals and anything that needs a click (the CSS
+  pruning keeps the rules a menu toggle turns on, but no shot shows an open menu: whether the
+  mobile menu opens was not compared);
 - video, carousels and animations past their first frozen frame;
 - widths other than the ones shot, and browsers other than Chromium;
 - content below a lazy-scroll cap, and pages flagged `heightMismatch`;

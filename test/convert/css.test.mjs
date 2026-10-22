@@ -8,6 +8,7 @@ import * as csstree from 'css-tree';
 import { startFixture } from '../fixture/serve.mjs';
 import { mergeRanges } from '../../skills/convert-site/scripts/css-coverage.mjs';
 import { mediaTested, pruneCss, rewriteRef } from '../../skills/convert-site/scripts/css-prune.mjs';
+import { stateBases } from '../../skills/convert-site/scripts/lib/state-selectors.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const SCRIPTS = join(ROOT, 'skills', 'convert-site', 'scripts');
@@ -169,7 +170,7 @@ test('pruning removes the unused rules, keeps pseudo rules and @font-face, and c
 
   const summary = readJson(report);
   assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'removedRules', 'uncoveredInline', 'unmatched', 'unresolvedImports']);
-  assert.deepEqual(Object.keys(summary.keptBecause).sort(), ['atRule', 'pseudo', 'untestedMedia']);
+  assert.deepEqual(Object.keys(summary.keptBecause).sort(), ['atRule', 'pseudo', 'state', 'untestedMedia']);
   assert.deepEqual(summary.unmatched, []);
   assert.ok(summary.removedRules >= 20, `removedRules ${summary.removedRules}`);
   assert.equal(summary.before, Buffer.byteLength(THEME_TEXT));
@@ -416,7 +417,7 @@ test('pruneCss keeps exceptions and untested media, drops @media blocks left emp
   }
   for (const gone of ['.gone', 'min-width: 900px', '.w {']) assert.ok(!result.css.includes(gone), `${gone} removed`);
   assert.equal(result.removedRules, 3);
-  assert.deepEqual(result.keptBecause, { pseudo: 4, atRule: 3, untestedMedia: 2 });
+  assert.deepEqual(result.keptBecause, { pseudo: 4, atRule: 3, untestedMedia: 2, state: 0 });
 });
 
 test('the home page with the pruned stylesheet at another path matches the original pixel for pixel', async () => {
@@ -451,4 +452,108 @@ test('the home page with the pruned stylesheet at another path matches the origi
   const rows = readJson(join(diffOut, 'diff.json'));
   assert.deepEqual(rows.map((row) => row.width).sort((a, b) => a - b), [390, 1440]);
   for (const row of rows) assert.equal(row.percent, 0, `${row.route} at ${row.width}`);
+});
+
+// A mobile menu the way jquery.com builds one: a toggle adds a class the stylesheet depends on,
+// so the open state exists only after a click. Coverage of the closed page never sees it.
+const MENU_CSS = [
+  '#menu-top { display: none; }',
+  '#menu-top.menu-open { display: block; }',
+  '.accordion.is-open .panel { display: block; }',
+  '.ghost.is-open { color: red; }',
+  '.never-used { color: blue; }',
+  '',
+].join('\n');
+const MENU_HTML = '<!doctype html><link rel="stylesheet" href="/s.css">'
+  + '<button class="menu-toggle" aria-controls="menu-top" aria-expanded="false">Menu</button>'
+  + '<ul id="menu-top"><li><a href="/x/">X</a></li></ul>'
+  + '<div class="accordion"><div class="panel">Panel</div></div>'
+  + '<a data-toggle="away" href="/elsewhere/">Away</a>'
+  + '<script>document.querySelector(".menu-toggle").addEventListener("click", (e) => {'
+  + ' const m = document.getElementById("menu-top"); m.classList.toggle("menu-open");'
+  + ' e.currentTarget.setAttribute("aria-expanded", String(m.classList.contains("menu-open"))); });</script>';
+
+// Coverage of the menu page; also counts the page loads, so a toggle that is a link cannot navigate away.
+async function menuCoverage(name) {
+  const loads = [];
+  const server = createServer((req, res) => {
+    loads.push(req.url);
+    if (req.url === '/s.css') {
+      res.writeHead(200, { 'Content-Type': 'text/css' });
+      res.end(MENU_CSS);
+      return;
+    }
+    res.writeHead(req.url === '/' ? 200 : 404, { 'Content-Type': 'text/html' });
+    res.end(req.url === '/' ? MENU_HTML : 'gone');
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const out = join(TMP, `${name}.json`);
+  try {
+    const result = await coverageCli(['--base', origin, '--routes', '/', '--widths', '390', '--out', out, '--delay', '0']);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    server.close();
+  }
+  return { coverage: readJson(out), file: out, sheet: `${origin}/s.css`, loads };
+}
+
+const ruleAt = (text, selector) => {
+  const start = text.indexOf(selector);
+  return [start, text.indexOf('}', start) + 1];
+};
+
+test('coverage clicks menu toggles, so the open-menu rule a click adds is used, and no toggle navigates away', async () => {
+  const { coverage, sheet, loads } = await menuCoverage('menu');
+  const entry = coverage[sheet];
+  assert.ok(entry, Object.keys(coverage).join(', '));
+  assert.ok(overlaps(entry.usedRanges, ...ruleAt(MENU_CSS, '#menu-top.menu-open')), 'the open state was seen');
+  assert.ok(!overlaps(entry.usedRanges, ...ruleAt(MENU_CSS, '.never-used')));
+  assert.ok(!loads.includes('/elsewhere/'), loads.join(', '));
+});
+
+test('coverage records state rules whose element is on the page as stateRanges', async () => {
+  const { coverage, sheet } = await menuCoverage('menu-state');
+  const { stateRanges } = coverage[sheet];
+  assert.ok(Array.isArray(stateRanges), 'stateRanges recorded');
+  assert.ok(overlaps(stateRanges, ...ruleAt(MENU_CSS, '.accordion.is-open .panel')), '.accordion .panel is on the page');
+  assert.ok(!overlaps(stateRanges, ...ruleAt(MENU_CSS, '.ghost.is-open')), 'no .ghost on the page');
+  assert.ok(!overlaps(stateRanges, ...ruleAt(MENU_CSS, '.never-used')), 'not a state rule');
+});
+
+test('the pruned stylesheet keeps the open-menu and state rules and says how many it kept for state', async () => {
+  const { file } = await menuCoverage('menu-prune');
+  const dir = join(TMP, 'capture-menu');
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 's.css'), MENU_CSS);
+  const out = join(TMP, 'menu.css');
+  const report = join(TMP, 'menu-report.json');
+  const result = await pruneCli(['--css', dir, '--coverage', file, '--out', out, '--report', report]);
+  assert.equal(result.code, 0, result.stderr);
+  const css = readFileSync(out, 'utf8');
+  assert.ok(css.includes('#menu-top.menu-open { display: block; }'), css);
+  assert.ok(css.includes('.accordion.is-open .panel { display: block; }'), css);
+  assert.ok(!css.includes('.ghost'), css);
+  assert.ok(!css.includes('.never-used'), css);
+  assert.equal(readJson(report).keptBecause.state, 1);
+  assert.match(result.stdout, /kept for state: 1 rules/);
+});
+
+test('pruneCss keeps an unused rule that a state range covers', () => {
+  const result = pruneCss(MENU_CSS, [ruleAt(MENU_CSS, '#menu-top {')], { stateRanges: [ruleAt(MENU_CSS, '#menu-top.menu-open')] });
+  assert.ok(result.css.includes('#menu-top.menu-open { display: block; }'));
+  assert.ok(!result.css.includes('.accordion'));
+  assert.equal(result.keptBecause.state, 1);
+});
+
+test('stateBases strips state classes, attributes and pseudos down to the element they style', () => {
+  const bases = (selector) => stateBases(csstree.parse(selector, { context: 'selectorList', positions: true }));
+  assert.deepEqual(bases('#menu-top.menu-open'), ['#menu-top']);
+  assert.deepEqual(bases('body.nav-open .site-nav > li'), ['body .site-nav > li']);
+  assert.deepEqual(bases('.open > .sub-menu, .plain'), ['* > .sub-menu']);
+  assert.deepEqual(bases('button[aria-expanded="true"] + .panel'), ['button + .panel']);
+  assert.deepEqual(bases('.tab.is-active:hover'), ['.tab']);
+  assert.deepEqual(bases('details[open] summary'), ['details summary']);
+  assert.deepEqual(bases('.plain .rule'), []);
 });

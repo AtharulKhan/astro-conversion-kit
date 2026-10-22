@@ -28,6 +28,10 @@ Kept:
   - every rule whose selector contains :hover :focus :active :visited :target
     :checked ::before ::after :nth or :not( and, beyond those, ::selection
     ::placeholder :disabled :invalid :focus-visible :focus-within
+  - every rule in a coverage entry's stateRanges: an interaction state (.open,
+    .is-open, .menu-open, .active, .expanded, .show, .visible,
+    [aria-expanded="true"], [open] and the like) whose element was on a covered
+    page, so the state a script turns on (an open mobile menu) survives
   - every @font-face, @keyframes, @namespace, @layer statement and
     @supports block, and everything inside @media (prefers-*)
   - every @media block that none of --widths satisfies (print, very wide or
@@ -64,11 +68,13 @@ defaults to the most common origin among the manifest's hrefs and pages
 (the coverage URLs when there is no manifest).
 
 The report is { before: bytes, after: bytes, removedRules: n,
-keptBecause: { pseudo: n, atRule: n, untestedMedia: n }, unmatched: [file],
+keptBecause: { pseudo: n, atRule: n, untestedMedia: n, state: n }, unmatched: [file],
 uncoveredInline: [file], unresolvedImports: [{ file, href, reason }] },
 where keptBecause counts rules and blocks no page used that were kept by the
 exceptions above (untestedMedia also counts sheets imported under an untested
-media list).
+media list; state the rules kept for stateRanges, printed as "kept for state:
+N rules"). Coverage written before stateRanges existed has none: run
+css-coverage.mjs again so interaction states are kept.
 
   --widths  the viewport widths the coverage run used (default 390,768,1440)
 
@@ -281,6 +287,9 @@ function pruneList(list, ctx, header) {
       else if (PSEUDO.test(sourceOf(text, node.prelude))) {
         counts.pseudo += 1;
         kept.push(emit(node));
+      } else if (overlaps(ctx.state, node.loc.start.offset, node.loc.end.offset)) {
+        counts.state += 1;
+        kept.push(emit(node));
       } else counts.removedRules += 1;
       return;
     }
@@ -329,16 +338,17 @@ function pruneList(list, ctx, header) {
 }
 
 // Prunes one stylesheet's text against used [start, end] ranges into that text.
-// options: { base, siteOrigin, widths }. Returns { css, header, imports, removedRules,
-// keptBecause }; css holds the kept body, header the @layer statements, @import
+// options: { base, siteOrigin, widths, stateRanges }. Returns { css, header, imports,
+// removedRules, keptBecause }; css holds the kept body, header the @layer statements, @import
 // and @namespace rules that a combined file must put first, and imports what each
 // of header.imports asks for ({ href, layer, supports, media }, same order).
-export function pruneCss(text, usedRanges, { base, siteOrigin, widths = DEFAULT_WIDTHS } = {}) {
+// stateRanges are the unused interaction-state rules css-coverage saw the element of: kept.
+export function pruneCss(text, usedRanges, { base, siteOrigin, widths = DEFAULT_WIDTHS, stateRanges = [] } = {}) {
   const ast = csstree.parse(text, { positions: true });
-  const counts = { pseudo: 0, atRule: 0, untestedMedia: 0, removedRules: 0 };
+  const counts = { pseudo: 0, atRule: 0, untestedMedia: 0, state: 0, removedRules: 0 };
   const header = { layers: [], imports: [], namespaces: [] };
   const ctx = {
-    text, used: usedRanges, counts, widths, base, siteOrigin, importRefs: [], replacements: urlReplacements(ast, text, base, siteOrigin),
+    text, used: usedRanges, state: stateRanges, counts, widths, base, siteOrigin, importRefs: [], replacements: urlReplacements(ast, text, base, siteOrigin),
   };
   const body = pruneList(ast.children, ctx, header);
   return {
@@ -346,7 +356,7 @@ export function pruneCss(text, usedRanges, { base, siteOrigin, widths = DEFAULT_
     header,
     imports: ctx.importRefs,
     removedRules: counts.removedRules,
-    keptBecause: { pseudo: counts.pseudo, atRule: counts.atRule, untestedMedia: counts.untestedMedia },
+    keptBecause: { pseudo: counts.pseudo, atRule: counts.atRule, untestedMedia: counts.untestedMedia, state: counts.state },
   };
 }
 
@@ -461,20 +471,21 @@ function inlineTargets(files, trimmed, pages = []) {
 }
 
 // Gives each coverage entry to the file(s) it describes; returns Map<file name,
-// { ranges, matched, url }>, url being the first coverage URL matched to the file.
+// { ranges, stateRanges, matched, url }>, url being the first coverage URL matched to the file.
 function assignCoverage(files, coverage) {
-  const assigned = new Map(files.map((file) => [file.name, { ranges: [], matched: false, url: null }]));
-  for (const [key, { text = '', usedRanges = [], pages }] of Object.entries(coverage)) {
+  const assigned = new Map(files.map((file) => [file.name, { ranges: [], stateRanges: [], matched: false, url: null }]));
+  for (const [key, { text = '', usedRanges = [], stateRanges = [], pages }] of Object.entries(coverage)) {
     if (key.startsWith('inline:')) {
       const trimmed = text.trim();
       if (!trimmed) continue;
       const lead = text.length - text.trimStart().length;
-      const shifted = usedRanges.map(([start, end]) => [Math.max(0, start - lead), Math.min(trimmed.length, end - lead)])
+      const shift = (ranges) => ranges.map(([start, end]) => [Math.max(0, start - lead), Math.min(trimmed.length, end - lead)])
         .filter(([start, end]) => end > start);
       for (const file of inlineTargets(files, trimmed, pages)) {
         const slot = assigned.get(file.name);
         slot.matched = true;
-        slot.ranges.push(...mapRanges(file.text, trimmed, shifted));
+        slot.ranges.push(...mapRanges(file.text, trimmed, shift(usedRanges)));
+        slot.stateRanges.push(...mapRanges(file.text, trimmed, shift(stateRanges)));
       }
       continue;
     }
@@ -484,6 +495,7 @@ function assignCoverage(files, coverage) {
     slot.matched = true;
     slot.url ??= key;
     slot.ranges.push(...mapRanges(file.text, text, usedRanges));
+    slot.stateRanges.push(...mapRanges(file.text, text, stateRanges));
   }
   return assigned;
 }
@@ -508,7 +520,7 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
     before: 0,
     after: 0,
     removedRules: 0,
-    keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0 },
+    keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0, state: 0 },
     unmatched: [],
     uncoveredInline: [],
     unresolvedImports: [],
@@ -540,7 +552,7 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
     }
     if (!slot.matched || whole) used = [[0, file.text.length]];
     const base = file.entry?.finalUrl ?? file.entry?.href ?? file.entry?.pages?.[0] ?? slot.url;
-    const result = pruneCss(file.text, used, { base, siteOrigin, widths });
+    const result = pruneCss(file.text, used, { base, siteOrigin, widths, stateRanges: slot.stateRanges });
     report.before += Buffer.byteLength(file.text);
     report.removedRules += result.removedRules;
     for (const reason of Object.keys(report.keptBecause)) report.keptBecause[reason] += result.keptBecause[reason];
@@ -639,7 +651,7 @@ function main() {
   writeFileSync(options.report, `${JSON.stringify(result.report, null, 2)}\n`);
   const { before, after, removedRules, keptBecause, unmatched } = result.report;
   console.log(`css: ${before} -> ${after} bytes, ${removedRules} rules removed (kept unused: ${keptBecause.pseudo} pseudo, `
-    + `${keptBecause.atRule} at-rule, ${keptBecause.untestedMedia} untested media); wrote ${options.out}`);
+    + `${keptBecause.atRule} at-rule, ${keptBecause.untestedMedia} untested media; kept for state: ${keptBecause.state} rules); wrote ${options.out}`);
   if (unmatched.length) {
     console.error(`css-prune: ${unmatched.length} file(s) had no matching coverage and were kept whole: ${unmatched.join(', ')}`);
     process.exit(1);

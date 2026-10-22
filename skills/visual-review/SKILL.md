@@ -135,7 +135,8 @@ page you looked at and liked has not passed anything.
 4. **Proposals**: what you saw that could be better and put in `proposals.json` instead (the
    site's `AGENTS.md`, "Exceptions and proposals", says what an entry holds and how it ships).
 5. **Not covered, verbatim**: the list at the end of `references/review-procedure.md`, every
-   line, unedited. None of it was compared. Not covered is never a pass.
+   line, unedited. None of it was compared, an open mobile menu included. Not covered is never
+   a pass.
 
 ## References
 

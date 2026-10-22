@@ -10,17 +10,28 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { blockAnalytics } from './lib/blocked-hosts.mjs';
+import { stateRules } from './lib/state-selectors.mjs';
 
+const MAX_TOGGLES = 20;
 const HELP = `Usage: node css-coverage.mjs --base <origin> --routes <list|inventory.json> --out coverage.json
                            [--widths 390,768,1440] [--delay 2500]
 
 Loads every route at every width in Chromium with CSS coverage on, waits for the
 load event and a short settle, hovers and focuses the first a, button and input
-larger than 1x1 pixel (a clipped skip link is passed over),
-then stops coverage. Results are merged per stylesheet and written as
-  { "<stylesheet url>": { text, usedRanges: [[start, end], ...] },
-    "inline:<n>": { text, usedRanges, pages: [path, ...] } }
-usedRanges are character offsets into text, sorted with overlaps merged. Inline
+larger than 1x1 pixel (a clipped skip link is passed over), clicks once each menu
+or accordion toggle a person could reach (button[aria-controls], [aria-expanded],
+.menu-toggle, .hamburger, [data-toggle], [data-bs-toggle], summary; up to
+${MAX_TOGGLES} a page; a toggle that is a link or submits a form goes nowhere), so an
+open menu's rules count as used, then stops coverage. Results are merged per
+stylesheet and written as
+  { "<stylesheet url>": { text, usedRanges: [[start, end], ...], stateRanges },
+    "inline:<n>": { text, usedRanges, stateRanges, pages: [path, ...] } }
+usedRanges are character offsets into text, sorted with overlaps merged.
+stateRanges are the unused rules that style an interaction state (a class such as
+.open, .is-open, .menu-open, .active, .expanded, .show, .visible, or
+[aria-expanded="true"], [aria-hidden="false"], [open]) whose element (the selector
+with its state and pseudo parts taken out) is on a covered page: a state no click
+reached. css-prune.mjs keeps them. Inline
 <style> blocks with the same text share one inline:<n> key and list the pages
 they appear on. Analytics, tag, pixel and chat hosts are blocked, so their
 injected styles are not recorded and the loads do not count as visits.
@@ -44,6 +55,7 @@ const BLOCKED = new Set([403, 429, 503]);
 const BACKOFF = new Set([429, 503]);
 const MAX_CONSECUTIVE_BLOCKS = 3;
 const INTERACTIVE = ['a', 'button', 'input'];
+const TOGGLES = 'button[aria-controls], [aria-expanded], .menu-toggle, .hamburger, [data-toggle], [data-bs-toggle], summary';
 
 class UsageError extends Error {}
 
@@ -133,6 +145,51 @@ async function interact(page) {
   }
 }
 
+// Clicks each reachable toggle once, in document order, with the DOM's own click (no pointer
+// hit test, so an open overlay cannot stall the run). A link's navigation and a form's submit
+// are cancelled first, so the page stays the one being covered. Each click forces a style
+// recalculation, so the state it turns on counts as used.
+function clickToggles({ selector, max }) {
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest?.('a[href]');
+    const href = link?.getAttribute('href') ?? '';
+    if (link && !href.startsWith('#') && !/^javascript:/i.test(href)) event.preventDefault();
+  }, true);
+  document.addEventListener('submit', (event) => event.preventDefault(), true);
+  let clicked = 0;
+  for (const el of document.querySelectorAll(selector)) {
+    if (clicked >= max) break;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 1 || rect.height <= 1 || getComputedStyle(el).visibility === 'hidden') continue;
+    el.click();
+    void document.body.offsetHeight;
+    clicked += 1;
+  }
+  return clicked;
+}
+
+// The base selectors (lib/state-selectors.mjs) that match an element on the page.
+function matching(selectors) {
+  return selectors.filter((selector) => {
+    try {
+      return document.querySelector(selector) !== null;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Gives each entry stateRanges: its unused state rules whose element is on the page.
+async function addStateRanges(page, entries) {
+  const candidates = entries.map(({ text, ranges }) => stateRules(text)
+    .filter(({ start, end }) => !ranges.some((r) => r.start < end && r.end > start)));
+  const bases = [...new Set(candidates.flat().flatMap((rule) => rule.bases))];
+  const found = new Set(bases.length ? await page.evaluate(matching, bases).catch(() => []) : []);
+  entries.forEach((entry, i) => {
+    entry.stateRanges = candidates[i].filter((rule) => rule.bases.some((b) => found.has(b))).map(({ start, end }) => [start, end]);
+  });
+}
+
 // One route at one width: returns { status, entries } or { status: 0, error }.
 async function coverRoute(page, url) {
   await page.coverage.startCSSCoverage({ resetOnNavigation: false });
@@ -145,13 +202,16 @@ async function coverRoute(page, url) {
   }
   await sleep(SETTLE_MS);
   await interact(page);
+  const clicked = await page.evaluate(clickToggles, { selector: TOGGLES, max: MAX_TOGGLES }).catch(() => 0);
+  if (clicked) await sleep(SETTLE_MS);
   const entries = await page.coverage.stopCSSCoverage();
+  await addStateRanges(page, entries);
   return { status: response ? response.status() : 0, entries, pageUrl: page.url() };
 }
 
 // Folds one page's coverage entries into the merged result.
 function addEntries(result, inlineKeys, entries, pageUrl, path) {
-  for (const { url, text, ranges } of entries) {
+  for (const { url, text, ranges, stateRanges = [] } of entries) {
     const used = ranges.map(({ start, end }) => [start, end]);
     const inline = !url || url === pageUrl;
     let key = url;
@@ -159,8 +219,9 @@ function addEntries(result, inlineKeys, entries, pageUrl, path) {
       if (!inlineKeys.has(text)) inlineKeys.set(text, `inline:${inlineKeys.size + 1}`);
       key = inlineKeys.get(text);
     }
-    const entry = (result[key] ??= inline ? { text, usedRanges: [], pages: [] } : { text, usedRanges: [] });
+    const entry = (result[key] ??= inline ? { text, usedRanges: [], stateRanges: [], pages: [] } : { text, usedRanges: [], stateRanges: [] });
     entry.usedRanges = mergeRanges([...entry.usedRanges, ...used]);
+    entry.stateRanges = mergeRanges([...entry.stateRanges, ...stateRanges]);
     if (inline && !entry.pages.includes(path)) entry.pages.push(path);
   }
 }

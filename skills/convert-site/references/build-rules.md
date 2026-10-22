@@ -43,8 +43,12 @@ parity and this file is wrong: say so and fix this file.
   (topic "one pruned site.css", default "one file", cost if wrong "each page loads rules other
   templates use"). Splitting it per template is an improvement the suggestions report may
   propose, never part of the default build.
-- A diff caused by pruning (a state the coverage run never saw: an open menu, a JavaScript-added
-  class) is fixed by restoring the original rule from `capture/css/`, copied as written, into
+- Coverage clicks each menu and accordion toggle once, and the prune keeps every state rule
+  (`.open`, `.menu-open`, `.is-active`, `[aria-expanded="true"]`, …) whose element was on a
+  covered page: the report counts them as `keptBecause.state` ("kept for state: N rules").
+  No screenshot compares an open menu (visual-review's Not covered list says so).
+- A diff caused by pruning (a state the coverage run still never saw: a JavaScript-added
+  class with an unusual name) is fixed by restoring the original rule from `capture/css/`, copied as written, into
   `src/styles/restored.css` with a comment naming the source file. New CSS is allowed only for a
   difference the static build creates itself (a script that no longer runs), each rule with a
   comment and a decision id.
