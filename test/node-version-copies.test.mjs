@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT_COPY = join(ROOT, 'scripts', 'lib', 'node-version.mjs');
 // The kit's own skills; the vendored launch skills keep their upstream layout.
-const SKILLS = ['capture-site', 'parity-gates', 'visual-review', 'convert-site'];
+const SKILLS = ['capture-site', 'parity-gates', 'visual-review', 'convert-site', 'suggest-improvements'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((name) => {
