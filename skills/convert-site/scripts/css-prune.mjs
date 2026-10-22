@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds one stylesheet from the captured CSS, dropping the rules no page used
 // according to css-coverage.mjs, and keeping the ones coverage cannot see.
-// Exit codes: 0 written, 2 usage or input error.
+// Exit codes: 0 written, 1 a file had no matching coverage (kept whole), 2 usage or input error.
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -11,88 +11,276 @@ import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
 
 const HELP = `Usage: node css-prune.mjs --css <capture/css dir> --coverage coverage.json
                          --out <site.css> --report prune-report.json
+                         [--widths 390,768,1440] [--origin https://www.example.com]
 
 Reads every .css file in --css (in capture/css/manifest.json order when present,
 [{ file, href|inline, pages[] }]), matches each to its coverage from
-css-coverage.mjs (stylesheet URLs through the manifest's href, falling back to
-the file's basename; inline:<n> entries by their text), and writes one
-stylesheet in source order that keeps:
+css-coverage.mjs and writes one stylesheet in source order. Coverage URLs match
+a manifest href on path and query, ignoring the origin (then on path alone);
+without a manifest they match a file of the same basename. inline:<n> entries
+match the file that contains their text.
+
+Kept:
   - every rule any page used (its range overlaps a used range)
   - every rule whose selector contains :hover :focus :active :visited :target
-    :checked ::before ::after :nth or :not(
-  - every @font-face, @keyframes, @import and @supports block, and everything
-    inside @media (prefers-*)
+    :checked ::before ::after :nth or :not( and, beyond those, ::selection
+    ::placeholder :disabled :invalid :focus-visible :focus-within
+  - every @font-face, @keyframes, @import, @namespace, @layer statement and
+    @supports block, and everything inside @media (prefers-*)
+  - every @media block that none of --widths satisfies (print, very wide or
+    narrow queries, features this script cannot evaluate): no evidence, no removal
   - other @media blocks only when a rule inside them is kept
-@import rules are moved to the top of the output; @charset is dropped.
+A file that no coverage entry matches is kept whole and the exit code is 1.
+
+Kept rules are copied from the source as written (comments inside them too);
+a pruned @media block is its original prelude around the kept rules.
+@import and @namespace rules, and @layer statements that come before a file's
+first style rule, are moved to the top of the output (layer statements first,
+in source order, then imports, then namespaces), because CSS only allows them
+there. This can change cascade order for an @import that sat between rules in
+a later file. @charset is dropped.
+
+Relative url() and @import references are rewritten against the stylesheet's
+manifest href (inline blocks: the first of their pages): same-origin targets
+become root-relative paths, other origins stay absolute; data:, # and
+root-relative references are left alone. --origin is the site's origin; it
+defaults to the most common origin among the manifest's hrefs and pages
+(the coverage URLs when there is no manifest).
 
 The report is { before: bytes, after: bytes, removedRules: n,
-keptBecause: { pseudo: n, atRule: n } }, where keptBecause counts rules and
-blocks no page used that were kept by the exceptions above.
+keptBecause: { pseudo: n, atRule: n, untestedMedia: n }, unmatched: [file] },
+where keptBecause counts rules and blocks no page used that were kept by the
+exceptions above.
 
-Exit codes: 0 written, 2 usage or input error.`;
+  --widths  the viewport widths the coverage run used (default 390,768,1440)
 
-const PSEUDO = /:hover|:focus|:active|:visited|:target|:checked|::before|::after|:nth|:not\(/;
+Exit codes: 0 written, 1 a file had no matching coverage (written, kept whole),
+2 usage or input error.`;
+
+const PSEUDO = /:hover|:focus|:active|:visited|:target|:checked|::before|::after|:nth|:not\(|::selection|::placeholder|:disabled|:invalid|:focus-visible|:focus-within/;
 const KEEP_WHOLE = new Set(['font-face', 'keyframes', 'supports']);
+const HEADER = new Set(['import', 'namespace']);
+const DEFAULT_WIDTHS = [390, 768, 1440];
+const VIEWPORT_HEIGHT = 900;
+const PLACEHOLDER = 'http://placeholder.invalid';
 
 class UsageError extends Error {}
 
 const overlaps = (used, start, end) => used.some(([a, b]) => a < end && b > start);
 const sourceOf = (text, node) => (node?.loc ? text.slice(node.loc.start.offset, node.loc.end.offset) : '');
-const unprefixed = (name) => csstree.vendorPrefix(name) ? name.slice(csstree.vendorPrefix(name).length) : name;
+const unprefixed = (name) => (csstree.vendorPrefix(name) ? name.slice(csstree.vendorPrefix(name).length) : name);
 
-// Filters a list of rules and at-rules in place; returns how many survived.
-function pruneList(list, text, used, counts, imports) {
+// --- media queries -----------------------------------------------------------
+
+function toPx(value) {
+  const match = /^(-?[\d.]+)(px|em|rem)?$/i.exec(value.trim());
+  if (!match) return null;
+  const n = Number(match[1]);
+  return match[2] && match[2].toLowerCase() !== 'px' ? n * 16 : n;
+}
+
+// true, false, or null when the feature cannot be judged offline.
+function featureMatches(feature, width) {
+  const inner = feature.trim().toLowerCase();
+  const plain = /^([a-z-]+)\s*(?::\s*(.+))?$/.exec(inner);
+  if (plain) {
+    const [, name, value] = plain;
+    const dims = { width, height: VIEWPORT_HEIGHT };
+    const dim = /^(min-|max-)?(width|height)$/.exec(name);
+    if (dim && value !== undefined) {
+      const px = toPx(value);
+      if (px === null) return null;
+      const actual = dims[dim[2]];
+      if (dim[1] === 'min-') return actual >= px;
+      if (dim[1] === 'max-') return actual <= px;
+      return actual === px;
+    }
+    if (name === 'orientation') return value === (width > VIEWPORT_HEIGHT ? 'landscape' : 'portrait');
+    if (name === 'hover' || name === 'any-hover') return value === undefined || value === 'hover';
+    if (name === 'pointer' || name === 'any-pointer') return value === undefined || value === 'fine';
+    if (name === 'color' && value === undefined) return true;
+    return null;
+  }
+  // Range syntax: (width >= 600px), (400px <= width < 800px)
+  const parts = inner.split(/\s*(<=|>=|<|>|=)\s*/);
+  if (parts.length !== 3 && parts.length !== 5) return null;
+  const compare = (a, op, b) => ({ '<': a < b, '<=': a <= b, '>': a > b, '>=': a >= b, '=': a === b })[op];
+  const resolveSide = (side) => (side === 'width' ? width : side === 'height' ? VIEWPORT_HEIGHT : toPx(side));
+  for (let i = 0; i + 2 < parts.length; i += 2) {
+    const a = resolveSide(parts[i]);
+    const b = resolveSide(parts[i + 2]);
+    if (a === null || b === null) return null;
+    if (!compare(a, parts[i + 1], b)) return false;
+  }
+  return true;
+}
+
+function queryMatches(query, width) {
+  let q = query.trim().toLowerCase();
+  let negate = false;
+  if (q.startsWith('not ')) {
+    negate = true;
+    q = q.slice(4);
+  } else if (q.startsWith('only ')) q = q.slice(5);
+  let result = true;
+  for (const term of q.split(/\s+and\s+/)) {
+    const t = term.trim();
+    let r;
+    if (t === 'all' || t === 'screen') r = true;
+    else if (/^[a-z]+$/.test(t)) r = false; // print, speech, tv...
+    else if (t.startsWith('(') && t.endsWith(')') && !/\b(or|not)\b|\(.*\(/.test(t.slice(1, -1))) r = featureMatches(t.slice(1, -1), width);
+    else r = null;
+    if (r === null) return null;
+    if (!r) result = false;
+  }
+  return negate ? !result : result;
+}
+
+// Whether any tested width satisfies a media query list.
+export function mediaTested(prelude, widths = DEFAULT_WIDTHS) {
+  const queries = prelude.split(',');
+  return widths.some((width) => queries.some((query) => queryMatches(query, width) === true));
+}
+
+// --- url rewriting -------------------------------------------------------------
+
+// Rewrites one url() or @import reference; returns null to leave it as written.
+export function rewriteRef(ref, base, siteOrigin) {
+  const value = ref.trim();
+  if (!value || value.startsWith('#') || /^data:/i.test(value)) return null;
+  if (value.startsWith('/') && !value.startsWith('//')) return null;
+  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(value);
+  if (absolute && !/^https?:/i.test(value)) return null;
+  if (!base) return null;
+  let resolved;
+  try {
+    resolved = new URL(value, new URL(base, PLACEHOLDER));
+  } catch {
+    return null;
+  }
+  if (resolved.origin === PLACEHOLDER || resolved.origin === siteOrigin) {
+    return resolved.pathname + resolved.search + resolved.hash;
+  }
+  return absolute || value.startsWith('//') ? null : resolved.href;
+}
+
+const quoteLike = (original, value) => {
+  const q = original.includes('"') ? '"' : original.includes("'") ? "'" : '';
+  return `${q}${value}${q}`;
+};
+
+// Every url() and @import string in the sheet that needs rewriting, as
+// { start, end, text } replacements over the source.
+function urlReplacements(ast, text, base, siteOrigin) {
+  const replacements = [];
+  csstree.walk(ast, {
+    enter(node) {
+      if (node.type === 'Url') {
+        if (this.atrule && this.atrule.name.toLowerCase() === 'namespace') return;
+        const next = rewriteRef(node.value, base, siteOrigin);
+        if (next === null) return;
+        const original = sourceOf(text, node);
+        replacements.push({ start: node.loc.start.offset, end: node.loc.end.offset, text: `url(${quoteLike(original, next)})` });
+      } else if (node.type === 'String' && this.atrule && this.atrule.name.toLowerCase() === 'import'
+        && this.atrulePrelude && this.atrule.prelude.children?.first === node) {
+        const next = rewriteRef(node.value, base, siteOrigin);
+        if (next === null) return;
+        replacements.push({ start: node.loc.start.offset, end: node.loc.end.offset, text: quoteLike(sourceOf(text, node), next) });
+      }
+    },
+  });
+  return replacements.sort((a, b) => a.start - b.start);
+}
+
+function sliceWith(text, start, end, replacements) {
+  let out = '';
+  let at = start;
+  for (const r of replacements) {
+    if (r.start < start || r.end > end) continue;
+    out += text.slice(at, r.start) + r.text;
+    at = r.end;
+  }
+  return out + text.slice(at, end);
+}
+
+// --- pruning -------------------------------------------------------------------
+
+// Walks a list of rules and at-rules; returns the kept source text of each kept node.
+function pruneList(list, ctx, header) {
+  const { text, used, counts, widths } = ctx;
+  const emit = (node) => sliceWith(text, node.loc.start.offset, node.loc.end.offset, ctx.replacements);
   const kept = [];
+  let preamble = Boolean(header);
   list.forEach((node) => {
-    const covered = node.loc ? overlaps(used, node.loc.start.offset, node.loc.end.offset) : true;
+    if (!node.loc) return;
+    const covered = overlaps(used, node.loc.start.offset, node.loc.end.offset);
     if (node.type === 'Rule') {
-      if (covered) kept.push(node);
+      preamble = false;
+      if (covered) kept.push(emit(node));
       else if (PSEUDO.test(sourceOf(text, node.prelude))) {
         counts.pseudo += 1;
-        kept.push(node);
+        kept.push(emit(node));
       } else counts.removedRules += 1;
       return;
     }
+    if (node.type === 'Comment') {
+      if (node.value.startsWith('!')) kept.push(emit(node));
+      return;
+    }
     if (node.type !== 'Atrule') {
-      kept.push(node);
+      kept.push(emit(node));
       return;
     }
     const name = unprefixed(node.name.toLowerCase());
     if (name === 'charset') return;
-    if (name === 'import' && imports) {
+    if (header && (HEADER.has(name) || (name === 'layer' && !node.block && preamble))) {
       if (!covered) counts.atRule += 1;
-      imports.push(node);
+      header[name === 'layer' ? 'layers' : `${name}s`].push(emit(node));
       return;
     }
-    const prefers = name === 'media' && /prefers-/i.test(sourceOf(text, node.prelude));
-    const nested = node.block && !KEEP_WHOLE.has(name) && !prefers
+    preamble = false;
+    const prelude = sourceOf(text, node.prelude);
+    if (name === 'media' && /prefers-/i.test(prelude)) {
+      if (!covered) counts.atRule += 1;
+      kept.push(emit(node));
+      return;
+    }
+    if (name === 'media' && !mediaTested(prelude, widths)) {
+      if (!covered) counts.untestedMedia += 1;
+      kept.push(emit(node));
+      return;
+    }
+    const nested = node.block && !KEEP_WHOLE.has(name)
       && !node.block.children.some((child) => child.type === 'Declaration');
     if (nested) {
-      if (pruneList(node.block.children, text, used, counts, null)) kept.push(node);
+      const inner = pruneList(node.block.children, ctx, null);
+      if (inner.length) {
+        const opening = text.slice(node.loc.start.offset, node.block.loc.start.offset);
+        kept.push(`${opening}{\n${inner.map((part) => `  ${part}`).join('\n')}\n}`);
+      }
       return;
     }
     if (!covered) counts.atRule += 1;
-    kept.push(node);
+    kept.push(emit(node));
   });
-  const replacement = new csstree.List().fromArray(kept);
-  list.head = replacement.head;
-  list.tail = replacement.tail;
-  return kept.length;
+  return kept;
 }
 
 // Prunes one stylesheet's text against used [start, end] ranges into that text.
-// Returns { css, imports, removedRules, keptBecause }; css holds everything but
-// the @import rules, which come back separately so a combined file can put them first.
-export function pruneCss(text, usedRanges) {
+// options: { base, siteOrigin, widths }. Returns { css, header, removedRules,
+// keptBecause }; css holds the kept body, header the @layer statements, @import
+// and @namespace rules that a combined file must put first.
+export function pruneCss(text, usedRanges, { base, siteOrigin, widths = DEFAULT_WIDTHS } = {}) {
   const ast = csstree.parse(text, { positions: true });
-  const counts = { pseudo: 0, atRule: 0, removedRules: 0 };
-  const imports = [];
-  pruneList(ast.children, text, usedRanges, counts, imports);
+  const counts = { pseudo: 0, atRule: 0, untestedMedia: 0, removedRules: 0 };
+  const header = { layers: [], imports: [], namespaces: [] };
+  const ctx = { text, used: usedRanges, counts, widths, replacements: urlReplacements(ast, text, base, siteOrigin) };
+  const body = pruneList(ast.children, ctx, header);
   return {
-    css: csstree.generate(ast),
-    imports: imports.map((node) => csstree.generate(node)),
+    css: body.join('\n'),
+    header,
     removedRules: counts.removedRules,
-    keptBecause: { pseudo: counts.pseudo, atRule: counts.atRule },
+    keptBecause: { pseudo: counts.pseudo, atRule: counts.atRule, untestedMedia: counts.untestedMedia },
   };
 }
 
@@ -107,6 +295,7 @@ export function mapRanges(fileText, coverageText, usedRanges) {
   let from = 0;
   for (const [start, end] of usedRanges) {
     const segment = coverageText.slice(start, end);
+    if (!segment) continue;
     let found = fileText.indexOf(segment, from);
     if (found === -1) found = fileText.indexOf(segment);
     if (found === -1) continue;
@@ -116,22 +305,29 @@ export function mapRanges(fileText, coverageText, usedRanges) {
   return mapped;
 }
 
-function normalizeUrl(href, { search = true } = {}) {
+// --- files and coverage ----------------------------------------------------------
+
+// Path (and query) of a URL, ignoring its origin.
+function pathKey(href, withSearch) {
   try {
-    const url = new URL(href);
-    url.hash = '';
-    if (!search) url.search = '';
-    return url.href;
+    const url = new URL(href, PLACEHOLDER);
+    return url.pathname + (withSearch ? url.search : '');
   } catch {
-    return href;
+    return null;
   }
 }
 
 function urlBasename(href) {
+  const path = pathKey(href, false);
+  return path ? basename(path) : basename(href.split(/[?#]/)[0]);
+}
+
+function originOf(href) {
   try {
-    return basename(new URL(href).pathname);
+    const url = new URL(href);
+    return /^https?:$/.test(url.protocol) ? url.origin : null;
   } catch {
-    return basename(href.split(/[?#]/)[0]);
+    return null;
   }
 }
 
@@ -149,52 +345,93 @@ function listFiles(dir) {
   const names = readdirSync(dir).filter((name) => name.endsWith('.css'))
     .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   const manifestFile = join(dir, 'manifest.json');
-  const manifest = existsSync(manifestFile) ? readJson(manifestFile, 'manifest') : [];
+  const hasManifest = existsSync(manifestFile);
+  const manifest = hasManifest ? readJson(manifestFile, 'manifest') : [];
   if (!Array.isArray(manifest)) throw new UsageError(`${manifestFile} is not a JSON array`);
   const byFile = new Map(manifest.filter((entry) => entry && names.includes(entry.file)).map((entry) => [entry.file, entry]));
   const ordered = [...byFile.keys(), ...names.filter((name) => !byFile.has(name))];
-  return ordered.map((name) => ({ name, text: readFileSync(join(dir, name), 'utf8'), entry: byFile.get(name) }));
+  const files = ordered.map((name) => ({ name, text: readFileSync(join(dir, name), 'utf8'), entry: byFile.get(name) }));
+  return { files, hasManifest };
 }
 
-// Gives each coverage entry to the file it describes; returns Map<file name, ranges[]>.
+// The most common http(s) origin among the manifest's hrefs and pages, or
+// among the coverage URLs when there is no manifest.
+function guessOrigin(files, coverage) {
+  const tally = new Map();
+  const hrefs = files.flatMap(({ entry }) => [entry?.href, ...(entry?.pages ?? [])]);
+  for (const href of hrefs.some(Boolean) ? hrefs : Object.keys(coverage)) {
+    const origin = href && originOf(href);
+    if (origin) tally.set(origin, (tally.get(origin) ?? 0) + 1);
+  }
+  return [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
+
+function findFileForUrl(files, key) {
+  const withHref = files.filter((f) => f.entry?.href);
+  const exact = withHref.filter((f) => pathKey(f.entry.href, true) === pathKey(key, true));
+  if (exact.length) return exact[0];
+  const byPath = withHref.filter((f) => pathKey(f.entry.href, false) === pathKey(key, false));
+  if (byPath.length === 1) return byPath[0];
+  const byName = files.filter((f) => !f.entry?.href && f.name === urlBasename(key));
+  return byName.length === 1 ? byName[0] : null;
+}
+
+// Gives each coverage entry to the file it describes; returns Map<file name,
+// { ranges, url }>, url being the first coverage URL matched to the file.
 function assignCoverage(files, coverage) {
-  const ranges = new Map(files.map((file) => [file.name, []]));
+  const assigned = new Map(files.map((file) => [file.name, { ranges: [], matched: false, url: null }]));
   for (const [key, { text = '', usedRanges = [] }] of Object.entries(coverage)) {
-    let file;
+    let file = null;
     if (key.startsWith('inline:')) {
+      if (!text) continue;
       file = files.find((f) => f.entry?.inline !== undefined && f.text.includes(text))
         ?? files.find((f) => f.text.includes(text));
-    } else {
-      file = files.find((f) => f.entry?.href && normalizeUrl(f.entry.href) === normalizeUrl(key))
-        ?? files.find((f) => f.entry?.href && normalizeUrl(f.entry.href, { search: false }) === normalizeUrl(key, { search: false }))
-        ?? files.find((f) => f.name === urlBasename(key));
-    }
-    if (file) ranges.get(file.name).push(...mapRanges(file.text, text, usedRanges));
+    } else file = findFileForUrl(files, key);
+    if (!file) continue;
+    const slot = assigned.get(file.name);
+    slot.matched = true;
+    slot.url ??= key.startsWith('inline:') ? null : key;
+    slot.ranges.push(...mapRanges(file.text, text, usedRanges));
   }
-  return ranges;
+  return assigned;
 }
 
-export function prune({ css, coverage }) {
-  const files = listFiles(css);
+export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
+  const { files, hasManifest } = listFiles(css);
   if (!files.length) throw new UsageError(`--css ${css} holds no .css files`);
+  if (!hasManifest) console.error(`warning: no manifest.json in ${css}; relative url() references are resolved against the matched coverage URLs`);
+  const siteOrigin = origin ?? guessOrigin(files, coverage);
   const assigned = assignCoverage(files, coverage);
-  const imports = [];
+  const header = { layers: [], imports: [], namespaces: [] };
   const bodies = [];
-  const report = { before: 0, after: 0, removedRules: 0, keptBecause: { pseudo: 0, atRule: 0 } };
+  const report = { before: 0, after: 0, removedRules: 0, keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0 }, unmatched: [] };
   for (const file of files) {
-    const used = assigned.get(file.name);
-    if (!used.length) console.error(`warning: no coverage matched ${file.name}; only the exception rules are kept`);
-    const result = pruneCss(file.text, used);
-    imports.push(...result.imports);
+    const slot = assigned.get(file.name);
+    let used = slot.ranges;
+    if (!slot.matched) {
+      report.unmatched.push(file.name);
+      used = [[0, file.text.length]];
+      console.error(`no coverage matched ${file.name}${file.entry?.href ? ` (${file.entry.href})` : ''}; kept it whole`);
+    }
+    const base = file.entry?.href ?? file.entry?.pages?.[0] ?? slot.url;
+    const result = pruneCss(file.text, used, { base, siteOrigin, widths });
+    for (const part of ['layers', 'imports', 'namespaces']) header[part].push(...result.header[part]);
     if (result.css) bodies.push(result.css);
     report.before += Buffer.byteLength(file.text);
     report.removedRules += result.removedRules;
-    report.keptBecause.pseudo += result.keptBecause.pseudo;
-    report.keptBecause.atRule += result.keptBecause.atRule;
+    for (const reason of Object.keys(report.keptBecause)) report.keptBecause[reason] += result.keptBecause[reason];
   }
-  const output = [...imports, ...bodies].join('\n') + '\n';
+  const output = `${[...header.layers, ...header.imports, ...header.namespaces, ...bodies].join('\n')}\n`;
   report.after = Buffer.byteLength(output);
   return { output, report };
+}
+
+function parseWidths(value) {
+  return value.split(',').map((w) => {
+    const width = Number(w.trim());
+    if (!Number.isInteger(width) || width < 100 || width > 4000) throw new UsageError(`--widths has a bad width: ${w}`);
+    return width;
+  });
 }
 
 function parse(argv) {
@@ -207,6 +444,8 @@ function parse(argv) {
         coverage: { type: 'string' },
         out: { type: 'string' },
         report: { type: 'string' },
+        widths: { type: 'string', default: DEFAULT_WIDTHS.join(',') },
+        origin: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
     }));
@@ -215,7 +454,12 @@ function parse(argv) {
   }
   if (values.help) return { help: true };
   for (const name of ['css', 'coverage', 'out', 'report']) if (!values[name]) throw new UsageError(`--${name} is required`);
-  return values;
+  let origin;
+  if (values.origin) {
+    origin = originOf(values.origin);
+    if (!origin) throw new UsageError(`--origin is not an http(s) URL: ${values.origin}`);
+  }
+  return { ...values, widths: parseWidths(values.widths), origin };
 }
 
 function main() {
@@ -232,7 +476,7 @@ function main() {
     if (!coverage || typeof coverage !== 'object' || Array.isArray(coverage)) {
       throw new UsageError(`${options.coverage} is not a coverage object`);
     }
-    result = prune({ css: options.css, coverage });
+    result = prune({ css: options.css, coverage, widths: options.widths, origin: options.origin });
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     console.error(`css-prune: ${error.message}\nRun with --help for usage.`);
@@ -241,9 +485,13 @@ function main() {
   for (const file of [options.out, options.report]) mkdirSync(dirname(file), { recursive: true });
   writeFileSync(options.out, result.output);
   writeFileSync(options.report, `${JSON.stringify(result.report, null, 2)}\n`);
-  const { before, after, removedRules, keptBecause } = result.report;
-  console.log(`css: ${before} -> ${after} bytes, ${removedRules} rules removed `
-    + `(kept unused: ${keptBecause.pseudo} pseudo, ${keptBecause.atRule} at-rule); wrote ${options.out}`);
+  const { before, after, removedRules, keptBecause, unmatched } = result.report;
+  console.log(`css: ${before} -> ${after} bytes, ${removedRules} rules removed (kept unused: ${keptBecause.pseudo} pseudo, `
+    + `${keptBecause.atRule} at-rule, ${keptBecause.untestedMedia} untested media); wrote ${options.out}`);
+  if (unmatched.length) {
+    console.error(`css-prune: ${unmatched.length} file(s) had no matching coverage and were kept whole: ${unmatched.join(', ')}`);
+    process.exit(1);
+  }
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main();
