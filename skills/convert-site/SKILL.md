@@ -13,8 +13,10 @@ stopping again, and ends with a pull request the person merges and a runbook the
 1. **One intake message, then no stops.** Every question carries a default. Anything that later
    needs an account, a login or a token you do not have goes on the "needs you" list
    (`state.needsYou` and `docs/LAUNCH.md` section A) and the run carries on.
-2. **The live site is read-only.** Only the capture scripts touch it, paced. Never submit a form
-   on it, log in, or fetch a page by hand to fill a gap.
+2. **The live site is read-only.** Only these read it, paced: the capture scripts, `shoot.mjs`
+   and `styles.mjs` on live, `css-coverage.mjs`, `launch-audit --old-url` and `pre-launch
+   --predecessor-url`. Analytics are blocked on their live page loads, so no visit is counted.
+   Never submit a form on it, log in, or fetch a page by hand to fill a gap.
 3. **The default build equals live, faults included.** Content is moved from captured markup,
    never retyped or tidied. Every oddity is a decision row that says "reproduce live by default".
    A forced difference is an exception; an improvement is a proposal (`PROPOSALS=on` only).
@@ -178,11 +180,8 @@ waiting on your merge", never "done" or "live". Then stop.
 
 In a new session, read `node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE get` and
 continue from `phase`: rerun that phase's proof first; if it holds, start the next phase. The
-capture resumes with `--resume`. Never repeat the intake.
-
-## Applying a suggestion later
-
-`convert-site --apply <id>`: `references/apply-suggestion.md`. Never in the conversion run itself.
+capture resumes with `--resume`. Never repeat the intake. Applying a suggestion later is
+`convert-site --apply <id>` (`references/apply-suggestion.md`), never part of the run itself.
 
 ## References
 
