@@ -102,12 +102,13 @@ after(async () => {
 
 const live = (base, args = []) => verifyLive(['--base', base, '--baseline', baseline, '--delay', '0', ...args]);
 
-// 15 routes at 200 (13 pages, the feed, the brochure PDF), 14 redirects, the sitemap, 19 media.
+// 15 routes at 200 (13 pages, the feed, the brochure PDF), 13 redirects (/?p=2 -> / is a no-op,
+// skipped), the sitemap, 19 media.
 test('a dist-good build served live passes every check', async () => {
   const host = await serve(good);
   const result = await live(host.origin);
   assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /^verify-live: 49 checked, 0 failed$/m);
+  assert.match(result.stdout, /^verify-live: 48 checked, 0 failed$/m);
   assert.match(result.stdout, /^ {2}ok route \/hidden-page\/$/m);
   assert.match(result.stdout, /^ {2}ok redirect \/old-services -> \/services\/$/m);
 });
@@ -117,14 +118,14 @@ test('a route missing from the deploy fails, naming it', async () => {
   const result = await live(host.origin);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^ {2}FAIL route \/hidden-page\/ status: expected 200, got 404$/m);
-  assert.match(result.stdout, /^verify-live: 49 checked, 1 failed$/m);
+  assert.match(result.stdout, /^verify-live: 48 checked, 1 failed$/m);
 });
 
 test('--bypass is sent as x-vercel-protection-bypass on every request', async () => {
   const host = await serve(good);
   const result = await live(host.origin, ['--bypass', 'secret-value']);
   assert.equal(result.code, 0, result.stdout);
-  assert.equal(host.headers.length, 49);
+  assert.equal(host.headers.length, 48);
   assert.ok(host.headers.every((h) => h['x-vercel-protection-bypass'] === 'secret-value'));
 });
 
@@ -133,7 +134,7 @@ test('X-Robots-Tag noindex must be present iff --expect-noindex', async () => {
   const staging = await serve(good, { noindex: true });
   const expectMissing = await live(open.origin, ['--expect-noindex']);
   assert.equal(expectMissing.code, 1);
-  assert.match(expectMissing.stdout, /^ {2}FAIL route \/about\/ x-robots-tag: expected "noindex", got null$/m);
+  assert.match(expectMissing.stdout, /^ {2}FAIL route \/about\/ x-robots-tag: expected "noindex \(header or meta robots\)", got null$/m);
   assert.equal((await live(staging.origin, ['--expect-noindex'])).code, 0);
   const leaked = await live(staging.origin);
   assert.equal(leaked.code, 1);
@@ -158,7 +159,23 @@ test('a redirect that takes two hops fails; a failing unverified shortlink fails
     { check: 'redirect', path: '/?p=10', field: 'status', expected: 301, actual: 200, unverified: true },
     { check: 'redirect', path: '/old-services', field: 'location', expected: '/services/', actual: '/old-services/' },
   ]);
-  assert.deepEqual(json.skipped, []);
+  assert.deepEqual(json.skipped, [{ check: 'redirect', path: '/?p=2', reason: 'no-op: the target is the source path; hosts pass the query on' }]);
+});
+
+test('a query redirect whose target is its own path is skipped, not requested', async () => {
+  const host = await serve(good, { redirects: baselineRedirects.filter((r) => r.from !== '/?p=2') });
+  const result = await live(host.origin);
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, /^verify-live: 1 not checked \(sampled out or no-op\)$/m);
+});
+
+test('with --expect-noindex, a meta robots noindex on the page stands in for the header', async () => {
+  const staging = await serve(makeDist(join(root, 'dist-staging-meta'), { staging: true }));
+  const result = await live(staging.origin, ['--expect-noindex']);
+  assert.equal(result.code, 0, result.stdout);
+  const plain = await live((await serve(good)).origin, ['--expect-noindex']);
+  assert.equal(plain.code, 1);
+  assert.match(plain.stdout, /^ {2}FAIL route \/about\/ x-robots-tag: expected "noindex \(header or meta robots\)", got null$/m);
 });
 
 test('a media file whose size changed fails', async () => {
@@ -180,7 +197,7 @@ test('--media-manifest checks each sampled object at its url against the manifes
   const result = await live(host.origin, ['--media-manifest', manifest, '--json']);
   assert.equal(result.code, 1);
   const json = JSON.parse(result.stdout);
-  assert.equal(json.checked, 32);
+  assert.equal(json.checked, 31);
   assert.deepEqual(json.failures, [{ check: 'media', path: '/wp-content/uploads/2026/01/team.jpg', field: 'bytes', expected: 1, actual: 13704 }]);
 });
 
@@ -205,7 +222,7 @@ test('--sample N checks N routes, always / and one route per template', async ()
   const checked = routes.filter((r) => !skipped.includes(r.path));
   assert.ok(checked.some((r) => r.path === '/'));
   assert.deepEqual(new Set(checked.map((r) => r.template)), templates);
-  assert.equal(json.checked, 8 + 14 + 1 + 19);
+  assert.equal(json.checked, 8 + 13 + 1 + 19, '13 redirects: the /?p=2 no-op is skipped');
 });
 
 test('three consecutive 429s stop the run with exit 3', async () => {

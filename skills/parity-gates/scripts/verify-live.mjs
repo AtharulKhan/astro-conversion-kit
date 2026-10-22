@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
+import { attr, findAll, parseHtml } from './lib/html.mjs';
+import { isNoop } from './lib/redirects-csv.mjs';
 
 const USAGE = `Usage: node verify-live.mjs --base <url> --baseline baseline [options]
 
@@ -17,7 +19,9 @@ Checks a deployed site against the baseline:
             temporary 302/303/307) whose Location is its target: one hop, no chain. A
             shortlink the capture did not request (verified: false) still has to resolve; its
             failure is marked "unverified live"
-  header    pages (page, post, archive) carry X-Robots-Tag: noindex iff --expect-noindex
+  header    pages (page, post, archive) carry X-Robots-Tag: noindex iff --expect-noindex; with
+            --expect-noindex a <meta name="robots"> noindex in the page also counts (the site
+            template's staging build sets it on every page)
   sitemap   /sitemap-index.xml (or /sitemap.xml) answers 200
   media     a random sample of 20 baseline media files (all when fewer) answers 200 with a
             content-length equal to the baseline bytes
@@ -97,6 +101,13 @@ export function sampleRoutes(routes, n, random = Math.random) {
 }
 
 // Same class of redirect: a permanent one stays permanent, a temporary one temporary.
+// True when an HTML response carries <meta name="robots"> with noindex.
+function metaNoindex(res) {
+  if (!/html/i.test(res.headers.get('content-type') ?? '')) return false;
+  return findAll(parseHtml(res.body.toString('utf8')), (n) => n.tagName === 'meta' && (attr(n, 'name') ?? '').trim().toLowerCase() === 'robots')
+    .some((n) => /\bnoindex\b/i.test(attr(n, 'content') ?? ''));
+}
+
 function sameKind(expected, actual) {
   if (PERMANENT.has(expected)) return PERMANENT.has(actual);
   if (TEMPORARY.has(expected)) return TEMPORARY.has(actual);
@@ -163,7 +174,7 @@ export function createVerifier({ base, bypass, delay = 500, fetchImpl = fetch, o
     else if (PAGE_KINDS.has(r.kind)) {
       const tag = res.headers.get('x-robots-tag');
       const noindex = /\bnoindex\b/i.test(tag ?? '');
-      if (expectNoindex && !noindex) problems.push({ field: 'x-robots-tag', expected: 'noindex', actual: tag });
+      if (expectNoindex && !noindex && !metaNoindex(res)) problems.push({ field: 'x-robots-tag', expected: 'noindex (header or meta robots)', actual: tag });
       if (!expectNoindex && noindex) problems.push({ field: 'x-robots-tag', expected: null, actual: tag });
     }
     record('route', r.path, problems);
@@ -281,7 +292,11 @@ async function main() {
   let stopped = null;
   try {
     for (const r of sampled) await verifier.route(r, { expectNoindex: args['expect-noindex'] });
-    for (const r of redirects) await verifier.redirect(r, oldOrigins);
+    for (const r of redirects) {
+      // build-redirects leaves these out: the host passes the query on and serves the page.
+      if (isNoop(r)) verifier.skip('redirect', r.from, 'no-op: the target is the source path; hosts pass the query on');
+      else await verifier.redirect(r, oldOrigins);
+    }
     await verifier.sitemap();
     for (const m of mediaSample) await verifier.media(m);
   } catch (error) {
@@ -294,7 +309,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(stopped ? { ...results, stopped } : results, null, 2)}\n`);
   } else {
     process.stdout.write(`verify-live: ${results.checked} checked, ${results.failed} failed\n`);
-    if (results.skipped.length) process.stdout.write(`verify-live: ${results.skipped.length} not checked (sampled out)\n`);
+    if (results.skipped.length) process.stdout.write(`verify-live: ${results.skipped.length} not checked (sampled out or no-op)\n`);
     if (stopped) process.stdout.write(`verify-live: ${stopped}\n`);
   }
   process.exit(stopped ? 3 : results.failed > 0 ? 1 : 0);
