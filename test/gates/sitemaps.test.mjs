@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -22,11 +22,12 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const sitemaps = (dist, args = [], origin = ['--origin', DIST_ORIGIN]) =>
   runGate('sitemaps', ['--dist', dist, '--baseline', baseline, '--capture', capture, ...origin, ...args], { cwd: root });
 
-// 12 indexable pages (13 at 200 less the noindex /private-page/) plus the /feed/ feed.
+// 12 indexable pages (13 at 200 less the noindex /private-page/), the /feed/ feed and the one
+// robots.txt Sitemap: line.
 test('dist-good passes: the sitemap lists exactly the indexable routes and the feed matches', async () => {
   const result = await sitemaps(good);
   assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /^sitemaps: 13 checked, 0 failed$/m);
+  assert.match(result.stdout, /^sitemaps: 14 checked, 0 failed$/m);
 });
 
 test('a sitemap URL on another origin fails', async () => {
@@ -42,13 +43,14 @@ test('a page left out of the sitemap fails; an extra one fails', async () => {
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^ {2}\/about\/ sitemap: expected "https:\/\/www\.example\.com\/about\/", got null$/m);
   assert.match(result.stdout, /^ {2}\/private-page\/ sitemap: expected null, got "https:\/\/www\.example\.com\/private-page\/"$/m);
-  assert.match(result.stdout, /^sitemaps: 13 checked, 2 failed$/m);
+  assert.match(result.stdout, /^sitemaps: 14 checked, 2 failed$/m);
 });
 
 test('a single sitemap.xml is read when there is no sitemap index', async () => {
   const dist = makeDist(join(root, 'dist-single'));
   rmSync(join(dist, 'sitemap-index.xml'));
   renameSync(join(dist, 'sitemap-0.xml'), join(dist, 'sitemap.xml'));
+  edit(dist, 'robots.txt', 'sitemap-index.xml', 'sitemap.xml');
   const result = await sitemaps(dist);
   assert.equal(result.code, 0, result.stdout);
   rmSync(join(dist, 'sitemap.xml'));
@@ -60,8 +62,59 @@ test('a single sitemap.xml is read when there is no sitemap index', async () => 
 test("WordPress's sitemap_index.xml, kept at its live URL, is read as the sitemap index", async () => {
   const dist = makeDist(join(root, 'dist-wp-index'));
   renameSync(join(dist, 'sitemap-index.xml'), join(dist, 'sitemap_index.xml'));
+  edit(dist, 'robots.txt', 'sitemap-index.xml', 'sitemap_index.xml');
   const result = await sitemaps(dist);
   assert.equal(result.code, 0, result.stdout);
+});
+
+// A baseline whose sitemaps.json records WordPress core's sitemap names.
+function wpBaseline() {
+  const copy = join(root, 'baseline-wp-core');
+  cpSync(baseline, copy, { recursive: true });
+  writeFileSync(join(copy, 'sitemaps.json'), JSON.stringify(['wp-sitemap-posts-page-1.xml', 'wp-sitemap.xml']));
+  return copy;
+}
+// dist with WordPress core's wp-sitemap.xml index and one child holding Astro's sitemap-0.xml URLs.
+function wpCoreDist(name) {
+  const dist = makeDist(join(root, name));
+  writeFileSync(join(dist, 'wp-sitemap-posts-page-1.xml'), readFileSync(join(dist, 'sitemap-0.xml')));
+  writeFileSync(
+    join(dist, 'wp-sitemap.xml'),
+    `<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>${DIST_ORIGIN}/wp-sitemap-posts-page-1.xml</loc></sitemap></sitemapindex>\n`,
+  );
+  return dist;
+}
+
+test("a live sitemap name from baseline/sitemaps.json (WordPress core's wp-sitemap.xml) is read as an index", async () => {
+  const dist = wpCoreDist('dist-wp-core');
+  rmSync(join(dist, 'sitemap-index.xml'));
+  rmSync(join(dist, 'sitemap-0.xml'));
+  writeFileSync(join(dist, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${DIST_ORIGIN}/wp-sitemap.xml\n`);
+  const base = ['--dist', dist, '--capture', capture, '--origin', DIST_ORIGIN];
+  const result = await runGate('sitemaps', [...base, '--baseline', wpBaseline()], { cwd: root });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^sitemaps: 14 checked, 0 failed$/m, '12 pages, the feed and the robots.txt line');
+  const unknown = await runGate('sitemaps', [...base, '--baseline', baseline], { cwd: root });
+  assert.equal(unknown.code, 1, 'a name the live site did not have is not read');
+  assert.match(unknown.stdout, /\/ sitemap: expected "sitemap-index\.xml", got null/);
+});
+
+test('every top sitemap in dist must list every page: one that misses a page fails, named', async () => {
+  const dist = wpCoreDist('dist-two-tops');
+  edit(dist, 'wp-sitemap-posts-page-1.xml', `<url><loc>${DIST_ORIGIN}/about/</loc></url>`, '');
+  const result = await runGate('sitemaps', ['--dist', dist, '--capture', capture, '--origin', DIST_ORIGIN, '--baseline', wpBaseline()], { cwd: root });
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/about\/ sitemap wp-sitemap\.xml: expected "https:\/\/www\.example\.com\/about\/", got null$/m);
+  assert.doesNotMatch(result.stdout, /sitemap sitemap-index\.xml/);
+});
+
+test('a robots.txt Sitemap: line must point at a file in dist', async () => {
+  const dist = makeDist(join(root, 'dist-robots'));
+  writeFileSync(join(dist, 'robots.txt'), `User-agent: *\nSitemap: ${DIST_ORIGIN}/sitemap-index.xml\nSitemap: ${DIST_ORIGIN}/sitemap_index.xml\n`);
+  const result = await sitemaps(dist);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/robots\.txt sitemap line: expected "a file in dist", got "https:\/\/www\.example\.com\/sitemap_index\.xml"$/m);
+  assert.match(result.stdout, /^sitemaps: 15 checked, 1 failed$/m);
 });
 
 test('a sitemap index pointing at a missing child sitemap fails', async () => {

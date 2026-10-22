@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Sitemaps gate: dist/sitemap-index.xml (or sitemap_index.xml, or sitemap.xml) lists exactly the indexable pages,
-// posts and archives the baseline recorded at 200, on the build's origin, and every feed the
-// live site served is built with as many items as the captured feed.
+// Sitemaps gate: every top sitemap in dist (Astro's sitemap-index.xml, sitemap_index.xml or
+// sitemap.xml, or a live sitemap name recorded in baseline/sitemaps.json such as WordPress's
+// wp-sitemap.xml) lists exactly the indexable pages, posts and archives the baseline recorded at
+// 200, on the build's origin; every robots.txt Sitemap: line points at a file in dist; and every
+// feed the live site served is built with as many items as the captured feed.
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,11 +17,17 @@ const OPTIONS = {
   origin: { type: 'string', default: '', description: 'the origin the sitemap URLs must be on (default: canonicalOrigin in baseline/meta.json)' },
 };
 const NOTES = `
-Expected in the sitemap: every page, post and archive route at 200 without noindex. The top file
-is sitemap-index.xml, sitemap_index.xml (WordPress's name, kept at its live URL) or sitemap.xml,
-the first that exists. A sitemap index is followed to its child sitemaps in dist. Feed items are <item> (RSS) or <entry> (Atom).
+Expected in the sitemap: every page, post and archive route at 200 without noindex. The sitemap
+files read are sitemap-index.xml, sitemap_index.xml, sitemap.xml and every live sitemap name in
+baseline/sitemaps.json (wp-sitemap.xml, sitemap_index.xml, page-sitemap.xml, ...), each one that
+exists in dist. A sitemap index is followed to its child sitemaps in dist. Each file that no
+other index lists as a child is a top sitemap, and each top sitemap (with its children) must list
+exactly the expected pages; with more than one, a failure names it ("sitemap wp-sitemap.xml").
+Every "Sitemap:" line of dist/robots.txt must point at a file in dist.
+Feed items are <item> (RSS) or <entry> (Atom).
 `;
 const TOP = ['sitemap-index.xml', 'sitemap_index.xml', 'sitemap.xml'];
+const isIndex = (xml) => /<sitemapindex[\s>]/.test(xml);
 
 const decode = (value) => {
   try {
@@ -44,43 +52,67 @@ const pathOf = (loc) => {
   }
 };
 
-// { urls: [loc], failures } from the top sitemap and, for an index, its children in dist.
-export function readSitemaps(dist) {
-  const top = firstExisting(dist, TOP);
-  if (!top) return { urls: null, failures: [{ path: '/', field: 'sitemap', expected: TOP[0], actual: null }] };
-  const xml = readFileSync(join(dist, top), 'utf8');
-  if (!/<sitemapindex[\s>]/.test(xml)) return { urls: locs(xml), failures: [] };
-  const urls = [];
+// { roots: [{ name, urls }], failures }: every sitemap file of TOP and `names` present in dist,
+// grouped under the top sitemaps (those no present index lists), an index followed to its
+// children in dist. roots is null when no sitemap file exists.
+export function readSitemaps(dist, names = []) {
+  const candidates = [...new Set([...TOP, ...names])].filter((name) => existsSync(join(dist, name)));
+  if (!candidates.length) return { roots: null, failures: [{ path: '/', field: 'sitemap', expected: TOP[0], actual: null }] };
+  const xmlOf = new Map(candidates.map((name) => [name, readFileSync(join(dist, name), 'utf8')]));
+  const childrenOf = (name) => (isIndex(xmlOf.get(name)) ? locs(xmlOf.get(name)).map((loc) => pathOf(loc).replace(/^\/+/, '')) : []);
+  const children = new Set(candidates.flatMap(childrenOf));
   const failures = [];
-  for (const child of locs(xml)) {
-    const path = pathOf(child);
-    const file = path.replace(/^\/+/, '');
-    if (!file || !existsSync(join(dist, file))) {
-      failures.push({ path, field: 'sitemap', expected: file, actual: null });
-      continue;
+  const reported = new Set();
+  const roots = candidates.filter((name) => !children.has(name)).map((name) => {
+    if (!isIndex(xmlOf.get(name))) return { name, urls: locs(xmlOf.get(name)) };
+    const urls = [];
+    for (const file of childrenOf(name)) {
+      if (!file || !existsSync(join(dist, file))) {
+        if (!reported.has(file)) failures.push({ path: `/${file}`, field: 'sitemap', expected: file, actual: null });
+        reported.add(file);
+        continue;
+      }
+      urls.push(...locs(readFileSync(join(dist, file), 'utf8')));
     }
-    urls.push(...locs(readFileSync(join(dist, file), 'utf8')));
-  }
-  return { urls, failures };
+    return { name, urls };
+  });
+  return { roots, failures };
 }
 
-export function checkSitemaps({ dist, capture, routes, compareOrigin, paths = () => true }) {
+// Every "Sitemap:" line of dist/robots.txt names a file in dist: [failure].
+export function robotsSitemapFailures(dist) {
+  const file = join(dist, 'robots.txt');
+  if (!existsSync(file)) return { checked: 0, failures: [] };
+  const lines = [...readFileSync(file, 'utf8').matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
+  const failures = lines
+    .filter((url) => {
+      const rel = pathOf(url).replace(/^\/+/, '');
+      return !rel || !existsSync(join(dist, rel)) || !statSync(join(dist, rel)).isFile();
+    })
+    .map((url) => ({ path: '/robots.txt', field: 'sitemap line', expected: 'a file in dist', actual: url }));
+  return { checked: lines.length, failures };
+}
+
+export function checkSitemaps({ dist, capture, routes, compareOrigin, sitemaps = [], paths = () => true }) {
   const pages = routes.filter((r) => r.status === 200 && PAGE_KINDS.has(r.kind) && !r.noindex && paths(r.path));
   const feeds = routes.filter((r) => r.status === 200 && r.kind === 'feed' && paths(r.path));
-  const { urls, failures } = readSitemaps(dist);
-  if (urls) {
+  const { roots, failures } = readSitemaps(dist, sitemaps);
+  const expected = new Set(pages.map((r) => decode(r.path)));
+  for (const { name, urls } of roots ?? []) {
+    const field = roots.length > 1 ? `sitemap ${name}` : 'sitemap';
     const listed = new Map();
     for (const url of urls) if (!listed.has(pathOf(url))) listed.set(pathOf(url), url);
-    const expected = new Set(pages.map((r) => decode(r.path)));
     for (const path of expected) {
       const want = `${compareOrigin}${new URL(path, compareOrigin).pathname}`;
       const got = listed.get(path) ?? null;
-      if (got !== want) failures.push({ path, field: 'sitemap', expected: want, actual: got });
+      if (got !== want) failures.push({ path, field, expected: want, actual: got });
     }
     for (const [path, url] of listed) {
-      if (!expected.has(path) && paths(path)) failures.push({ path, field: 'sitemap', expected: null, actual: url });
+      if (!expected.has(path) && paths(path)) failures.push({ path, field, expected: null, actual: url });
     }
   }
+  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist) : { checked: 0, failures: [] };
+  failures.push(...robots.failures);
   for (const feed of feeds) {
     const candidates = feedFiles(feed.path);
     const file = firstExisting(dist, candidates);
@@ -97,7 +129,7 @@ export function checkSitemaps({ dist, capture, routes, compareOrigin, paths = ()
     const got = itemCount(readFileSync(join(dist, file), 'utf8'));
     if (want !== got) failures.push({ path: feed.path, field: 'items', expected: want, actual: got });
   }
-  return { checked: pages.length + feeds.length, failures };
+  return { checked: pages.length + feeds.length + robots.checked, failures };
 }
 
 function main() {
@@ -120,7 +152,9 @@ function main() {
     process.stderr.write(`${NAME}: not found: ${args.capture} (the capture, for its feeds; pass --capture)\n`);
     process.exit(2);
   }
-  const results = checkSitemaps({ dist: args.dist, capture: args.capture, routes, compareOrigin, paths: args.paths });
+  const sitemapsFile = join(args.baseline, 'sitemaps.json');
+  const sitemaps = existsSync(sitemapsFile) ? readJson(sitemapsFile) : [];
+  const results = checkSitemaps({ dist: args.dist, capture: args.capture, routes, compareOrigin, sitemaps, paths: args.paths });
   report(NAME, results, { json: args.json });
 }
 

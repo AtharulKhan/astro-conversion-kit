@@ -84,6 +84,8 @@ path; built or not, none is an extra.
 The live site's sitemap file names the capture saved (`capture/sitemaps/`), `[]` when none. The
 routes gate lets the build serve each at the root (besides Astro's `sitemap-index.xml` and
 `sitemap-<n>.xml`); any other sitemap file name is an extra.
+The sitemaps gate reads each of these names that is in `dist/` (WordPress core's `wp-sitemap.xml`
+too), besides Astro's `sitemap-index.xml`.
 
 ## baseline/text/
 
