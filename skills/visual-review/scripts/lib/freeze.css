@@ -1,0 +1,2 @@
+*, *::before, *::after { animation: none !important; transition: none !important; }
+.reveal, [data-aos], .wow, .animate__animated, .elementor-invisible { opacity: 1 !important; transform: none !important; visibility: visible !important; }
