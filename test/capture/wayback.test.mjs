@@ -64,7 +64,7 @@ test('the CDX request follows a redirect and allows a slow answer', async () => 
   const options = [];
   const fetch = (url, opts) => {
     options.push(opts);
-    return fetchPaced(url, { ...opts, delayMs: 0 });
+    return fetchPaced(url, { ...opts, delayMs: 0, trusted: [url] });
   };
   try {
     const endpoint = `http://127.0.0.1:${server.address().port}/cdx/search/cdx`;

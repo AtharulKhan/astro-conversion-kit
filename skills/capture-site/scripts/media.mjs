@@ -2,13 +2,13 @@
 // Media enumeration for a finished capture: every media file the site's pages, stylesheets, REST
 // media list and image sitemaps point at, checked with one paced HEAD each (GET when HEAD is
 // refused, or to download). Only files on the captured site are listed.
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { parse } from 'parse5';
 import { assertNodeVersion } from './lib/node-version.mjs';
-import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced } from './lib/http.mjs';
+import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, MAX_FILE_BYTES, MAX_TEXT_BYTES, TOO_LARGE } from './lib/http.mjs';
 import { cssUrls, FONT_EXTENSIONS, IMAGE_EXTENSIONS } from './lib/css-urls.mjs';
 import { extensionOf } from './lib/page-rules.mjs';
 import { mediaUrlsOf } from './lib/wp-rest.mjs';
@@ -16,7 +16,7 @@ import { srcsetUrls } from '../../parity-gates/scripts/lib/srcset.mjs';
 
 export { srcsetUrls };
 
-const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--delay <ms>]
+const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--delay <ms>] [--max-file-bytes <n>]
 
 List every media file of a captured site in <capture>/media.json:
   [{ url, path, source[], referencedBy[], status, contentType, bytes }]
@@ -27,11 +27,16 @@ Entries are keyed by path: references to the same path (another query string, ht
 www or not) are one entry, and the first URL found for it is the one listed and requested.
 Each file is checked with one paced HEAD request (GET when HEAD is refused). A file that times
 out, resets the connection or answers 403 after 3 tries is listed with that status (0 for a
-network error, with \`error\`); three such files in a row stop the run.
+network error, with \`error\`); three such files in a row stop the run. A file larger than
+--max-file-bytes is listed with status "too-large" and not saved; a file on a host that resolves
+to a loopback, private or link-local address (other than the captured site's own) is not
+requested and is listed "blocked-address".
 
   --capture <dir>   the capture folder written by capture.mjs (reads inventory.json,
                     pages/, css/, wp-rest/media.json, sitemaps/)
   --download <dir>  also save every file that answers 200 under <dir>/<path>, byte for byte
+                    (streamed to disk; a download with no data for 30 s is a network error)
+  --max-file-bytes <n>  largest file to download or measure (default ${MAX_FILE_BYTES}, 2 GB)
   --delay <ms>      wait between requests (default ${DEFAULT_DELAY_MS})
   --ua "<string>"   user agent (default: a desktop Chrome)
   --help            show this help
@@ -60,6 +65,8 @@ const HEAD_REFUSED = new Set([400, 403, 405, 501]);
 // wants us to stop.
 const GIVE_UP = new Set([0, 403]);
 const GET_TIMEOUT_MS = 120_000;
+// A download is bounded by the idle timeout; this only stops one that trickles forever.
+const DOWNLOAD_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const RETRY_MIN_MS = 500;
 
@@ -69,7 +76,7 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
 
 function parseArgs(argv) {
-  const args = { capture: null, download: null, delayMs: DEFAULT_DELAY_MS, ua: DEFAULT_UA, help: false };
+  const args = { capture: null, download: null, delayMs: DEFAULT_DELAY_MS, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i, flag) => {
     if (i >= argv.length || argv[i].startsWith('--')) throw new UsageError(`${flag} needs a value`);
     return argv[i];
@@ -84,6 +91,10 @@ function parseArgs(argv) {
       const n = Number(value((i += 1), arg));
       if (!Number.isInteger(n) || n < 0) throw new UsageError('--delay needs a whole number');
       args.delayMs = n;
+    } else if (arg === '--max-file-bytes') {
+      const n = Number(value((i += 1), arg));
+      if (!Number.isInteger(n) || n < 1) throw new UsageError('--max-file-bytes needs a whole number of bytes');
+      args.maxFileBytes = n;
     } else throw new UsageError(`unknown argument ${arg}`);
   }
   if (!args.help && !args.capture) throw new UsageError('--capture <dir> is required');
@@ -137,7 +148,7 @@ function sitemapImages(dir) {
     let buffer = readFileSync(join(dir, name));
     if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
       try {
-        buffer = gunzipSync(buffer);
+        buffer = gunzipSync(buffer, { maxOutputLength: MAX_TEXT_BYTES });
       } catch {
         continue;
       }
@@ -266,7 +277,9 @@ async function main() {
     // an unreadable earlier list is simply redone
   }
   const write = () => writeFileSync(outFile, `${JSON.stringify(media, null, 2)}\n`);
-  const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua });
+  const meta = existsSync(join(captureDir, 'meta.json')) ? readJson(join(captureDir, 'meta.json')) : {};
+  const trusted = [meta.origin, meta.canonicalOrigin, media[0]?.url];
+  const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua, trusted, maxBytes: args.maxFileBytes });
   const streak = new Set();
 
   // Every entry carries the fields from the start, so a stopped run lists what is left as null.
@@ -274,7 +287,8 @@ async function main() {
   for (const entry of media) {
     const before = earlier.get(entry.path);
     const target = args.download ? downloadTarget(args.download, entry.path) : null;
-    if (before && before.status !== null && !BLOCK_STATUSES.has(before.status)) {
+    // A file that was too large is asked again: the cap may have been raised.
+    if (before && before.status !== null && !BLOCK_STATUSES.has(before.status) && before.status !== TOO_LARGE) {
       const downloaded = !args.download || before.status !== 200 || !target || fileHolds(target, before.bytes);
       if (downloaded) {
         Object.assign(entry, { status: before.status, contentType: before.contentType, bytes: before.bytes });
@@ -292,7 +306,11 @@ async function main() {
         const length = res.headers?.['content-length'];
         viaGet = HEAD_REFUSED.has(res.status) || (res.status === 200 && length === undefined);
       }
-      if (viaGet) res = await request(entry.url, { raw: true, timeoutMs: GET_TIMEOUT_MS });
+      if (viaGet) {
+        res = await request(entry.url, target
+          ? { toFile: target, timeoutMs: DOWNLOAD_TIMEOUT_MS }
+          : { discardBody: true, timeoutMs: args.download ? DOWNLOAD_TIMEOUT_MS : GET_TIMEOUT_MS });
+      }
       if (!BLOCK_STATUSES.has(res.status)) break;
       if (attempt < MAX_ATTEMPTS) await sleep(Math.max(RETRY_MIN_MS, args.delayMs) * 2 ** (attempt - 1));
     }
@@ -312,16 +330,12 @@ async function main() {
     entry.status = res.status;
     entry.contentType = res.headers?.['content-type'] ?? null;
     const length = Number(res.headers?.['content-length']);
-    entry.bytes = res.status === 0 ? null : viaGet ? res.body.length : Number.isFinite(length) ? length : null;
-    if (res.status === 0) entry.error = res.error ?? 'network error';
+    entry.bytes = typeof res.status !== 'number' || res.status === 0 ? null : viaGet ? res.bytes : Number.isFinite(length) ? length : null;
+    if (res.status === 0 || typeof res.status !== 'number') entry.error = res.error ?? 'network error';
     if (res.status >= 300 && res.status < 400 && res.headers?.location) {
       entry.location = new URL(res.headers.location, entry.url).href;
     }
     if (streak.size >= BLOCK_LIMIT) stop();
-    if (args.download && res.status === 200 && target) {
-      mkdirSync(resolve(target, '..'), { recursive: true });
-      writeFileSync(target, res.body);
-    }
   }
 
   write();

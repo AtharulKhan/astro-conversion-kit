@@ -131,6 +131,17 @@ hosts other than the site's own (a platform CDN) seen in `pages/`; every `banner
 `heightMismatch` and `error` in `screens/live/manifest.json`; a template split or merge that looks
 wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, before the commit.
 
+## Size, time and address limits
+
+- Every request has a total timeout (30 s; media size checks 120 s) and gives up after 30 s with
+  no data. Downloads (media, fonts, PDFs) stream to disk; one larger than `--max-file-bytes`
+  (`media`, `assets`; default 2 GB) is recorded `"too-large"` and not saved. Pages, stylesheets,
+  sitemaps and REST lists are capped at 20 MB after decompression (`"too-large"`).
+- A request to any host but the origin's own (stylesheets, fonts and icons on other hosts, a
+  redirect to another host) is refused when the host resolves to a loopback, private,
+  link-local or cloud-metadata address, and recorded `"blocked-address"`. The origin itself may
+  be such an address (a local or staging copy).
+
 ## Platform references
 
 | Fingerprint | Read |
@@ -152,3 +163,6 @@ Repeat this list to the person verbatim. None of it was captured:
 - A URL that answers 503 for good blocks the run until it recovers.
 - Indexing directives from `<meta name="robots">` only; `X-Robots-Tag` headers are not read.
 - Anything only a login, a form submission or a search reveals.
+- A file over `--max-file-bytes` or a page or stylesheet over 20 MB (`"too-large"`), and
+  anything on a host that resolves to a private address (`"blocked-address"`).
+- A host whose DNS answer changes between the address check and the request.

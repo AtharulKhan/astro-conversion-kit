@@ -6,7 +6,7 @@ import { startStub } from './helpers.mjs';
 import { expandSitemaps } from '../../skills/capture-site/scripts/lib/sitemaps.mjs';
 import { fetchPaced } from '../../skills/capture-site/scripts/lib/http.mjs';
 
-const fast = (url, options = {}) => fetchPaced(url, { ...options, delayMs: 0 });
+const fast = (url, options = {}) => fetchPaced(url, { ...options, delayMs: 0, trusted: [url] });
 
 let fixture;
 before(async () => {

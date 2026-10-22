@@ -5,15 +5,15 @@
 // home page snapshot, and every @font-face src in the stylesheets under <capture>/css/.
 // Requests are paced like the crawl; fonts already saved are kept, so a stopped run resumes.
 // assets/index.json lists every asset looked for, saved or missing.
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as csstree from 'css-tree';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { attr, children, findAll, isElement, parseHtml } from '../../parity-gates/scripts/lib/html.mjs';
-import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http } from './lib/http.mjs';
+import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, MAX_FILE_BYTES } from './lib/http.mjs';
 
-const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--ua "<string>"]
+const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--ua "<string>"] [--max-file-bytes <n>]
 
 Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
 (logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is the first <img> inside
@@ -24,10 +24,14 @@ capture.mjs; without it, fonts are reported as not captured).
   --capture <dir>   the capture folder written by capture.mjs
   --delay <ms>      wait between requests (default ${DEFAULT_DELAY_MS})
   --ua "<string>"   user agent (default: a desktop Chrome)
+  --max-file-bytes <n>  largest file to save (default ${MAX_FILE_BYTES}, 2 GB); a larger one is
+                    listed with status "too-large"
   --help            show this help
 
 Writes <dir>/assets/index.json listing each asset looked for. An asset that does not answer
-200 is a warning on stderr and is listed there as missing.
+200 is a warning on stderr and is listed there as missing. Files stream to disk; a host that
+resolves to a loopback, private or link-local address (other than the site's own) is not
+requested and is listed with status "blocked-address".
 
 Exit codes: 0 done (missing assets included), 2 usage error or no inventory.json,
 3 stopped because the site is blocking requests (wait, then run the same command again).`;
@@ -132,7 +136,7 @@ function extensionFor(url, contentType) {
 }
 
 function parseArgs(argv) {
-  const args = { capture: null, delayMs: DEFAULT_DELAY_MS, ua: DEFAULT_UA, help: false };
+  const args = { capture: null, delayMs: DEFAULT_DELAY_MS, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i) => (i < argv.length && !argv[i].startsWith('--') ? argv[i] : null);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -142,6 +146,9 @@ function parseArgs(argv) {
     else if (arg === '--delay' && value(i + 1)) {
       args.delayMs = Number(argv[(i += 1)]);
       if (!Number.isInteger(args.delayMs) || args.delayMs < 0) return { error: '--delay needs a whole number' };
+    } else if (arg === '--max-file-bytes' && value(i + 1)) {
+      args.maxFileBytes = Number(argv[(i += 1)]);
+      if (!Number.isInteger(args.maxFileBytes) || args.maxFileBytes < 1) return { error: '--max-file-bytes needs a whole number of bytes' };
     } else return { error: `unknown or incomplete option ${arg}` };
   }
   if (!args.help && !args.capture) return { error: '--capture <dir> is required' };
@@ -194,7 +201,11 @@ async function main() {
       entries.push({ kind, url, file: `assets/${stem}/${name}`, status: 200, note: null });
       return;
     }
-    const res = await fetchPaced(url, { delayMs: args.delayMs, ua: args.ua, redirect: 'follow' });
+    // Streamed to the known name, or to a temporary one until the type gives the extension.
+    const download = known ?? join(out, `.${stem}.download`);
+    const res = await fetchPaced(url, {
+      delayMs: args.delayMs, ua: args.ua, redirect: 'follow', trusted: [origin], maxBytes: args.maxFileBytes, toFile: download,
+    });
     if (http.blocked >= BLOCK_LIMIT) throw new Blocked();
     if (res.status !== 200) {
       const note = `missing: ${url} returned ${res.status || res.error}`;
@@ -203,8 +214,7 @@ async function main() {
       return;
     }
     const file = known ?? join(out, `${stem}${extensionFor(url, res.headers['content-type'])}`);
-    mkdirSync(resolve(file, '..'), { recursive: true });
-    writeFileSync(file, Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.body));
+    if (file !== download) renameSync(download, file);
     entries.push({ kind, url, file: `assets/${file.slice(out.length + 1)}`, status: 200, note: null });
   };
   const absent = (kind, note) => entries.push({ kind, url: null, file: null, status: null, note });

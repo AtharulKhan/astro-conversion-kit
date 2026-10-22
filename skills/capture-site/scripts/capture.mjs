@@ -477,7 +477,7 @@ class Crawler {
     let url = item.url;
     let res;
     for (let hop = 0; ; hop += 1) {
-      res = await this.fetch(url, { raw: true });
+      res = await this.fetch(url, { raw: true, maxBytes: JS_MAX_BYTES });
       if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
       const location = res.headers?.location;
       if (res.status < 300 || res.status >= 400 || !location || hop >= JS_MAX_HOPS) break;
@@ -794,7 +794,7 @@ async function main() {
   mkdirSync(out, { recursive: true });
 
   http.resetBlocked();
-  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua });
+  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
   const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs });
   const stopBlocked = () => {
     saveState(out, state);

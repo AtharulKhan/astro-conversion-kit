@@ -54,6 +54,24 @@ store controls the site. Turn on two-factor authentication on all of them.
 and the old host is switched off, it is as exposed as it was. The runbook keeps it running through
 the 30-day watch; plan its shutdown, and do not leave it reachable on another hostname.
 
+## What the capture fetches
+
+The capture runs on your machine and requests whatever URLs the live site's pages and
+stylesheets point at, so a hostile or compromised site could try to aim it at your own network.
+The capture scripts guard against that:
+
+- A request to any host other than the origin you passed (a stylesheet, font or icon on another
+  host, or a redirect to one) is resolved first and refused when the address is loopback
+  (127.0.0.0/8, ::1), private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local
+  (169.254/16, fe80::/10) or a cloud metadata address (169.254.169.254, fd00:ec2::254). It is
+  recorded as `"blocked-address"`. The origin itself may be a local address, so a staging copy on
+  your own network can still be captured. The check happens when the host is resolved; a host
+  whose DNS answer changes before the request connects is not caught.
+- Every request has a total timeout and is dropped after 30 seconds without data.
+- Downloads stream to disk instead of memory, and one larger than `--max-file-bytes` (2 GB by
+  default) is recorded as `"too-large"` and not saved. Pages, stylesheets and other text are capped
+  at 20 MB after decompression, so a compressed bomb cannot fill memory.
+
 ## What the kit does with credentials
 
 It never asks for a password or token in chat and never writes one to a repository. Hosting and

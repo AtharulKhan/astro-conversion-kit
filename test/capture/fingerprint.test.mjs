@@ -11,7 +11,7 @@ import { fetchPaced, http, resetBlocked } from '../../skills/capture-site/script
 
 const run = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../skills/capture-site/scripts/fingerprint.mjs', import.meta.url));
-const fast = (url, options = {}) => fetchPaced(url, { ...options, delayMs: 0 });
+const fast = (url, options = {}) => fetchPaced(url, { ...options, delayMs: 0, trusted: [url] });
 
 let fixture;
 before(async () => {
@@ -217,12 +217,12 @@ test('fetchPaced counts 403 and 503 as blocks', async () => {
 test('fetchPaced doubles the wait after a 429 and restores it after a success', async () => {
   const stub = await startStub({ '/ok': { body: 'ok' }, '/no': { status: 429 } });
   try {
-    await fetchPaced(`${stub.origin}/no`, { delayMs: 100 });
+    await fetchPaced(`${stub.origin}/no`, { delayMs: 100, trusted: [stub.origin] });
     let started = Date.now();
-    await fetchPaced(`${stub.origin}/ok`, { delayMs: 100 });
+    await fetchPaced(`${stub.origin}/ok`, { delayMs: 100, trusted: [stub.origin] });
     const doubled = Date.now() - started;
     started = Date.now();
-    await fetchPaced(`${stub.origin}/ok`, { delayMs: 100 });
+    await fetchPaced(`${stub.origin}/ok`, { delayMs: 100, trusted: [stub.origin] });
     const normal = Date.now() - started;
     assert.ok(doubled >= 190, `waited ${doubled} ms after a 429`);
     assert.ok(normal >= 90 && normal < 180, `waited ${normal} ms after a success`);
@@ -271,9 +271,9 @@ test('fingerprint stops after the home page when it is blocked or unreachable', 
 test('fetchPaced waits delayMs between requests to the same host', async () => {
   const stub = await startStub({ '/': { body: 'x' } });
   try {
-    await fetchPaced(`${stub.origin}/`, { delayMs: 0 });
+    await fetchPaced(`${stub.origin}/`, { delayMs: 0, trusted: [stub.origin] });
     const started = Date.now();
-    await fetchPaced(`${stub.origin}/`, { delayMs: 150 });
+    await fetchPaced(`${stub.origin}/`, { delayMs: 150, trusted: [stub.origin] });
     assert.ok(Date.now() - started >= 140);
   } finally {
     await stub.close();

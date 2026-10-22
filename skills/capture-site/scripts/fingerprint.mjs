@@ -222,7 +222,7 @@ async function main() {
     process.exit(2);
   }
 
-  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs });
+  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, trusted: [origin.href] });
   const result = await fingerprint(origin.href, { fetch });
   if (result.homeStatus === 0) {
     console.error(`Could not reach ${origin.origin}.`);

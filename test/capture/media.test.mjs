@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -302,6 +302,30 @@ test('three different files failing in a row stop the run with exit 3', async ()
       '/a.png:200', '/b1.png:0', '/b2.png:0', '/b3.png:0', '/c.png:null',
     ]);
     assert.ok(!server.requests.some((r) => r.endsWith('/c.png')));
+  } finally {
+    await server.close();
+  }
+});
+
+test('--max-file-bytes records a larger file "too-large" and saves the rest, streamed to disk', async () => {
+  const server = await serve((req, res) => {
+    const body = req.url === '/big.pdf' ? Buffer.alloc(5000, 1) : Buffer.from('png');
+    res.writeHead(200, { 'Content-Type': req.url === '/big.pdf' ? 'application/pdf' : 'image/png', 'Content-Length': body.length });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  });
+  try {
+    const dir = tinyCapture(server.origin, '<html><body><img src="/a.png"><a href="/big.pdf">big</a></body></html>');
+    const saved = join(dir, 'saved');
+    const result = await run(MEDIA, ['--capture', dir, '--download', saved, '--delay', '0', '--max-file-bytes', '1000']);
+    assert.equal(result.code, 0, result.stderr);
+    const media = readJson(join(dir, 'media.json'));
+    assert.deepEqual(media.map((m) => `${m.path}:${m.status}:${m.bytes}`), ['/a.png:200:3', '/big.pdf:too-large:null']);
+    assert.equal(readFileSync(join(saved, 'a.png'), 'utf8'), 'png');
+    assert.deepEqual(readdirSync(saved).sort(), ['a.png'], 'nothing is left of the large file');
+
+    const bad = await run(MEDIA, ['--capture', dir, '--max-file-bytes', 'lots']);
+    assert.equal(bad.code, 2);
+    assert.match((await run(MEDIA, ['--help'])).stdout, /--max-file-bytes/);
   } finally {
     await server.close();
   }

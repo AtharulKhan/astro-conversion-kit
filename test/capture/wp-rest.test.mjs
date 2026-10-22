@@ -7,7 +7,7 @@ import { startFixture } from '../fixture/serve.mjs';
 import { dumpWpRest } from '../../skills/capture-site/scripts/lib/wp-rest.mjs';
 import { fetchPaced } from '../../skills/capture-site/scripts/lib/http.mjs';
 
-const fast = (url, options = {}) => fetchPaced(url, { ...options, delayMs: 0 });
+const fast = (url, options = {}) => fetchPaced(url, { ...options, delayMs: 0, trusted: [url] });
 const UPLOADS = '/wp-content/uploads/2026/01/';
 const IMAGES = ['hero.jpg', 'team.jpg', 'roof-detail.jpg', 'siding-sample.webp', 'storm-clouds.webp'];
 
