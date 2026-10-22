@@ -9,7 +9,9 @@ them.
 Every oddity on the live site (a missing or doubled H1, a typo, a dead analytics tag, a broken
 link, an empty meta description, a redirect chain) is reproduced as it is. You do not decide to
 improve it. You record it as a decision row whose choice is "reproduce live by default", with
-the fix it would take, so a person can choose it later as a proposal.
+the fix it would take, so a person can choose it later as a proposal. When a gate rejects a
+reproduced flaw (a link kept on purpose to a page that 404s on live), record an exception for it
+(`field: "link"`, or whichever field the gate names) whose `reason` names the decision id.
 
 Decision rows go in the site's decisions table (`docs/plan.md`, "Decisions"), one per decision,
 with these six fields:
@@ -36,22 +38,29 @@ The gates apply it to the baseline before comparing, on exactly that path and fi
 ## Proposals: `proposals.json`
 
 An improvement over live (a fixed typo, a missing alt text, a shorter redirect). It never ships in
-the default build. The build applies it only when it runs with `PROPOSALS=on` (in a scaffolded
-site, `src/lib/exceptions.mjs` exposes `proposalOn(id)` for that), and the gates load
-`proposals.json` after `exceptions.json` only when `PROPOSALS=on` is set: `npm run
-verify:proposals`. So both builds are gated: the default against live plus exceptions, the
-proposals build against live plus exceptions plus proposals. When a person approves a proposal,
-the change moves into the default build and its entry moves to `exceptions.json`.
+the default build. Every proposal has an `id`, its decision id; the site's build switches the
+change on with `proposalOn(id)` only when it runs with `PROPOSALS=on` (set on the build:
+`PROPOSALS=on npm run build`). The gates read `proposals.json` only under `PROPOSALS=on`, after
+`exceptions.json`: `npm run verify:proposals`. So both builds are gated: the default against
+live plus exceptions, the proposals build against live plus exceptions plus proposals. A
+proposal carries `"approvedBy": "proposed"` until a person approves it. When a person approves a
+proposal, the change moves into the default build and its entry moves to `exceptions.json` with
+the real approver in `approvedBy`.
 
 ## The record
 
-Both files are a JSON array of records with the same shape:
+Both files are a JSON array of records with the same shape. An exception:
 
     { "path": "/about/", "field": "title", "from": "About Us | Example", "to": "About | Example",
       "reason": "client asked for the shorter title", "approvedBy": "client", "date": "2026-10-22" }
 
-Every key is required and non-empty except `from` and `to`, which may be `""`. Extra keys (a
-proposal's `id`) are ignored by the gates. A record that breaks these rules, a file that is not a
+A proposal, the same plus its `id`:
+
+    { "id": "D9", "path": "/about/", "field": "h1", "from": "Abuot us", "to": "About us",
+      "reason": "typo on live", "approvedBy": "proposed", "date": "2026-10-22" }
+
+Every key is required and non-empty except `from` and `to`, which may be `""`. The gates ignore
+`id` and any other extra key. A record that breaks these rules, a file that is not a
 JSON array, or a `--exceptions`/`--proposals` path that does not exist makes the gate exit 2; only
 the default `exceptions.json` and `proposals.json` may be missing.
 
@@ -65,7 +74,7 @@ the default `exceptions.json` and `proposals.json` may be missing.
 | `jsonLd` | seo | the page | one `@type` / its replacement, or the whole array of types / the new array |
 | `text` | text | the page | a phrase in the captured text (or all of it) / its replacement |
 | `link` | links | the page | the live href (recorded, not compared) / the built href the gate reports as broken |
-| `redirect` | redirects | the redirect source | the baseline target / the new target |
+| `redirect` | redirects | the redirect source | the baseline target with the site's origin stripped (`/services/`, not `https://www.example.com/services/`) / the new target |
 | `media` | media | the media path | the baseline bytes (a number) / the built bytes, or `""` for a file the build drops |
 
 `routes`, `sitemaps`, `forms`, `scripts` and `headers` take no exceptions. An extra built path is
@@ -95,7 +104,7 @@ silently. Each of these is a failure with `field: "exception"`:
   changed, or the record was wrong). Fix or delete the record.
 - `no longer matches the build` (links): the built page no longer has that broken href.
 - `path not checked`: the record's path is within `--paths` but the gate does not check it (a
-  page that is not in the baseline, a `text` record on a path the text gate skips). Correct the
-  path or the field.
+  page that is not in the baseline, a `text` record on a path the text gate skips; for `link`,
+  a page that is not in `dist/`). Correct the path or the field.
 
 A stale exception is fixed in `exceptions.json`, never by changing the build back to match it.

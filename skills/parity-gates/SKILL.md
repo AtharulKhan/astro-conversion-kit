@@ -20,30 +20,27 @@ warning. Four more that follow from it:
    `proposals.json`, active only with `PROPOSALS=on`. Both are in `references/exceptions.md`.
 3. **A skip is not a pass.** A gate that could not check something says `N skipped (reason)`
    on its summary line. Report every skip.
-4. **If a gate is wrong about a site, say so and fix the gate**, never the baseline or the build.
+4. **Report a wrong gate as a kit bug; never change the gate in the site**, nor the baseline.
 
 ## Running the scripts
 
-In a site made by `convert-site` the scripts are copied to `scripts/` and run from the site root
-as npm scripts: `npm run baseline`, `npm run redirects:build`, `npm run verify` (also
-`verify:proposals` with `PROPOSALS=on`, `verify:release` with `PUBLIC_INDEXABLE=true`) and
-`npm run verify:live`. Pass options after `--`. Elsewhere, run
-`node <skill-dir>/scripts/<name>.mjs` from the site root, where `<skill-dir>` is the absolute
-path of this skill's folder in a copy of the kit where `npm install` has run. Every script prints
-`--help`; run it rather than reading the source. Exit 0 pass, 1 failed gate or drift, 2 usage
-or missing input.
+A site made by `convert-site` has the scripts in `scripts/`; run them from the site root as the
+npm scripts below, options after `--`. Outside a scaffolded site, run the `node` form shown under
+each step from the site root, where `<skill-dir>` is the absolute path of this skill's folder in
+a copy of the kit where `npm install` has run. Every script prints `--help`; run it rather than
+reading the source. Exit 0 pass, 1 failed gate or drift, 2 usage or missing input.
 
 ## 1. Baseline (once)
 
-    node <skill-dir>/scripts/build-baseline.mjs --capture capture --out baseline
+    npm run baseline
+    node <skill-dir>/scripts/build-baseline.mjs --capture capture --out baseline    # fallback
 
 It needs `capture/inventory.json`, `media.json` (capture's `media.mjs`) and `templates.json`
 (`templates.mjs`), and exits 2 naming the step to run when one is missing. It writes
 `baseline/{routes,seo,redirects,media,forms,scripts,meta,counts}.json` and `baseline/text/`, and
 `redirects.csv` at the site root. A shortlink with no target is left out and named on stderr.
 Commit `baseline/` and `redirects.csv` together. `--check` recounts `baseline/` against
-`counts.json` (exit 1 on drift): run it whenever `baseline/` might have been touched. Every file's
-shape is in `references/contracts.md`.
+`counts.json` (exit 1 on drift). Every file's shape is in `references/contracts.md`.
 
 ## 2. Redirects
 
@@ -51,7 +48,8 @@ shape is in `references/contracts.md`.
 `source` is `crawl`, `sitemap`, `shortlink` or `seed` from the capture; a row you add is
 `decision`, its `note` naming the decision id. Never hand-edit the compiled output; compile:
 
-    node <skill-dir>/scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json --trailing-slash always
+    npm run redirects:build
+    node <skill-dir>/scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json --trailing-slash always    # fallback
 
 `--host cloudflare --out public/_redirects` for Pages (Astro copies it into `dist/`). Vercel: the
 `redirects` key is replaced, every other key kept, and `trailingSlash` is removed and written as
@@ -63,14 +61,15 @@ query row whose target is its own path (`/?p=2` to `/`) is a no-op and is left o
 ## 3. Verify
 
     npm run build
-    node <skill-dir>/scripts/verify/run-all.mjs --endpoint https://forms.example.com/f/abc --thank-you /thank-you/
+    npm run verify -- --endpoint https://forms.example.com/f/abc --thank-you /thank-you/
+    node <skill-dir>/scripts/verify/run-all.mjs --endpoint https://forms.example.com/f/abc --thank-you /thank-you/    # fallback
 
 `run-all` runs the ten gates in alphabetical order, gives each one only the options it accepts,
 and stops at the first failure. Shared options: `--paths` (comma list, `*` matches anything),
 `--json`, `--origin` (links, seo, sitemaps: the host the build is for), `--allow-extra` (routes),
 `--endpoint`, `--honeypot`, `--thank-you` (forms; `--endpoint` is required when the baseline has a
 form), `--host`, `--config`, `--csv` (redirects), `--media-plan` (media). Fix the first failure,
-rebuild, rerun. Run one gate alone with `node <skill-dir>/scripts/verify/<gate>.mjs`.
+rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 
 | Gate | Passes when | A skip means |
 |---|---|---|
@@ -78,7 +77,7 @@ rebuild, rerun. Run one gate alone with `node <skill-dir>/scripts/verify/<gate>.
 | `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors, and `X-Robots-Tag: noindex` on every path; with `PUBLIC_INDEXABLE=true` noindex is forbidden | |
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media; `/about` where the build serves `/about/` fails | |
 | `media` | Every baseline media file is in `dist/` (or the store manifest) with the same bytes | Plan mode `live-temporary`: served from live, nothing checked |
-| `redirects` | Every baseline redirect and csv row reaches its target in one hop through the simulated host; no source is also a built file | A no-op query row, or any query row on Cloudflare |
+| `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file | A no-op query row, or any query row on Cloudflare |
 | `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built | |
 | `scripts` | Each kept vendor is on exactly its live pages with the same ids; a dropped one on none; no new vendor | |
 | `seo` | Title, description, canonical, robots, lang, h1, h2, og and JSON-LD @types equal per page; site URLs on the site's origin | |
@@ -94,16 +93,25 @@ does not check, **fails** the gate. Every oddity on the live site (a missing H1,
 broken link) is reproduced by default and gets a decision row (id, topic, choice, default,
 reason, cost if wrong) saying so and what the fix would be.
 
-## 5. Staging
+## 5. Staging, proposals and release builds
 
-After a deploy, check it over HTTP against the baseline (the bypass value from the environment,
-never pasted in chat):
+`PUBLIC_INDEXABLE` and `PROPOSALS` change what Astro builds, so set them on the **build**, not
+only on the gate run; a gate run on a build made without them checks the wrong site.
 
-    node <skill-dir>/scripts/verify-live.mjs --base https://my-site.vercel.app --bypass "$VERCEL_AUTOMATION_BYPASS_SECRET" --expect-noindex
+    npm run build && npm run verify -- --origin https://my-site.vercel.app --endpoint ... --thank-you ...    # staging
+    PROPOSALS=on npm run build && npm run verify:proposals -- --endpoint ... --thank-you ...                 # proposals
+    PUBLIC_INDEXABLE=true npm run build && npm run verify:release -- --endpoint ... --thank-you ...          # release
 
-It checks every route at 200, every redirect in one hop with the same kind of status, noindex
-on pages iff `--expect-noindex`, the sitemap, and a sample of 20 media files by bytes (or
-`--media-manifest`). Exit 3 means it was blocked: wait and rerun. A failure marked
+After a staging deploy, check it over HTTP against the baseline (the bypass value from the
+environment, never pasted in chat). A release deploy is checked the same way without
+`--expect-noindex`:
+
+    npm run verify:live -- --base https://my-site.vercel.app --expect-noindex --bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"
+    node <skill-dir>/scripts/verify-live.mjs --base https://my-site.vercel.app --expect-noindex    # fallback
+
+It checks every baseline route at 200 (or a `--sample`), every redirect in one hop with the same
+kind of status, noindex on pages iff `--expect-noindex`, the sitemap, and 20 media files by
+bytes (or `--media-manifest`). Exit 3 means it was blocked: wait and rerun. A failure marked
 `unverified live` is a shortlink the capture never requested.
 
 ## Present the result

@@ -71,10 +71,11 @@ may be edited.
 ## baseline/counts.json
 
     { "routes": 16, "byStatus": { "200": 15, "404": 1 },
-      "byTemplate": { "home": 1, "page": 6, "single-post": 3, "archive": 2, "other": 3, "page-2": 1 },
+      "byTemplate": { "archive": 2, "home": 1, "other": 3, "page": 6, "page-2": 1, "single-post": 3 },
       "redirects": { "seed": 2, "shortlink": 12 }, "media": 19, "forms": 1, "scripts": 2 }
 
-`redirects` is counted by `source`, `forms` is the total number of forms, `scripts` the number of
+Keys of `byStatus`, `byTemplate` and `redirects` are sorted. `redirects` is counted by
+`source`, `forms` is the total number of forms, `scripts` the number of
 vendors.
 
 ## baseline/meta.json
@@ -92,7 +93,8 @@ vendors.
     /old-blog/*,/blog/:splat,301,decision,D7
 
 - `from`: a root-relative path, optionally with a query (`/?p=7`), or a catch-all: a trailing
-  `/*` (the target may use `:splat`) or a `:name*` parameter (the target may use `:name`).
+  `/*` (the target may use `:splat`) or a `:name*` or `:name+` parameter (the target may use
+  `:name`).
   Matching is case-sensitive. No spaces: encode them as `%20`.
 - `to`: a root-relative path or an absolute URL.
 - `status`: 301, 302, 303, 307 or 308.
@@ -118,7 +120,7 @@ skipped.
 - `docs/media-plan.json`: `{ "mode": "repo" | "store" | "live-temporary", ... }`; missing means
   `repo`.
 - `media-manifest.json` (store mode): `[{ "path", "bytes", "url" }]`.
-- `exceptions.json`, `proposals.json`: see `exceptions.md`.
+- `exceptions.json`, and `proposals.json` only when `PROPOSALS=on`: see `exceptions.md`.
 
 ## Gate output
 
@@ -130,7 +132,8 @@ gate prints a word diff with `[-removed-]` and `{+added+}`), one line per skippe
     redirects: 14 checked, 0 failed, 12 skipped (noop)
 
 `--json` prints `{ "gate", "checked", "failed", "skipped"?, "skipReason"?, "skips"?, "failures":
-[{ "path", "field", "expected", "actual" }] }`. A failure with `field: "exception"` is an
+[{ "path", "field", "expected", "actual", "diff"? }] }`; a text failure carries `diff`, the word
+diff as `[{ "op", "text" }]`. A failure with `field: "exception"` is an
 exception the gate could not use; its `actual` says why.
 
 `verify-live.mjs --json` prints `{ "checked", "failed", "failures": [{ "check", "path", "field",
