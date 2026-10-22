@@ -54,9 +54,12 @@ before(async () => {
   bare = mkdtempSync(join(tmpdir(), 'readme-bare-test-'));
   missing = mkdtempSync(join(tmpdir(), 'readme-missing-test-'));
   fixture = await startFixture();
-  const crawl = await run('capture.mjs', [fixture.origin, '--out', dir, '--delay', '0', '--no-rest', '--seed', '/private-page/']);
+  const crawl = await run('capture.mjs', [fixture.origin, '--out', dir, '--delay', '0', '--no-rest', '--no-wayback', '--seed', '/private-page/']);
   assert.equal(crawl.code, 0, crawl.stderr);
   cpSync(dir, bare, { recursive: true });
+  // The bare capture has no media step output and no stylesheets, so every "not captured" line shows.
+  rmSync(join(bare, 'css'), { recursive: true, force: true });
+  rmSync(join(bare, 'media.json'), { force: true });
   cpSync(dir, missing, { recursive: true });
   writeMediaSamples(dir, fixture.origin);
   // A stylesheet naming a font the site does not have.

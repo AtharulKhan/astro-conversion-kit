@@ -33,7 +33,7 @@ before(async () => {
   const fixture = await startFixture();
   try {
     // --no-rest keeps the page set to what the crawl links to (12 pages answering 200).
-    const crawl = await run('capture.mjs', [fixture.origin, '--out', dir, '--delay', '0', '--no-rest']);
+    const crawl = await run('capture.mjs', [fixture.origin, '--out', dir, '--delay', '0', '--no-rest', '--no-wayback']);
     assert.equal(crawl.code, 0, crawl.stderr);
   } finally {
     await fixture.close();
