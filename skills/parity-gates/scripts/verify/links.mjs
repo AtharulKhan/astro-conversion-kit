@@ -10,6 +10,7 @@ import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { exceptionFailure } from '../lib/exceptions.mjs';
 import { attr, findAll, parseHtml } from '../lib/html.mjs';
 import { relTokens } from '../lib/head.mjs';
+import { srcsetUrls } from '../lib/srcset.mjs';
 import { distFiles, feedFiles, htmlPages, originOf, pageFiles, pageFormat, readJson, requireInputs } from '../lib/dist.mjs';
 
 const NAME = 'links';
@@ -45,7 +46,6 @@ const decode = (value) => {
     return value;
   }
 };
-const srcsetUrls = (value) => value.split(',').map((c) => c.trim().split(/\s+/)[0]).filter(Boolean);
 
 // The URL-bearing attribute values of a page, in document order, each once.
 export function pageUrls(html) {

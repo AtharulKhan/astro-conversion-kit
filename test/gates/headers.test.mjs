@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { edit, makeDist } from './fixtures/make-dist.mjs';
@@ -65,6 +65,30 @@ test('vercel.json headers on a catch-all source are read', async () => {
   const failed = await headers(join(partial, 'dist'), [], { cwd: partial });
   assert.equal(failed.code, 1);
   assert.match(failed.stdout, /\/\(\.\*\) X-Content-Type-Options: expected "nosniff", got null/);
+});
+
+test('a vercel.json rule with has or missing conditions does not count', async () => {
+  const site = vercelSite('site-vercel-has', { ...SECURE, 'X-Robots-Tag': 'noindex' });
+  const file = join(site, 'vercel.json');
+  const config = JSON.parse(readFileSync(file, 'utf8'));
+  config.headers[0].has = [{ type: 'host', value: 'preview.example.com' }];
+  writeFileSync(file, JSON.stringify(config));
+  const result = await headers(join(site, 'dist'), [], { cwd: site });
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^headers: 4 checked, 4 failed$/m);
+});
+
+test('a _headers whole-host pattern counts for X-Robots-Tag only', async () => {
+  const dist = makeDist(join(root, 'dist-host-pattern'));
+  edit(dist, '_headers', '  X-Robots-Tag: noindex\n', '');
+  writeFileSync(join(dist, '_headers'), `${readFileSync(join(dist, '_headers'), 'utf8')}https://*.pages.dev/*\n  X-Robots-Tag: noindex\n`);
+  const passed = await headers(dist);
+  assert.equal(passed.code, 0, passed.stdout);
+  const moved = makeDist(join(root, 'dist-host-nosniff'), { bad: ['missing-header'] });
+  writeFileSync(join(moved, '_headers'), `${readFileSync(join(moved, '_headers'), 'utf8')}https://*.pages.dev/*\n  X-Content-Type-Options: nosniff\n`);
+  const failed = await headers(moved);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /\/\* X-Content-Type-Options: expected "nosniff", got null/);
 });
 
 test('CSP frame-ancestors stands in for X-Frame-Options', async () => {

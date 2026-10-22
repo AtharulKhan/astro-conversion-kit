@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Media gate: every file in baseline/media.json is served by the build with the same byte size.
-// Where it lives follows docs/media-plan.json: "repo" (or no plan) -> dist/ or public/,
+// Where it lives follows docs/media-plan.json: "repo" (or no plan) -> dist/ (public/ before a build),
 // "store" -> media-manifest.json, "live-temporary" -> still on the live site, not checked.
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { applyExceptions, exceptionFailure } from '../lib/exceptions.mjs';
-import { readJson, requireInputs } from '../lib/dist.mjs';
+import { readJson } from '../lib/dist.mjs';
 
 const NAME = 'media';
 const DEFAULT_PLAN = 'docs/media-plan.json';
@@ -17,14 +17,15 @@ const MODES = new Set(['repo', 'store', 'live-temporary']);
 const OPTIONS = {
   'media-plan': { type: 'string', default: DEFAULT_PLAN, description: 'the media plan (media-plan.mjs); without one, media is in the repo' },
   'media-manifest': { type: 'string', default: DEFAULT_MANIFEST, description: 'the store manifest (media-upload.mjs), read when the plan mode is store' },
-  public: { type: 'string', default: 'public', description: 'the site\'s public folder, searched after dist' },
+  public: { type: 'string', default: 'public', description: 'the site\'s public folder, read only when there is no dist' },
 };
 const NOTES = `
-Plan modes: repo (or no plan file): each file is in dist or public with the same bytes. store:
-each file is in the manifest with the same bytes. live-temporary: nothing is checked and the
-gate says "not checked: served from live"; that is a skip, not a pass. A media exception names
-the media path in path, the baseline byte count in from and the built one in to (to "" for a
-file the build drops).
+Plan modes: repo (or no plan file): each file is in dist with the same bytes; public is read
+only when there is no dist yet, since once built dist is what deploys. store: each file is in
+the manifest with the same bytes. live-temporary: nothing is checked and the summary counts
+every file as skipped (served from live); a skip is not a pass. A media exception names the
+media path in path, the baseline byte count in from and the built one in to (to "" for a file
+the build drops).
 `;
 
 const decode = (value) => {
@@ -34,6 +35,7 @@ const decode = (value) => {
     return value;
   }
 };
+const isDir = (dir) => existsSync(dir) && statSync(dir).isDirectory();
 const rel = (path) => decode(path).replace(/^\/+/, '');
 
 function fail(message) {
@@ -91,11 +93,11 @@ function main() {
   const plan = optionalJson(args.mediaPlan, DEFAULT_PLAN, 'media plan');
   const mode = plan?.mode ?? 'repo';
   if (!MODES.has(mode)) fail(`${args.mediaPlan}: mode "${mode}" is not one of ${[...MODES].join('|')}`);
-  requireInputs(NAME, args.dist, args.baseline, ['media.json']);
+  if (!existsSync(join(args.baseline, 'media.json'))) fail(`not found: ${join(args.baseline, 'media.json')}`);
   const media = readJson(join(args.baseline, 'media.json'));
   if (mode === 'live-temporary') {
     const count = media.filter((m) => args.paths(m.path)).length;
-    return report(NAME, { checked: count, failures: [], skipped: count, skipReason: `served from live (${count} files)` }, { json: args.json });
+    return report(NAME, { checked: 0, failures: [], skipped: count, skipReason: 'served from live' }, { json: args.json });
   }
   let sizeOf;
   if (mode === 'store') {
@@ -104,7 +106,10 @@ function main() {
     if (!Array.isArray(manifest)) fail(`${args.mediaManifest}: expected an array of { path, bytes }`);
     sizeOf = manifestSizes(manifest);
   } else {
-    sizeOf = repoSizes([args.dist, args.public]);
+    // dist is what is deployed; public is read only when there is no build yet.
+    const dir = [args.dist, args.public].find(isDir);
+    if (!dir) fail(`not found: ${args.dist} (the built site) or ${args.public}`);
+    sizeOf = repoSizes([dir]);
   }
   const results = checkMedia({ media, sizeOf, exceptions: gateExceptions(NAME, args), paths: args.paths });
   return report(NAME, results, { json: args.json });

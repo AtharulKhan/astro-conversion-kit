@@ -51,17 +51,17 @@ test('a 1-byte drift fails with both sizes', async () => {
   assert.match(result.stdout, /^media: \d+ checked, 1 failed$/m);
 });
 
-test('a missing file fails; the same file in public/ passes', async () => {
+test('dist is authoritative; public/ is read only when there is no dist', async () => {
   const dist = makeDist(join(root, 'dist-missing'));
   const site = join(root, 'site-public');
-  mkdirSync(join(site, 'public', 'wp-content', 'uploads', '2026', '01'), { recursive: true });
-  cpSync(join(dist, HERO), join(site, 'public', HERO));
+  cpSync(dist, join(site, 'public'), { recursive: true });
   rmSync(join(dist, HERO));
-  const failed = await gate(dist, [], join(root));
-  assert.equal(failed.code, 1);
+  const failed = await gate(dist, [], site);
+  assert.equal(failed.code, 1, 'a file only in public/ does not count once dist exists');
   assert.match(failed.stdout, /hero\.jpg media: expected 13713, got null/);
-  const passed = await gate(dist, [], site);
-  assert.equal(passed.code, 0, passed.stdout);
+  const passed = await gate(join(site, 'no-dist'), [], site);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.equal((await gate(join(site, 'no-dist'), ['--public', 'nope'], site)).code, 2);
 });
 
 test('a media exception records the new size; a stale one fails', async () => {
@@ -92,13 +92,13 @@ test('store mode reads media-manifest.json instead of dist', async () => {
   assert.equal((await gate(empty, ['--media-manifest', 'none.json'], site)).code, 2);
 });
 
-test('live-temporary mode is reported as not checked, with the count, and passes', async () => {
+test('live-temporary mode checks nothing, says so, and counts every file as skipped', async () => {
   const site = siteWithPlan('site-live', 'live-temporary');
   const result = await gate(good, [], site);
   assert.equal(result.code, 0, result.stdout);
-  assert.match(result.stdout, new RegExp(`not checked: served from live \\(${media.length} files\\)`));
+  assert.match(result.stdout, new RegExp(`^media: 0 checked, 0 failed, ${media.length} skipped \\(served from live\\)$`, 'm'));
   const json = JSON.parse((await gate(good, ['--json'], site)).stdout);
-  assert.equal(json.checked, media.length);
+  assert.equal(json.checked, 0);
   assert.equal(json.skipped, media.length);
   assert.equal(json.failed, 0);
 });

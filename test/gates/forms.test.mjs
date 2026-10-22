@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -25,7 +25,29 @@ const forms = (dist, args = [], base = baseline) => runGate('forms', ['--dist', 
 test('dist-good passes: the contact form has the same fields, method and endpoint', async () => {
   const result = await forms(good, ['--endpoint', ENDPOINT]);
   assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /^forms: 1 checked, 0 failed$/m);
+  assert.match(result.stdout, /^ {2}thank-you: not checked \(no --thank-you\)$/m);
+  assert.match(result.stdout, /^forms: 1 checked, 0 failed, 1 skipped \(thank-you not checked\)$/m);
+  const json = JSON.parse((await forms(good, ['--endpoint', ENDPOINT, '--json'])).stdout);
+  assert.equal(json.skipped, 1);
+});
+
+test('--thank-you: a hidden _next equal to it passes; a form without it fails; a path not in dist fails', async () => {
+  const dist = makeDist(join(root, 'dist-thank-you'));
+  edit(dist, 'contact/index.html', '<button type="submit">', '<input type="hidden" name="_next" value="/thank-you/"><button type="submit">');
+  mkdirSync(join(dist, 'thank-you'));
+  writeFileSync(join(dist, 'thank-you', 'index.html'), '<!doctype html><title>Thanks</title>');
+  const passed = await forms(dist, ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(passed.code, 0, passed.stdout);
+  assert.match(passed.stdout, /^forms: 1 checked, 0 failed$/m);
+
+  const missing = await forms(good, ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stdout, /^ {2}\/contact\/ thank-you: expected "\/thank-you\/", got null$/m);
+
+  rmSync(join(dist, 'thank-you'), { recursive: true });
+  const notBuilt = await forms(dist, ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(notBuilt.code, 1);
+  assert.match(notBuilt.stdout, /^ {2}\/thank-you\/ thank-you: expected "thank-you\/index\.html", got null$/m);
 });
 
 test('a reordered field fails with both field lists', async () => {
@@ -85,4 +107,5 @@ test('usage and missing inputs exit 2; --help exits 0', async () => {
   const help = await runGate('forms', ['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /--endpoint/);
+  assert.match(help.stdout, /--thank-you/);
 });

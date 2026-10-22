@@ -67,6 +67,13 @@ test('a missing media file or stylesheet is a broken src', async () => {
   assert.match(result.stdout, /\/about\/ link: .*got "\/_astro\/reveal\.js"/);
 });
 
+test('a srcset URL with commas in it is one URL', async () => {
+  const dist = makeDist(join(root, 'dist-srcset-comma'));
+  edit(dist, 'about/index.html', '</main>', '<img srcset="/wp-content/uploads/2026/01/hero.jpg?w_300,h_200 300w, /wp-content/uploads/2026/01/team.jpg 2x" alt=""></main>');
+  const result = await links(dist, ['--paths', '/about/']);
+  assert.equal(result.code, 0, result.stdout);
+});
+
 test('a build.format "file" build resolves page links to <path>.html', async () => {
   const dist = makeDist(join(root, 'dist-file'), { bad: ['file-format'] });
   const result = await links(dist);

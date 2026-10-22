@@ -16,11 +16,13 @@ const OPTIONS = {
   'headers-file': { type: 'string', default: '', description: 'the _headers file (default: <dist>/_headers, then public/_headers)' },
 };
 const NOTES = `
-Only rules for every path count: vercel.json sources /(.*), /:path* and /:path(.*), and the
-_headers path /*. PUBLIC_INDEXABLE=true in the environment marks a production build: noindex is
+Only rules for every path count: vercel.json sources /(.*), /:path* and /:path(.*) without
+has/missing conditions, and the _headers path /*. A _headers whole-host pattern such as
+https://*.pages.dev/* counts for X-Robots-Tag only. PUBLIC_INDEXABLE=true in the environment marks a production build: noindex is
 then forbidden instead of required.
 `;
 const VERCEL_ALL = new Set(['/(.*)', '/:path*', '/:path(.*)']);
+const HOST_ALL = /^https?:\/\/[^/]+\/\*$/;
 
 function fail(message) {
   process.stderr.write(`${NAME}: ${message}\n`);
@@ -32,7 +34,8 @@ export function vercelHeaders(config) {
   const headers = new Map();
   let source = '/(.*)';
   for (const rule of config.headers ?? []) {
-    if (!VERCEL_ALL.has(rule.source)) continue;
+    // A rule with has/missing conditions applies to some requests only.
+    if (!VERCEL_ALL.has(rule.source) || rule.has || rule.missing) continue;
     source = rule.source;
     for (const { key, value } of rule.headers ?? []) headers.set(String(key).toLowerCase(), String(value));
   }
@@ -50,7 +53,11 @@ export function headersFileHeaders(text) {
       continue;
     }
     const match = /^\s+([^:]+):\s*(.*)$/.exec(line);
-    if (match && current === '/*') headers.set(match[1].trim().toLowerCase(), match[2].trim());
+    if (!match) continue;
+    const name = match[1].trim().toLowerCase();
+    // A whole-host pattern (https://*.pages.dev/*) covers that host only: it can carry the
+    // preview noindex, but not the headers every host needs.
+    if (current === '/*' || (HOST_ALL.test(current ?? '') && name === 'x-robots-tag')) headers.set(name, match[2].trim());
   }
   return { source: '/*', headers };
 }

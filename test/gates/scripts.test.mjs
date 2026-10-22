@@ -4,7 +4,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
-import { makeDist } from './fixtures/make-dist.mjs';
+import { edit, makeDist } from './fixtures/make-dist.mjs';
 import { runGate } from './fixtures/run-gate.mjs';
 
 let root;
@@ -75,6 +75,30 @@ test('a kept vendor with a different id fails', async () => {
   const result = await scripts(good, ['--paths', '/about/'], changed);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /\/about\/ ga4: expected "G-LIVE0001", got "G-FIXTURE1"/);
+});
+
+test('a kept vendor on a live page it was never on fails; 404.html may carry it', async () => {
+  const narrowed = baselineWith('baseline-gtm-narrow', (json) => {
+    json.gtm.pages = json.gtm.pages.filter((p) => p !== '/about/');
+  });
+  const result = await scripts(good, [], narrowed);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/about\/ gtm: expected null, got "GTM-FIXTURE"$/m);
+  assert.match(result.stdout, /^scripts: 14 checked, 1 failed$/m, 'only /about/: 404.html is not a live 200 page');
+});
+
+test('the ids are compared as a set: a live id missing from the build fails', async () => {
+  const two = baselineWith('baseline-ga4-two-ids', (json) => {
+    json.ga4.ids = ['G-FIXTURE1', 'G-SECOND01'];
+  });
+  const result = await scripts(good, [], two);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\* ga4 ids: expected \["G-FIXTURE1","G-SECOND01"\], got \["G-FIXTURE1"\]$/m);
+  const extra = makeDist(join(root, 'dist-two-ga4'));
+  edit(extra, 'about/index.html', '</head>', "<script>gtag('config', 'G-SECOND01');</script>\n</head>");
+  const perPage = await scripts(extra, ['--paths', '/about/']);
+  assert.equal(perPage.code, 1);
+  assert.match(perPage.stdout, /\/about\/ ga4: expected "G-FIXTURE1", got \["G-FIXTURE1","G-SECOND01"\]/);
 });
 
 test('usage and missing inputs exit 2; --help exits 0', async () => {
