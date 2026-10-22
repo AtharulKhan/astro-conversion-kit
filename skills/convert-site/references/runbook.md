@@ -57,7 +57,8 @@ Typical run-specific lines (keep the ones that apply):
 4. A day ahead: lower the TTL of the apex and `www` records.
 5. `PUBLIC_INDEXABLE=true npm run build` then
    `npm run verify:release -- --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/`:
-   must exit 0.
+   must exit 0. Then `PUBLIC_INDEXABLE=true node <kit>/skills/pre-launch/scripts/pre-launch.mjs
+   --dir . --production-url <live> --predecessor-url <live> --ignore-dir capture`: `pre-launch` exits 0, or fails only `predecessor.wildcard-redirects` / `predecessor.redirect-chains` where every row they name is a trailing-slash rule or a slash-only redirect (a known launch-skills limitation), and/or `placeholders.form-id` while the form id is missing; nothing else is accepted.
 6. Set the switch for production (Vercel: `npx vercel env add PUBLIC_INDEXABLE production`,
    value `true`; Cloudflare: it is on the local build) and deploy production
    (`npx vercel deploy --prod`, or the wrangler production deploy).

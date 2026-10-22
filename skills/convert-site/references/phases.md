@@ -264,7 +264,7 @@ the audit's `baseline.json` and `redirects.csv` to `docs/launch/audit-baseline.j
 branch, or list it in the PR with why it cannot be fixed. Then the one test submission
 (`forms.md`).
 
-**Proof:** `pre-launch` exits 0 (or fails only on `placeholders.form-id`); `verify-live` exits 0
+**Proof:** `pre-launch` exits 0, or fails only `predecessor.wildcard-redirects` / `predecessor.redirect-chains` where every row they name is a trailing-slash rule or a slash-only redirect (a known launch-skills limitation), and/or `placeholders.form-id` while the form id is missing; nothing else is accepted; `verify-live` exits 0
 or its gap is listed; every audit blocker is fixed or listed.
 
 ## 11. suggestions

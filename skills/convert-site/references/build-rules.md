@@ -81,6 +81,8 @@ parity and this file is wrong: say so and fix this file.
 - `redirects.csv` (from, to, status, source, note) is the single source. `npm run baseline`
   writes it from the capture; a redirect you add (a duplicate slug, a `.html` form, an old URL
   from the intake) is a row with `source` `decision` and the decision id in `note`.
+- A URL the live sitemap lists but live answers 404: redirect it to the nearest live parent as a
+  decision row, because pre-launch requires every predecessor URL to resolve.
 - `npm run redirects:build` writes `vercel.json` `redirects` or `public/_redirects`. Never edit
   the generated rules by hand. Every chain becomes one hop to the final target. It also writes a
   rewrite per feed (`/feed/` to `/feed/index.xml`, from `baseline/routes.json`), since neither
