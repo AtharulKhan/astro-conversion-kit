@@ -21,10 +21,37 @@ canonical, og:url and og:image are compared on one origin: --origin when given, 
 baseline's canonicalOrigin. A built URL must be root-relative or on that origin or on
 canonicalOrigin; a URL on any other host fails. A jsonLd exception names a @type. An empty
 from/to in an exception records a value the build adds or removes.
+Unless PUBLIC_INDEXABLE=true the build is staging: the site template adds "noindex, nofollow" to
+every page, so the built robots (the tokens of every robots meta on the page) must hold noindex
+and nofollow, and the tokens left over are compared with the live robots less those two (an
+empty remainder matches a page with no robots meta). PUBLIC_INDEXABLE=true compares exactly.
 `;
 export const SEO_FIELDS = ['title', 'description', 'canonical', 'robots', 'lang', 'h1', 'h2', 'og', 'jsonLd'];
 const SCALARS = new Set(['title', 'description', 'canonical', 'robots', 'lang']);
 const URL_OG_KEYS = new Set(['url', 'image']);
+// What the site template's Base.astro adds to every page of a build that is not indexable.
+export const STAGING_TOKENS = ['noindex', 'nofollow'];
+
+const tokensOf = (value) => String(value ?? '').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+// The tokens of every robots meta on a page, in order, each once.
+export function robotsTokens(html) {
+  const metas = findAll(parseHtml(html), byTag('meta')).filter((n) => (attr(n, 'name') ?? '').trim().toLowerCase() === 'robots');
+  return [...new Set(metas.flatMap((n) => tokensOf(attr(n, 'content'))))];
+}
+
+// A robots value less the staging tokens, as "a, b".
+export const robotsRemainder = (tokens) => tokens.filter((t) => !STAGING_TOKENS.includes(t)).join(', ');
+
+// Staging: [failure or null, built remainder, live remainder] for one page.
+export function stagingRobots(path, html, liveRobots) {
+  const tokens = robotsTokens(html);
+  const missing = STAGING_TOKENS.filter((t) => !tokens.includes(t));
+  const failure = missing.length
+    ? { path, field: 'robots', expected: 'noindex, nofollow (a staging build, PUBLIC_INDEXABLE is not true)', actual: tokens.length ? tokens.join(', ') : null }
+    : null;
+  return [failure, robotsRemainder(tokens), robotsRemainder(tokensOf(liveRobots))];
+}
 
 // The fields the capture records, read from a built page. Absent values are ''.
 export function seoOf(html) {
@@ -95,7 +122,7 @@ export function compareSeo(path, expected, actual, { siteOrigins, allowedOrigins
   return failures;
 }
 
-export function checkSeo({ dist, routes, seo, meta, exceptions, origin = '', paths = () => true }) {
+export function checkSeo({ dist, routes, seo, meta, exceptions, origin = '', paths = () => true, staging = false }) {
   const format = pageFormat(distFiles(dist));
   const canonicalOrigin = originOf(meta.canonicalOrigin ?? '') ?? originOf(meta.origin ?? '');
   const compareOrigin = (origin && originOf(origin)) || canonicalOrigin;
@@ -120,7 +147,14 @@ export function checkSeo({ dist, routes, seo, meta, exceptions, origin = '', pat
       failures.push({ path: route.path, field: 'page', expected: candidates[0], actual: null });
       continue;
     }
-    failures.push(...compareSeo(route.path, expected, seoOf(readFileSync(join(dist, file), 'utf8')), context));
+    const html = readFileSync(join(dist, file), 'utf8');
+    const actual = seoOf(html);
+    if (staging) {
+      const [failure, built, live] = stagingRobots(route.path, html, expected.robots);
+      if (failure) failures.push(failure);
+      [actual.robots, expected.robots] = [built, live];
+    }
+    failures.push(...compareSeo(route.path, expected, actual, context));
   }
   return { checked, failures };
 }
@@ -146,6 +180,7 @@ function main() {
     exceptions: gateExceptions(NAME, args),
     origin: args.origin,
     paths: args.paths,
+    staging: process.env.PUBLIC_INDEXABLE !== 'true',
   });
   report(NAME, results, { json: args.json });
 }

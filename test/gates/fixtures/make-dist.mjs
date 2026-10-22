@@ -1,5 +1,7 @@
 // A dist/ built from test/fixture/site/ the way an Astro static build lays it out, for the gate
-// tests. makeDist(outDir, { bad, origin }) writes it and returns outDir.
+// tests. makeDist(outDir, { bad, origin, staging }) writes it and returns outDir. With staging,
+// every page also carries the <meta name="robots" content="noindex, nofollow"> the site
+// template's Base.astro adds to a build that is not PUBLIC_INDEXABLE.
 //
 // Layout: `/about/` -> about/index.html, `/` -> index.html, 404.html, feed/index.xml, media at the
 // same paths as on the live site, theme CSS and JS under _astro/, sitemap-index.xml and
@@ -152,7 +154,9 @@ export const MUTATIONS = {
   'missing-header': (dist) => edit(dist, '_headers', '  X-Content-Type-Options: nosniff\n', ''),
 };
 
-export function makeDist(outDir, { bad = [], origin = DIST_ORIGIN } = {}) {
+const STAGING_META = '<meta name="robots" content="noindex, nofollow">\n</head>';
+
+export function makeDist(outDir, { bad = [], origin = DIST_ORIGIN, staging = false } = {}) {
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   const indexable = [];
@@ -166,7 +170,7 @@ export function makeDist(outDir, { bad = [], origin = DIST_ORIGIN } = {}) {
       write(join(outDir, '_astro', 'reveal.js'), readFileSync(full));
     } else if (rel.endsWith('.html')) {
       const page = html(readFileSync(full, 'utf8'), origin);
-      write(join(outDir, rel), page);
+      write(join(outDir, rel), staging ? page.replace('</head>', STAGING_META) : page);
       if (rel !== '404.html' && !/<meta name="robots" content="[^"]*noindex/i.test(page)) indexable.push(pagePath(rel));
     } else if (rel.endsWith('.xml')) {
       write(join(outDir, rel), readFileSync(full, 'utf8').replace(ORIGIN, origin));

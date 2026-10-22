@@ -4,7 +4,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
-import { DIST_ORIGIN, makeDist } from './fixtures/make-dist.mjs';
+import { DIST_ORIGIN, edit, makeDist } from './fixtures/make-dist.mjs';
 import { runGate } from './fixtures/run-gate.mjs';
 
 let root;
@@ -21,7 +21,9 @@ before(async () => {
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const seo = (dist, args = [], env = {}, base = baseline) => runGate('seo', ['--dist', dist, '--baseline', base, ...args], { cwd: root, env });
+// A release build (PUBLIC_INDEXABLE=true) unless env says otherwise: robots is compared exactly.
+const seo = (dist, args = [], env = {}, base = baseline) =>
+  runGate('seo', ['--dist', dist, '--baseline', base, ...args], { cwd: root, env: { PUBLIC_INDEXABLE: 'true', ...env } });
 
 const record = (fields) => ({ reason: 'test', approvedBy: 'client', date: '2026-10-22', ...fields });
 function writeRecords(name, records) {
@@ -57,6 +59,31 @@ test('--origin lets a staging host pass and a different host fail', async () => 
   assert.equal(result.code, 1);
   assert.match(result.stdout, /\/about\/ canonical: expected "https:\/\/other\.example\.com\/about\/", got "https:\/\/www\.example\.com\/about\/"/);
   assert.match(result.stdout, /\/about\/ og: /);
+});
+
+test('a staging build (PUBLIC_INDEXABLE not true) needs noindex, nofollow on every page and compares the rest of robots', async () => {
+  const staging = makeDist(join(root, 'dist-staging-robots'), { staging: true });
+  const passed = await seo(staging, ['--origin', DIST_ORIGIN], { PUBLIC_INDEXABLE: '' });
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^seo: 13 checked, 0 failed$/m);
+
+  // A page without the staging tokens fails; so does a robots value the live page did not have.
+  const plain = makeDist(join(root, 'dist-staging-plain'));
+  const missing = await seo(plain, ['--origin', DIST_ORIGIN, '--paths', '/about/'], { PUBLIC_INDEXABLE: '' });
+  assert.equal(missing.code, 1);
+  assert.match(missing.stdout, /^ {2}\/about\/ robots: expected "noindex, nofollow \(a staging build, PUBLIC_INDEXABLE is not true\)", got null$/m);
+  edit(staging, 'about/index.html', '<meta name="robots" content="noindex, nofollow">', '<meta name="robots" content="noindex, nofollow, noarchive">');
+  const extra = await seo(staging, ['--origin', DIST_ORIGIN, '--paths', '/about/'], { PUBLIC_INDEXABLE: '' });
+  assert.equal(extra.code, 1);
+  assert.match(extra.stdout, /^ {2}\/about\/ robots: expected "", got "noarchive"$/m);
+});
+
+test('a release build (PUBLIC_INDEXABLE=true) compares robots exactly: the staging meta fails it', async () => {
+  const staging = makeDist(join(root, 'dist-release-robots'), { staging: true });
+  const result = await seo(staging, ['--origin', DIST_ORIGIN], { PUBLIC_INDEXABLE: 'true' });
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/about\/ robots: expected "", got "noindex, nofollow"$/m);
+  assert.doesNotMatch(result.stdout, /\/private-page\/ robots/, 'the live noindex page matches as built');
 });
 
 test('dist-bad fails and lists the title and the h1 per path', async () => {

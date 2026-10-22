@@ -18,8 +18,9 @@ let baseline;
 let good;
 // The fixture build is a Cloudflare Pages one (dist/_headers), so each dist also gets the
 // public/_redirects compiled from the redirects.csv beside the baseline, as the build copies it.
+// Every page carries the staging noindex meta, as Base.astro writes it without PUBLIC_INDEXABLE.
 const build = (name, options) => {
-  const dist = makeDist(join(root, name), options);
+  const dist = makeDist(join(root, name), { staging: true, ...options });
   copyFileSync(join(root, 'public', '_redirects'), join(dist, '_redirects'));
   return dist;
 };
