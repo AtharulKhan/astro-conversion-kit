@@ -42,6 +42,9 @@ Exit codes: 0 done, 2 usage error, 3 stopped because the site is blocking reques
 cannot be reached (wait, then run again with --resume).`;
 
 const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
+// The one block status that can be a URL's real, lasting answer; 429, 503 and network errors
+// are always retried later (exit 3, --resume) rather than recorded.
+const PERMANENT_BLOCK = 403;
 const MAX_HOPS = 10;
 const MAX_ATTEMPTS = 3;
 const RETRY_MIN_MS = 500;
@@ -217,7 +220,9 @@ class Crawler {
     return key;
   }
 
-  // Discovery fetch: retries a blocked answer (spaced out), throws Blocked on a block streak.
+  // Discovery fetch: retries a blocked answer (spaced out). A 403 that persists is that URL's
+  // answer (noted in meta.json, not fatal); a 429, 503 or network error that persists, or a
+  // streak of them on different URLs, throws Blocked so the run stops and resumes later.
   discoveryFetch() {
     return async (url, options) => {
       for (let attempt = 1; ; attempt += 1) {
@@ -231,8 +236,13 @@ class Crawler {
           }
           return res;
         }
-        if (this.noteBlocked(url)) throw new Blocked();
-        if (attempt >= MAX_ATTEMPTS) return res;
+        if (res.status === PERMANENT_BLOCK) {
+          if (attempt >= MAX_ATTEMPTS) {
+            const errors = (this.state.discoveryErrors ??= []);
+            if (!errors.some((e) => e.url === url)) errors.push({ url, status: res.status });
+            return res;
+          }
+        } else if (this.noteBlocked(url) || attempt >= MAX_ATTEMPTS) throw new Blocked();
         await sleep(this.retryWait(attempt));
       }
     };
@@ -406,6 +416,9 @@ class Crawler {
   }
 
   // Work through a queue with per-URL retries and the block streak.
+  // A URL still answering 403 after its retries is given up (recorded with that status).
+  // A URL still answering 429, 503 or a network error after its retries, or three different
+  // URLs blocked in a row, stops the run with the item back at the front of the queue.
   // Returns 'done', 'max' or 'blocked'.
   async drain(queue, visit, giveUp, max = null) {
     let sinceSave = 0;
@@ -416,13 +429,16 @@ class Crawler {
       this.lastVisited = item.url;
       const result = await visit(item);
       if (result.blocked) {
-        if (this.noteBlocked(item.url)) {
+        const streak = this.noteBlocked(item.url);
+        item.attempts += 1;
+        const exhausted = item.attempts >= MAX_ATTEMPTS;
+        if (streak || (exhausted && result.status !== PERMANENT_BLOCK)) {
+          item.attempts = 0; // a resumed run gives it a fresh set of retries
           queue.unshift(item);
           return 'blocked';
         }
-        item.attempts += 1;
-        if (item.attempts < MAX_ATTEMPTS) queue.push(item);
-        else giveUp(item, result.status);
+        if (exhausted) giveUp(item, result.status);
+        else queue.push(item);
       } else this.noteOk();
       sinceSave += 1;
       if (sinceSave >= SAVE_EVERY) {
@@ -506,6 +522,7 @@ class Crawler {
       startedAt: this.state.startedAt,
       finishedAt: finished ? new Date().toISOString() : null,
       options: this.state.options,
+      discoveryErrors: this.state.discoveryErrors ?? [],
     });
 
     const internal = {};
@@ -568,7 +585,12 @@ async function main() {
       process.exit(2);
     }
   } else {
-    state = newState(args.origin, { includeQuery: args.includeQuery, noRest: args.noRest, seeds: args.seeds });
+    state = newState(args.origin, {
+      includeQuery: args.includeQuery,
+      noRest: args.noRest,
+      seeds: args.seeds,
+      verifyShortlinks: args.verifyShortlinks,
+    });
   }
   mkdirSync(out, { recursive: true });
 
@@ -589,7 +611,10 @@ async function main() {
   }
 
   let outcome = state.phase === 'crawl' ? await crawler.crawl(args.max) : 'done';
-  if (outcome === 'done' && args.verifyShortlinks) outcome = await crawler.verifyShortlinks();
+  // A resumed run keeps the verify pass the first run asked for, flag or not.
+  if (args.verifyShortlinks) state.options.verifyShortlinks = true;
+  const verify = state.options.verifyShortlinks || (state.verifyQueue?.length ?? 0) > 0;
+  if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();
   const inventory = crawler.writeOutputs({ finished: outcome === 'done' });
   if (outcome === 'blocked') stopBlocked();
   saveState(out, state);

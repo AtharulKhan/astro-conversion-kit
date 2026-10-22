@@ -109,6 +109,77 @@ test('a page that is always 403 is recorded with its status, not treated as a bl
   }
 });
 
+test('a URL that keeps answering 429 stops the run with exit 3 and stays queued', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><body><a href="/a/">a</a> <a href="/slow/">s</a></body></html>' },
+    '/a/': { body: '<html><body>a</body></html>' },
+    '/slow/': { status: 429, body: 'slow down' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 3, run.stderr);
+    const state = readJson(out, 'state.json');
+    assert.equal(state.phase, 'crawl');
+    assert.deepEqual(state.queue.map((q) => new URL(q.url).pathname), ['/slow/']);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => r.path), ['/', '/a/']);
+    assert.equal(stub.requests.filter((u) => u === '/slow/').length, 3);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('robots.txt and sitemaps that always answer 403 are noted, not fatal', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><body>home</body></html>' },
+    '/robots.txt': { status: 403 },
+    '/sitemap_index.xml': { status: 403 },
+    '/sitemap.xml': { status: 403 },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => r.path), ['/']);
+    const meta = readJson(out, 'meta.json');
+    assert.deepEqual(
+      meta.discoveryErrors.map((e) => `${new URL(e.url).pathname}:${e.status}`),
+      ['/robots.txt:403', '/sitemap_index.xml:403', '/sitemap.xml:403'],
+    );
+    assert.equal(readJson(out, 'state.json').phase, 'done');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a blocked --verify-shortlinks pass resumes without the flag', async () => {
+  const probe = await startFixture();
+  const port = Number(new URL(probe.origin).port);
+  const plainOut = tempDir();
+  assert.equal((await capture([probe.origin, '--out', plainOut, '--delay', '0'])).code, 0);
+  const crawlRequests = probe.requests.length;
+  await probe.close();
+
+  const out = tempDir();
+  const blocking = await startFixture({ port, blockAfter: crawlRequests + 1 });
+  const stopped = await capture([blocking.origin, '--out', out, '--delay', '0', '--verify-shortlinks']);
+  await blocking.close();
+  assert.equal(stopped.code, 3, stopped.stderr);
+  const state = readJson(out, 'state.json');
+  assert.equal(state.options.verifyShortlinks, true);
+  assert.ok(state.verifyQueue.length > 0);
+  assert.equal(readJson(out, 'meta.json').finishedAt, null);
+
+  const open = await startFixture({ port });
+  const resumed = await capture([open.origin, '--out', out, '--delay', '0', '--resume']);
+  await open.close();
+  assert.equal(resumed.code, 0, resumed.stderr);
+  const shortlinks = readJson(out, 'redirects.json').filter((r) => r.source === 'shortlink');
+  assert.equal(shortlinks.length, 11);
+  assert.ok(shortlinks.every((r) => r.verified && r.status === 301), JSON.stringify(shortlinks));
+  assert.deepEqual(readJson(out, 'state.json').verifyQueue, []);
+});
+
 test('only HTML and hreflang alternates are followed; feeds go to feeds/, wp-json is never requested', async () => {
   const head = `<link rel="alternate" type="application/json" href="/wp-json/wp/v2/pages/2">
     <link rel="alternate" type="application/json+oembed" href="/wp-json/oembed/1.0/embed?url=x">
