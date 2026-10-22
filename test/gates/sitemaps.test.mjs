@@ -57,6 +57,13 @@ test('a single sitemap.xml is read when there is no sitemap index', async () => 
   assert.match(none.stdout, /\/ sitemap: expected "sitemap-index\.xml", got null/);
 });
 
+test("WordPress's sitemap_index.xml, kept at its live URL, is read as the sitemap index", async () => {
+  const dist = makeDist(join(root, 'dist-wp-index'));
+  renameSync(join(dist, 'sitemap-index.xml'), join(dist, 'sitemap_index.xml'));
+  const result = await sitemaps(dist);
+  assert.equal(result.code, 0, result.stdout);
+});
+
 test('a sitemap index pointing at a missing child sitemap fails', async () => {
   const dist = makeDist(join(root, 'dist-no-child'));
   rmSync(join(dist, 'sitemap-0.xml'));

@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -199,6 +199,15 @@ test('--media-manifest checks each sampled object at its url against the manifes
   const json = JSON.parse(result.stdout);
   assert.equal(json.checked, 31);
   assert.deepEqual(json.failures, [{ check: 'media', path: '/wp-content/uploads/2026/01/team.jpg', field: 'bytes', expected: 1, actual: 13704 }]);
+});
+
+test("WordPress's /sitemap_index.xml counts as the sitemap", async () => {
+  const dist = makeDist(join(root, 'dist-wp-sitemap'));
+  renameSync(join(dist, 'sitemap-index.xml'), join(dist, 'sitemap_index.xml'));
+  const host = await serve(dist);
+  const result = await live(host.origin);
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, /^ {2}ok sitemap \/sitemap_index\.xml$/m);
 });
 
 test('a missing sitemap fails', async () => {

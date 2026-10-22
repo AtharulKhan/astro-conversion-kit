@@ -22,7 +22,7 @@ Checks a deployed site against the baseline:
   header    pages (page, post, archive) carry X-Robots-Tag: noindex iff --expect-noindex; with
             --expect-noindex a <meta name="robots"> noindex in the page also counts (the site
             template's staging build sets it on every page)
-  sitemap   /sitemap-index.xml (or /sitemap.xml) answers 200
+  sitemap   /sitemap-index.xml (or /sitemap_index.xml, or /sitemap.xml) answers 200
   media     a random sample of 20 baseline media files (all when fewer) answers 200 with a
             content-length equal to the baseline bytes
 
@@ -61,7 +61,7 @@ const PAGE_KINDS = new Set(['page', 'post', 'archive']);
 const BLOCKED = new Set([403, 429, 503]);
 const MAX_BLOCKS = 3;
 const MEDIA_SAMPLE = 20;
-const SITEMAPS = ['/sitemap-index.xml', '/sitemap.xml'];
+const SITEMAPS = ['/sitemap-index.xml', '/sitemap_index.xml', '/sitemap.xml'];
 const PERMANENT = new Set([301, 308]);
 const TEMPORARY = new Set([302, 303, 307]);
 

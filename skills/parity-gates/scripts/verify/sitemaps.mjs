@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Sitemaps gate: dist/sitemap-index.xml (or sitemap.xml) lists exactly the indexable pages,
+// Sitemaps gate: dist/sitemap-index.xml (or sitemap_index.xml, or sitemap.xml) lists exactly the indexable pages,
 // posts and archives the baseline recorded at 200, on the build's origin, and every feed the
 // live site served is built with as many items as the captured feed.
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -15,10 +15,11 @@ const OPTIONS = {
   origin: { type: 'string', default: '', description: 'the origin the sitemap URLs must be on (default: canonicalOrigin in baseline/meta.json)' },
 };
 const NOTES = `
-Expected in the sitemap: every page, post and archive route at 200 without noindex. A sitemap
-index is followed to its child sitemaps in dist. Feed items are <item> (RSS) or <entry> (Atom).
+Expected in the sitemap: every page, post and archive route at 200 without noindex. The top file
+is sitemap-index.xml, sitemap_index.xml (WordPress's name, kept at its live URL) or sitemap.xml,
+the first that exists. A sitemap index is followed to its child sitemaps in dist. Feed items are <item> (RSS) or <entry> (Atom).
 `;
-const TOP = ['sitemap-index.xml', 'sitemap.xml'];
+const TOP = ['sitemap-index.xml', 'sitemap_index.xml', 'sitemap.xml'];
 
 const decode = (value) => {
   try {
