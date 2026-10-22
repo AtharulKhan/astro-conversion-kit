@@ -699,6 +699,9 @@ export async function prelaunch({ site, live }) {
     '--dir', site, '--production-url', live, '--predecessor-url', live, '--ignore-dir', 'capture', '--out', join(site, 'review', 'pre-launch'),
   ], { env: { PUBLIC_INDEXABLE: 'true' } });
   const gate = readJson(join(site, 'review', 'pre-launch', 'gate.json'));
+  const reconcile = await node(site, kit('convert-site', 'prelaunch-reconcile.mjs'), [
+    '--findings', join('review', 'pre-launch', 'gate.json'), '--baseline', 'baseline', '--plan', join('docs', 'plan.md'), '--json',
+  ]);
 
   expectCode(await npm(site, ['run', 'build']));
   const staging = await serveLikeVercel(site, { preview: true });
@@ -724,7 +727,7 @@ export async function prelaunch({ site, live }) {
   } finally {
     await production.close();
   }
-  return { preLaunch, gate, stagingLive, audit, releaseLive };
+  return { preLaunch, gate, reconcile, stagingLive, audit, releaseLive };
 }
 
 // ---------------------------------------------------------------------------------------------

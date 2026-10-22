@@ -246,9 +246,17 @@ makes that the production build it is meant to gate (without it, the staging bui
 blocks everything and fails the robots check). Without a `gh` login there is no remote to push
 to; `hygiene.pushed` then fails until the person pushes, and that is a needs-you line.
 
-Triage as the `pre-launch` skill says; every failure blocks and is fixed on the branch. The one
-allowed failure is `placeholders.form-id` while the form id is on the needs-you list (`forms.md`);
-the PR is then opened as a draft. Never pass `--confirm`: the human checklist ids (`forms`,
+Then reconcile what failed with live:
+
+    node $KIT/skills/convert-site/scripts/prelaunch-reconcile.mjs --findings review/pre-launch/gate.json --baseline baseline --plan docs/plan.md
+
+A failing check is accepted only when every row it names (title, description, h1, canonical,
+og:image, favicon, placeholder text) is what live had for that path and a `docs/plan.md`
+decision row names the path or the check id; also `placeholders.form-id` while the form id is
+missing (the PR is then a draft, `forms.md`), and the two predecessor checks when every row is
+a trailing-slash rule or a slash-only redirect (a known launch-skills limitation). Everything
+else blocks and is fixed on the branch, as the `pre-launch` skill's triage says. Keep its
+accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`forms`,
 `analytics`, `hosting`, `payments`, `legal`, `gsc-baseline`, `dns`, `signoff`, `rollback`) go to
 `docs/LAUNCH.md` section A for the person.
 
@@ -264,8 +272,8 @@ the audit's `baseline.json` and `redirects.csv` to `docs/launch/audit-baseline.j
 branch, or list it in the PR with why it cannot be fixed. Then the one test submission
 (`forms.md`).
 
-**Proof:** `pre-launch` exits 0, or fails only `predecessor.wildcard-redirects` / `predecessor.redirect-chains` where every row they name is a trailing-slash rule or a slash-only redirect (a known launch-skills limitation), and/or `placeholders.form-id` while the form id is missing; nothing else is accepted; `verify-live` exits 0
-or its gap is listed; every audit blocker is fixed or listed.
+**Proof:** `prelaunch-reconcile` exits 0; `verify-live` exits 0 or its gap is listed; every
+audit blocker is fixed or listed.
 
 ## 11. suggestions
 

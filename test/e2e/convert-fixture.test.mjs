@@ -117,9 +117,13 @@ test('9 components: skipped, off by default', () => {
 // pre-launch with --predecessor-url fails two checks that read the kit's trailing-slash
 // normalisation wrongly (upstream, in the launch skills): the slash rules count as wildcards, and
 // the live /about -> /about/ redirect looks like a loop once trailing slashes are ignored.
-test('10 prelaunch: pre-launch fails only the two upstream predecessor checks; verify-live passes staging and release', () => {
+// prelaunch-reconcile accepts exactly those two under its narrow rule and exits 0.
+test('10 prelaunch: prelaunch-reconcile exits 0, accepting only the two slash-rule checks; verify-live passes staging and release', () => {
+  ok(results.prelaunch.reconcile);
+  const { accepted, blocking } = JSON.parse(results.prelaunch.reconcile.stdout);
+  assert.deepEqual(blocking, []);
+  assert.deepEqual(accepted.map((a) => `${a.id} ${a.rule}`).sort(), ['predecessor.redirect-chains slash', 'predecessor.wildcard-redirects slash'], shown(results.prelaunch.preLaunch));
   const failing = results.prelaunch.gate.checks.filter((c) => c.status === 'fail');
-  assert.deepEqual(failing.map((c) => c.id).sort(), ['predecessor.redirect-chains', 'predecessor.wildcard-redirects'], shown(results.prelaunch.preLaunch));
   const chains = failing.find((c) => c.id === 'predecessor.redirect-chains');
   assert.deepEqual(chains.evidence.map((e) => e.value), ['/about -> /about is a loop and serves nothing']);
   const wildcards = failing.find((c) => c.id === 'predecessor.wildcard-redirects');

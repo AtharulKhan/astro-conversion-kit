@@ -64,10 +64,9 @@ does not answer, the defaults stand. Never send a second question message.
 
 ## The phases
 
-The order is `docs/process.md`'s. `references/phases.md` has every command and the proof each
-phase is done. At each boundary run
-`node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE phase <name>`; do not start a phase
-until the previous one's proof holds. Run `state.mjs` calls one at a time, never in parallel.
+The order is `docs/process.md`'s; `references/phases.md` has every command and each proof. At
+each boundary run `node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE phase <name>`; do
+not start a phase until the previous one's proof holds. Run `state.mjs` calls one at a time.
 
 | # | Phase (`<name>`) | What happens | Done when |
 |---|---|---|---|
@@ -80,7 +79,7 @@ until the previous one's proof holds. Run `state.mjs` calls one at a time, never
 | 7 | `gates` | The full gates | `npm run verify` exits 0 |
 | 8 | `visual` | Every template at 390, 768, 1440; every page at 390 and 1440 | Every pair passes |
 | 9 | `components` | Optional, off by default (`references/components-optional.md`) | Gates and diffs still pass, one separate commit |
-| 10 | `prelaunch` | `pre-launch`, staging deploy, `verify-live`, `launch-audit`, one test submission | `pre-launch` exits 0, or fails only on what `references/phases.md` §10 accepts (`placeholders.form-id`, and the known slash-rule limitation); audit blockers fixed or listed |
+| 10 | `prelaunch` | `pre-launch`, staging deploy, `verify-live`, `launch-audit`, one test submission | `prelaunch-reconcile.mjs` exits 0 (`references/phases.md` §10); audit blockers fixed or listed |
 | 11 | `suggestions` | `suggest-improvements` with `gates.json` and `review/` | `docs/suggestions.md` with its "From the review" section |
 | 12 | `pr` | Runbook, push, PR, final report | The PR quotes gate output and every "Not covered" section |
 | 13 | launch | The person's, from `docs/LAUNCH.md` | `post-launch` checks the cutover and watches 30 days |
@@ -156,7 +155,8 @@ the PR" goes on the needs-you list. The body, in this order:
     ## Exceptions applied every exceptions.json entry: path, field, reason, decision id
     ## Proposals open     every proposals.json id: paths, what, why (ships only with PROPOSALS=on)
     ## Decisions          the docs/plan.md Decisions table, and every non-default choice
-    ## Gate output        `npm run verify` output, verbatim, in a code block, with every skip line
+    ## Gate output        `npm run verify` output, verbatim, in a code block, with every skip line;
+                          then every row prelaunch-reconcile accepted, as "reproduced from live (dN)"
     ## Visual review      template and full-set results, every override with its reason,
                           every bannerClosed and heightMismatch; the contact sheets are
                           review/index.html and review/all.html (local; npm run review:sheet)
