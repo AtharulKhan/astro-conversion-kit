@@ -42,6 +42,22 @@ test('--allow-extra accepts a listed extra path', async () => {
   assert.equal(allowed.code, 0, allowed.stdout);
 });
 
+test('the launch icon set and web app manifest at the root are not extras; other root files are', async () => {
+  const dist = makeDist(join(root, 'dist-icons'));
+  for (const file of ['favicon.ico', 'favicon.svg', 'favicon-32x32.png', 'icon-192.png', 'apple-touch-icon.png', 'site.webmanifest', 'manifest.webmanifest']) {
+    writeFileSync(join(dist, file), 'x');
+  }
+  const passed = await routes(dist);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  writeFileSync(join(dist, 'notes.txt'), 'x');
+  mkdirSync(join(dist, 'icons'), { recursive: true });
+  writeFileSync(join(dist, 'icons', 'favicon.ico'), 'x');
+  const failed = await routes(dist);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /\/notes\.txt extra: expected null, got "notes\.txt"/);
+  assert.match(failed.stdout, /\/icons\/favicon\.ico extra/);
+});
+
 test('a noindex route that lost its robots meta fails', async () => {
   const dist = makeDist(join(root, 'dist-noindex'), { bad: ['lost-noindex'] });
   const result = await routes(dist);

@@ -20,6 +20,11 @@ const ALWAYS_ALLOWED = [
   /^robots\.txt$/,
   /^sitemap(?:-index|-\d+)?\.xml$/,
   /^_(?:redirects|headers|routes\.json)$/,
+  // The icon set and web app manifest a launch needs (pre-launch checks for them at the root).
+  /^favicon(?:-[\w.-]+)?\.(?:ico|svg|png)$/,
+  /^icon-[\w.-]+\.png$/,
+  /^apple-touch-icon(?:-[\w.-]+)?\.png$/,
+  /^(?:site|manifest)\.webmanifest$/,
 ];
 const NOTES = `
 A page may be built as <path>/index.html or <path>.html; both are accepted for every route.
