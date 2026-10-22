@@ -161,17 +161,18 @@ Read `build-rules.md`, `forms.md`, `third-party.md` and your host file first. In
 
 **Gates on every template commit.** `npm run verify` stops at the first failing gate, and links,
 redirects and sitemaps are expected to fail until every page exists. So during the template work
-run the path-scoped gates one by one (`P` is the comma list of the representatives, for example
-`/,/about/,/blog/,/hello-world/`):
+run the path-scoped gates one by one, with `P` set once to the comma list of the
+representatives:
 
+    P="/,/about/,/blog/,/hello-world/"
     npm run build
-    node scripts/verify/forms.mjs --paths P --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/
-    node scripts/verify/headers.mjs --paths P
-    node scripts/verify/media.mjs --paths P
-    node scripts/verify/routes.mjs --paths P
-    node scripts/verify/scripts.mjs --paths P
-    node scripts/verify/seo.mjs --paths P
-    node scripts/verify/text.mjs --paths P
+    node scripts/verify/forms.mjs --paths "$P" --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/
+    node scripts/verify/headers.mjs --paths "$P"
+    node scripts/verify/media.mjs --paths "$P"
+    node scripts/verify/routes.mjs --paths "$P"
+    node scripts/verify/scripts.mjs --paths "$P"
+    node scripts/verify/seo.mjs --paths "$P"
+    node scripts/verify/text.mjs --paths "$P"
 
 Add `--allow-extra /thank-you/` to the routes gate when that page is new (`forms.md`). Each of
 the seven must exit 0 before the commit (`feat: <template> template`). `links`,

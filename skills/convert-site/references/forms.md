@@ -45,8 +45,9 @@ canonical host:
 
     <input type="hidden" name="_next" value="https://<canonical host>/thank-you/">
 
-The gate is given the path (`--thank-you /thank-you/`) and accepts the field as that path or as
-an absolute URL on the canonical or `--base` host; the page must be built.
+The gate is given the path (`--thank-you /thank-you/`). It accepts the field as that path, or as
+an absolute URL whose host is the baseline's `canonicalOrigin` (its `origin` when `meta.json` has
+none) and whose pathname equals `--thank-you`; the page must be built.
 
 Use the live site's thank-you URL when it has one (it is a captured page and already built).
 When it has none, build `/thank-you/` from the site's plain page template with a one-line

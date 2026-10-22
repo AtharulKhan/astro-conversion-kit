@@ -51,9 +51,10 @@ source. Run each step as its own command, in this order:
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
-3. **Media.** Lists every media file in `capture/media.json` and saves it under `media-cache/`:
+3. **Media.** Lists every media file in `capture/media.json` and saves it under
+   `.conversion/media-cache/`, the conversion's working directory, which stays out of git:
 
-       node <skill-dir>/scripts/media.mjs --capture capture --download media-cache
+       node <skill-dir>/scripts/media.mjs --capture capture --download .conversion/media-cache
 
 4. **Templates.** Clusters the pages that answered 200 into `capture/templates.json`. On
    WordPress, pages group by template body class first (`home`, `page`, `single-post`,
