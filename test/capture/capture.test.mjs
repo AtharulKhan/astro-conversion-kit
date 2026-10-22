@@ -410,6 +410,42 @@ test('first-party <script src> files are saved under js/ with a manifest; vendor
   }
 });
 
+test('js/: an on-site redirect is followed, an off-site one is not, a file over 5 MB is not saved, and the manifest is always written', async () => {
+  const page = (scripts) => `<html><body>${scripts.map((s) => `<script src="${s}"></script>`).join('')}</body></html>`;
+  const stub = await startStub({
+    '/': { body: page(['/js/moved.js', '/js/away.js', '/js/huge.js']) },
+    '/js/moved.js': { status: 301, headers: { Location: '/js/new.js' } },
+    '/js/new.js': { headers: { 'Content-Type': 'text/javascript' }, body: 'var moved = 1;' },
+    '/js/away.js': (origin) => ({ status: 302, headers: { Location: origin.replace('127.0.0.1', 'localhost') + '/elsewhere.js' } }),
+    '/js/huge.js': { headers: { 'Content-Type': 'text/javascript' }, body: 'x'.repeat(5 * 1024 * 1024 + 1) },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'js/manifest.json'), [
+      { file: '1.js', src: `${stub.origin}/js/moved.js`, pages: ['/'] },
+      { file: null, src: `${stub.origin}/js/away.js`, pages: ['/'], status: 'off-site' },
+      { file: null, src: `${stub.origin}/js/huge.js`, pages: ['/'], status: 'too-large' },
+    ]);
+    assert.equal(readFileSync(join(out, 'js/1.js'), 'utf8'), 'var moved = 1;');
+    assert.deepEqual(readdirSync(join(out, 'js')).sort(), ['1.js', 'manifest.json']);
+    assert.ok(!stub.requests.includes('/elsewhere.js'), 'the off-site target is never requested');
+  } finally {
+    await stub.close();
+  }
+
+  const none = await startStub({ '/': { body: '<html><body><p>No scripts.</p></body></html>' } });
+  try {
+    const out = tempDir();
+    const run = await capture([none.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'js/manifest.json'), []);
+  } finally {
+    await none.close();
+  }
+});
+
 test('--max 3 fetches exactly 3 pages', async () => {
   const out = tempDir();
   const run = await capture([fixture.origin, '--out', out, '--delay', '0', '--max', '3']);

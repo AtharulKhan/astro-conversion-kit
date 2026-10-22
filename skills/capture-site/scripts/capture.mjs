@@ -59,6 +59,9 @@ Exit codes: 0 done, 2 usage error, 3 stopped because the site is blocking reques
 cannot be reached (wait, then run again with --resume).`;
 
 const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
+// Same-site script files: larger ones are not saved, and redirects are followed at most this far.
+const JS_MAX_BYTES = 5 * 1024 * 1024;
+const JS_MAX_HOPS = 5;
 // The one block status that can be a URL's real, lasting answer; 429, 503 and network errors
 // are always retried later (exit 3, --resume) rather than recorded.
 const PERMANENT_BLOCK = 403;
@@ -443,7 +446,9 @@ class Crawler {
   }
 
   // Same-site script files (the theme's own JavaScript) in first-seen order, each fetched once
-  // after the crawl (js/<n>.js). Vendor tags and inline code stay in the page HTML.
+  // after the crawl (js/<n>.js). Vendor tags and inline code stay in the page HTML. Redirects are
+  // followed by hand while they stay on the site's host; one that leaves it is recorded
+  // "off-site" and not requested. A file over JS_MAX_BYTES is recorded "too-large", not saved.
   collectJs(record) {
     const js = (this.state.js ??= { entries: [], queue: [] });
     const site = bareHost(new URL(this.state.canonicalOrigin));
@@ -467,11 +472,27 @@ class Crawler {
   }
 
   async visitJs(item) {
-    const res = await this.fetch(item.url, { redirect: 'follow' });
-    if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
     const entry = this.state.js.entries.find((e) => e.src === item.url);
+    const site = bareHost(new URL(this.state.canonicalOrigin));
+    let url = item.url;
+    let res;
+    for (let hop = 0; ; hop += 1) {
+      res = await this.fetch(url, { raw: true });
+      if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
+      const location = res.headers?.location;
+      if (res.status < 300 || res.status >= 400 || !location || hop >= JS_MAX_HOPS) break;
+      const next = new URL(location, url);
+      if (bareHost(next) !== site) {
+        entry.status = 'off-site';
+        return {};
+      }
+      url = next.href;
+    }
     entry.status = res.status;
-    if (res.status === 200) writeText(join(this.out, 'js', entry.file), Buffer.isBuffer(res.body) ? res.body : String(res.body ?? ''));
+    if (res.status !== 200) return {};
+    const body = Buffer.isBuffer(res.body) ? res.body : Buffer.from(String(res.body ?? ''));
+    if (body.length > JS_MAX_BYTES) entry.status = 'too-large';
+    else writeText(join(this.out, 'js', entry.file), body);
     return {};
   }
 
@@ -700,7 +721,7 @@ class Crawler {
       wayback: this.state.wayback ?? (this.state.options.noWayback ? { status: 'skipped' } : null),
     });
     json('css/manifest.json', this.cssManifest());
-    if (this.state.js?.entries.length) json('js/manifest.json', this.jsManifest());
+    json('js/manifest.json', this.jsManifest());
 
     const internal = {};
     const external = {};

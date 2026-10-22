@@ -111,7 +111,10 @@ Never retry in a tight loop. After two stops in a row, tell the person and carry
     scripts.json          third-party vendors with their ids and pages
     media.json            every media file with sources, pages, status, type and bytes
     css/                  every stylesheet, inline <style> blocks, manifest.json
-    js/                   the site's own <script src> files (theme JavaScript), manifest.json
+    js/                   the site's own <script src> files (theme JavaScript) and manifest.json:
+                          [{ file, src, pages }], or { file: null, src, pages, status } for a file
+                          not saved (an HTTP status, "off-site" for a redirect off the host,
+                          "too-large" over 5 MB); [] when the site has none
     templates.json        template clusters with a representative page each
     assets/               logo, icons, fonts, index.json
     screens/live/         live screenshots and manifest.json (gitignored)
