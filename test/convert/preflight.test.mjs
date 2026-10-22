@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,7 +78,7 @@ test('fake gh is logged in, missing vercel is not present', (t) => {
   assert.equal(report.node.version, process.versions.node);
   assert.equal(report.node.ok, true);
   assert.deepEqual(report.tools.gh, { present: true, version: '2.70.0', loggedIn: true });
-  assert.deepEqual(report.tools.vercel, { present: false, version: null, loggedIn: false });
+  assert.deepEqual(report.tools.vercel, { present: false, version: null, loggedIn: false, via: null });
   assert.equal(report.tools.wrangler.present, false);
   assert.equal(report.tools.git.present, false);
   assert.equal(typeof report.playwright.chromium, 'boolean');
@@ -107,8 +107,37 @@ test('a CLI that says it is not authenticated is not logged in', (t) => {
     'echo "Error: not logged in" >&2; exit 1',
   ].join('\n'));
   const report = runJson(['--home', home, '--path-env', bin]);
-  assert.deepEqual(report.tools.wrangler, { present: true, version: '4.20.1', loggedIn: false });
-  assert.deepEqual(report.tools.vercel, { present: true, version: '44.2.0', loggedIn: false });
+  assert.deepEqual(report.tools.wrangler, { present: true, version: '4.20.1', loggedIn: false, via: 'path' });
+  assert.deepEqual(report.tools.vercel, { present: true, version: '44.2.0', loggedIn: false, via: 'path' });
+});
+
+// A fake npx that runs an installed vercel (not on PATH) and knows no wrangler, as
+// `npx --no-install` does: it answers only for a package it can find without installing.
+function fakeNpx(dir, log) {
+  fakeBin(dir, 'npx', [
+    `echo "$@" >> "${log}"`,
+    'if [ "$1" != "--no-install" ]; then echo "would install" >&2; exit 9; fi',
+    'if [ "$2" = "vercel" ] && [ "$3" = "--version" ]; then echo "Vercel CLI 50.1.0"; exit 0; fi',
+    'if [ "$2" = "vercel" ] && [ "$3" = "whoami" ]; then echo "fixture-user"; exit 0; fi',
+    'echo "npm error could not determine executable to run" >&2; exit 1',
+  ].join('\n'));
+}
+
+test('vercel and wrangler are found through npx --no-install, then on PATH', (t) => {
+  const bin = tempDir(t, 'preflight-bin-');
+  const home = tempDir(t, 'preflight-home-');
+  const log = join(home, 'npx.log');
+  fakeNpx(bin, log);
+  fakeBin(bin, 'wrangler', [
+    'if [ "$1" = "--version" ]; then echo "4.20.1"; exit 0; fi',
+    'echo "you@example.com"; exit 0',
+  ].join('\n'));
+  const report = runJson(['--home', home, '--path-env', bin]);
+  assert.deepEqual(report.tools.vercel, { present: true, version: '50.1.0', loggedIn: true, via: 'npx' });
+  assert.deepEqual(report.tools.wrangler, { present: true, version: '4.20.1', loggedIn: true, via: 'path' });
+  const calls = readFileSync(log, 'utf8').trim().split('\n');
+  assert.ok(calls.includes('--no-install vercel whoami'), calls.join('\n'));
+  assert.ok(calls.every((c) => c.startsWith('--no-install ')), 'never lets npx install');
 });
 
 test('a hanging login probe times out instead of blocking', { timeout: 30000 }, (t) => {

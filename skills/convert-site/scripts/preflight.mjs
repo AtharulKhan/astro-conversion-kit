@@ -16,6 +16,10 @@ Reports the tools a conversion needs and whether each CLI is logged in:
   git, gh, vercel, wrangler
             present, version, loggedIn (gh auth status, vercel whoami,
             wrangler whoami; git has no login and reports null)
+            vercel and wrangler run through npx, as the skill runs them: each is
+            probed as \`npx --no-install <cli> --version\` and \`... whoami\` (never
+            installing anything), then as a binary on PATH; via says which
+            answered ("npx", "path", or null when neither did)
   playwright chromium installed or not
   experience new | some | experienced, from two signals: at least 10 git
             repositories directly under the parent of the current directory,
@@ -129,6 +133,25 @@ async function checkTool(name, loginArgs, pathEnv) {
   return { present: true, version, loggedIn };
 }
 
+// The CLIs the skill runs through npx: what `npx --no-install <cli>` answers is what the agent
+// will get, whether the package sits in a project, the npx cache or a global install.
+const VIA_NPX = new Set(['vercel', 'wrangler']);
+
+async function checkNpxTool(name, loginArgs, pathEnv) {
+  const npx = findBinary('npx', pathEnv);
+  if (npx) {
+    const versionRun = await probe(npx, ['--no-install', name, '--version'], pathEnv);
+    if (versionRun.code === 0) {
+      const version = versionRun.output.match(/\d+\.\d+\.\d+/)?.[0] ?? null;
+      const login = await probe(npx, ['--no-install', name, ...loginArgs], pathEnv);
+      const loggedIn = login.code === 0 && !NOT_LOGGED_IN_RE.test(login.output);
+      return { present: true, version, loggedIn, via: 'npx' };
+    }
+  }
+  const onPath = await checkTool(name, loginArgs, pathEnv);
+  return { ...onPath, via: onPath.present ? 'path' : null };
+}
+
 async function hasChromium() {
   try {
     const { chromium } = await import('playwright');
@@ -156,7 +179,7 @@ function countDotfiles(home) {
 export async function preflight({ home = null, pathEnv = process.env.PATH ?? '' } = {}) {
   const names = Object.keys(TOOLS);
   const [results, chromium] = await Promise.all([
-    Promise.all(names.map((name) => checkTool(name, TOOLS[name], pathEnv))),
+    Promise.all(names.map((name) => (VIA_NPX.has(name) ? checkNpxTool : checkTool)(name, TOOLS[name], pathEnv))),
     hasChromium(),
   ]);
   const tools = Object.fromEntries(names.map((name, i) => [name, results[i]]));
