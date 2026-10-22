@@ -57,20 +57,20 @@ after(() => {
 
 const partition = (list) => list.map((t) => t.paths.join(' ')).sort();
 
-// Measured on the fixture (Jaccard of classes plus tag-name multiset): /blog/ and
-// /category/news/ 0.88; /choosing-siding-colors/ and /storm-season-prep/ 0.93, the third post
-// 0.72 and 0.76; the six pages at most 0.78 with each other; at most 0.38 across WordPress
-// templates. So markup alone merges the archives and two of the posts and nothing else.
-test('the fixture clusters by markup, named from its WordPress body classes', () => {
+// Measured on the fixture. Tier 1 (WordPress): the page group's main page is
+// /services/roofing/; /about/ 0.78, /hidden-page/ 0.75, /services/siding/ 0.75, /services/ 0.53
+// stay, /contact/ 0.27 splits off as page-2. single-post main /storm-season-prep/:
+// /choosing-siding-colors/ 0.93, /spring-roof-checklist/ 0.76. archive: /category/news/ 0.88 to /blog/.
+test('the fixture clusters by WordPress template, splitting off only the form page', () => {
   const byName = Object.fromEntries(templates.map((t) => [t.name, t.paths]));
-  assert.deepEqual(byName.archive, ['/blog/', '/category/news/']);
-  assert.deepEqual(byName['single-post'], ['/choosing-siding-colors/', '/storm-season-prep/']);
-  assert.deepEqual(byName['single-post-2'], ['/spring-roof-checklist/']);
-  assert.deepEqual(byName.home, ['/']);
-  const pages = templates.filter((t) => /^page(-\d+)?$/.test(t.name));
-  assert.deepEqual(pages.map((t) => t.name).sort(), ['page', 'page-2', 'page-3', 'page-4', 'page-5', 'page-6']);
-  assert.deepEqual(pages.flatMap((t) => t.paths).sort(), ['/about/', '/contact/', '/hidden-page/', '/services/', '/services/roofing/', '/services/siding/']);
-  assert.equal(templates.length, 10);
+  assert.deepEqual(byName, {
+    page: ['/about/', '/hidden-page/', '/services/', '/services/roofing/', '/services/siding/'],
+    'single-post': ['/choosing-siding-colors/', '/spring-roof-checklist/', '/storm-season-prep/'],
+    archive: ['/blog/', '/category/news/'],
+    home: ['/'],
+    'page-2': ['/contact/'],
+  });
+  assert.deepEqual(templates.map((t) => t.count), [5, 3, 2, 1, 1]);
   for (const t of templates) assert.equal(t.count, t.paths.length);
   assert.ok(!templates.some((t) => t.paths.includes('/deleted-post/')), 'a 404 is not a template');
 });
@@ -85,9 +85,22 @@ test('no template mixes pages of different WordPress templates', () => {
   }
 });
 
-test('without a WordPress fingerprint the same pages are numbered, not named', () => {
-  for (const t of otherTemplates) assert.match(t.name, /^template-\d+$/);
-  assert.deepEqual(partition(otherTemplates), partition(templates));
+// Tier 2 on the same records (class tokens counted twice), seeds compared in order of
+// appearance: /about/ takes /hidden-page/ 0.64, /services/roofing/ 0.82, /services/siding/ 0.80
+// but not /services/ 0.59; the posts merge (0.77 to 0.94), the archives 0.79; /, /contact/ and
+// /services/ stand alone.
+test('without a WordPress fingerprint the same pages group by markup, numbered', () => {
+  assert.deepEqual(
+    otherTemplates.map((t) => [t.name, t.paths]),
+    [
+      ['template-1', ['/about/', '/hidden-page/', '/services/roofing/', '/services/siding/']],
+      ['template-2', ['/choosing-siding-colors/', '/spring-roof-checklist/', '/storm-season-prep/']],
+      ['template-3', ['/blog/', '/category/news/']],
+      ['template-4', ['/']],
+      ['template-5', ['/contact/']],
+      ['template-6', ['/services/']],
+    ],
+  );
 });
 
 test('the representative is the path with the median word count', () => {
@@ -114,7 +127,7 @@ test('pages without platform classes merge by markup and are numbered', () => {
   const long = '<p>a</p>'.repeat(9);
   const pages = [
     page('/a/', ['layout-x'], main(`<h1>A</h1>${long}`), 10),
-    // One extra element: 11 shared tokens of 12, Jaccard 0.92, merged with /a/.
+    // One extra element: class tokens count twice, so 12 shared tokens of 13, merged with /a/.
     page('/b/', ['layout-x'], main(`<h1>B</h1>${long}<img>`), 30),
     page('/c/', ['layout-x'], main(`<h1>C</h1>${long}`), 20),
     page('/d/', ['other'], '<html><body><section><form><input></form></section></body></html>', 5),
@@ -130,19 +143,24 @@ test('pages without platform classes merge by markup and are numbered', () => {
   assert.match(clusters[1].signature, /section form input/, 'falls back to body without main');
 });
 
-test('a shared WordPress name never merges pages whose markup differs', () => {
+test('within a WordPress template only clearly different markup splits off', () => {
   const classes = (id) => ['page-template-default', 'page', `page-id-${id}`];
+  const wp = { platform: 'wordpress' };
   const form = main('<h1>A</h1><form><label></label><input><input><textarea></textarea><button></button></form>');
   const table = main('<h2>B</h2><table><thead><tr><th></th></tr></thead><tbody><tr><td></td></tr></tbody></table>');
-  const apart = clusterPages([page('/form/', classes(1), form), page('/table/', classes(2), table)], { platform: 'wordpress' });
+  const apart = clusterPages([page('/form/', classes(1), form), page('/table/', classes(2), table)], wp);
   assert.deepEqual(apart.map((c) => [c.name, c.paths]), [['page', ['/form/']], ['page-2', ['/table/']]]);
 
-  const long = '<p>a</p>'.repeat(9);
-  const alike = clusterPages(
-    [page('/one/', classes(1), main(`<h1>A</h1>${long}`)), page('/two/', classes(2), main(`<h1>B</h1>${long}<img>`))],
-    { platform: 'wordpress' },
-  );
-  assert.deepEqual(alike.map((c) => [c.name, c.paths]), [['page', ['/one/', '/two/']]]);
+  // 9 shared tokens of 15: Jaccard 0.6, below a markup merge but well above the 0.5 split.
+  const text = main(`<h1>A</h1>${'<p>a</p>'.repeat(9)}`);
+  const gallery = main(`<h1>B</h1>${'<p>a</p>'.repeat(6)}<img><img><img>`);
+  const together = clusterPages([page('/one/', classes(1), text), page('/two/', classes(2), gallery)], wp);
+  assert.deepEqual(together.map((c) => [c.name, c.paths]), [['page', ['/one/', '/two/']]]);
+
+  // A different page template class is a different template, however alike the markup.
+  const full = ['page-template-full-width', 'page', 'page-id-3'];
+  const split = clusterPages([page('/one/', classes(1), text), page('/wide/', full, text)], wp);
+  assert.deepEqual(split.map((c) => [c.name, c.paths]), [['page', ['/one/']], ['page-2', ['/wide/']]]);
 });
 
 test('per-page classes and svg, script, style and noscript markup do not split a template', () => {
