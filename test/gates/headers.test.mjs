@@ -105,6 +105,47 @@ test('production: a preview-host noindex passes; noindex on /* fails', async () 
   assert.match(failed.stdout, /^ {2}\/\* X-Robots-Tag: expected "no noindex \(PUBLIC_INDEXABLE=true\)", got "noindex"$/m);
 });
 
+// A built page whose head has these robots metas.
+function page(dist, rel, robots = []) {
+  const file = join(dist, rel);
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, `<!doctype html><html><head>${robots.map((c) => `<meta name="robots" content="${c}">`).join('')}</head><body></body></html>`);
+}
+
+test('on Vercel, a meta robots noindex on every built page stands in for the X-Robots-Tag rule', async () => {
+  const site = vercelSite('site-vercel-meta', SECURE);
+  const dist = join(site, 'dist');
+  page(dist, 'index.html', ['noindex, nofollow']);
+  page(dist, 'about/index.html', ['index, follow', 'noindex, nofollow']);
+  page(dist, '404.html', ['noindex']);
+  const passed = await headers(dist, [], { cwd: site });
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^headers: 4 checked, 0 failed$/m);
+  page(dist, 'contact/index.html');
+  const failed = await headers(dist, [], { cwd: site });
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /^ {2}\/contact\/ robots: expected "noindex \(meta robots, or an X-Robots-Tag noindex rule\)", got null$/m);
+  assert.match(failed.stdout, /^headers: 4 checked, 1 failed$/m);
+  const production = await headers(dist, [], { cwd: site, indexable: 'true' });
+  assert.equal(production.code, 0, production.stdout);
+});
+
+test('on Vercel with no pages built and no X-Robots-Tag rule, noindex fails', async () => {
+  const site = vercelSite('site-vercel-empty', SECURE);
+  const result = await headers(join(site, 'dist'), [], { cwd: site });
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/\(\.\*\) X-Robots-Tag: expected "noindex", got null/);
+});
+
+test('a _headers host does not take meta robots in place of the header', async () => {
+  const dist = makeDist(join(root, 'dist-meta-only'));
+  edit(dist, '_headers', '  X-Robots-Tag: noindex\n', '');
+  page(dist, 'index.html', ['noindex, nofollow']);
+  const result = await headers(dist);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/\* X-Robots-Tag: expected "noindex", got null/);
+});
+
 test('CSP frame-ancestors stands in for X-Frame-Options', async () => {
   const { 'X-Frame-Options': _, ...rest } = SECURE;
   const csp = vercelSite('site-csp', { ...rest, 'Content-Security-Policy': "frame-ancestors 'self'", 'X-Robots-Tag': 'noindex' });
@@ -123,13 +164,15 @@ test('no vercel.json and no _headers fails', async () => {
   assert.match(result.stdout, /config: expected "vercel\.json or _headers", got null/);
 });
 
-test("the site template's public/_headers, copied into dist by the build, passes for production", async () => {
+test("the site template's public/_headers, copied into dist by the build, passes for staging and production", async () => {
   const template = new URL('../../skills/convert-site/templates/site/public/_headers', import.meta.url);
   const dir = join(root, 'template-site');
   mkdirSync(join(dir, 'dist'), { recursive: true });
   writeFileSync(join(dir, 'dist', '_headers'), readFileSync(template, 'utf8'));
-  const result = await headers(join(dir, 'dist'), [], { cwd: dir, indexable: 'true' });
-  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const production = await headers(join(dir, 'dist'), [], { cwd: dir, indexable: 'true' });
+  assert.equal(production.code, 0, production.stdout + production.stderr);
+  const staging = await headers(join(dir, 'dist'), [], { cwd: dir });
+  assert.equal(staging.code, 0, staging.stdout + staging.stderr);
 });
 
 test('usage errors exit 2 and --help exits 0', async () => {

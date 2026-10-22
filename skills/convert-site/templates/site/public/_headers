@@ -5,3 +5,8 @@
 
 /_astro/*
   Cache-Control: public, max-age=31536000, immutable
+
+# Cloudflare Pages preview deployments (*.pages.dev) stay out of search; the production
+# host has no such rule, and the build adds a meta robots noindex unless PUBLIC_INDEXABLE=true.
+https://*.pages.dev/*
+  X-Robots-Tag: noindex
