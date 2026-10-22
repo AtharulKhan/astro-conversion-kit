@@ -11,7 +11,9 @@
 // CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
 // A bot challenge (lib/challenge.mjs) on any page or discovery request stops the run at once:
 // the URL is recorded with status "challenge" (never a page) and queued again for --resume.
-import { createHash } from 'node:crypto';
+// After the crawl one path that cannot exist (/<32 hex>/) is requested once, so the site's own
+// 404 page lands in pages/404.html and meta.json `notFound` (it is not a route).
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +36,9 @@ const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
 Crawl a live site, read-only and paced, into a capture folder: one record per page in
 inventory.json, the raw HTML in pages/<slug>.html, the visible text in text/<slug>.txt,
 redirects.json (chains collapsed, hops kept), links.json, scripts.json (third-party vendors),
-meta.json, sitemaps/, robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
+meta.json (notFound: the site's 404 page, from one request for a path that cannot exist, saved
+as pages/404.html and text/404.txt), sitemaps/ (every sitemap robots.txt names, and their
+children), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
 on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
 wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
@@ -372,6 +376,38 @@ class Crawler {
   noteChallenge(url, found, { row = true } = {}) {
     this.state.challenge = { url, path: pathOf(url), provider: found.provider, cause: found.cause };
     if (row) this.addRecord({ ...extractPage('', url, { status: CHALLENGE, finalUrl: url }), challenge: found.cause });
+  }
+
+  // The site's own 404 page, from one request for a random path, once per capture. A 200 (a soft
+  // 404) or a redirect is recorded with no page; a challenge stops the run like any other.
+  async probeNotFound() {
+    if (this.state.notFound) return 'done';
+    const path = `/${randomBytes(16).toString('hex')}/`;
+    const url = new URL(path, this.state.canonicalOrigin).href;
+    const res = await this.fetch(url, { redirect: 'manual' });
+    const found = detectChallenge(res);
+    if (found) {
+      this.noteChallenge(url, found, { row: false });
+      return 'challenge';
+    }
+    const entry = { path, status: res.status, snapshot: null, text: null };
+    const location = res.headers?.location;
+    if (res.status >= 300 && res.status < 400 && location) {
+      const to = new URL(location, url);
+      entry.location = bareHost(to) === bareHost(new URL(url)) ? pathOf(to.href) : to.href;
+    }
+    const body = typeof res.body === 'string' ? res.body : '';
+    if ((res.status === 404 || res.status === 410) && HTML_TYPE.test(res.headers?.['content-type'] ?? '') && body) {
+      let slug = '404';
+      for (let n = 2; this.state.slugs[slug]; n += 1) slug = `404-${n}`;
+      this.state.slugs[slug] = url;
+      entry.snapshot = `pages/${slug}.html`;
+      entry.text = `text/${slug}.txt`;
+      writeText(join(this.out, entry.snapshot), body);
+      writeText(join(this.out, entry.text), `${extractPage(body, url).text}\n`);
+    }
+    this.state.notFound = entry;
+    return 'done';
   }
 
   // Follow one URL's redirects by hand. Returns { blocked, status }, { challenge } or
@@ -839,6 +875,7 @@ class Crawler {
       discoveryErrors: this.state.discoveryErrors ?? [],
       wayback: this.state.wayback ?? (this.state.options.noWayback ? { status: 'skipped' } : null),
       challenge: this.state.challenge ?? null,
+      notFound: this.state.notFound ?? null,
     });
     json('css/manifest.json', this.cssManifest());
     json('js/manifest.json', this.jsManifest());
@@ -961,6 +998,7 @@ async function main() {
   // A resumed run keeps the verify pass the first run asked for, flag or not.
   if (args.verifyShortlinks) state.options.verifyShortlinks = true;
   const verify = state.options.verifyShortlinks || (state.verifyQueue?.length ?? 0) > 0;
+  if (outcome === 'done') outcome = await crawler.probeNotFound();
   if (outcome === 'done') outcome = await crawler.fetchCss();
   if (outcome === 'done') outcome = await crawler.fetchJs();
   if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();

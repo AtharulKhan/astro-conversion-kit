@@ -2,7 +2,8 @@
 // Platform fingerprint: what a site is built on, and where its sitemaps are.
 // fingerprint(origin, { fetch }) uses at most 4 requests: `/`, `/robots.txt`, then the
 // robots-declared sitemap or `/sitemap_index.xml` (Drupal: `/sitemap.xml`), then `/sitemap.xml`
-// as a fallback when that found nothing. A home page that is a bot challenge (lib/challenge.mjs)
+// as a fallback when that found nothing. Every sitemap robots.txt names is in `robotsSitemaps`,
+// and each one is either fetched here or listed in `sitemapUrls`, so the capture reads them all. A home page that is a bot challenge (lib/challenge.mjs)
 // stops it there: `challenge` is { provider, cause } and nothing else is requested.
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +149,7 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
       hasRest: false,
       hasSitemap: false,
       sitemapUrls: [],
+      robotsSitemaps: [],
       robots: '',
       server: headers.server ?? null,
       poweredBy: headers['x-powered-by'] ?? null,
@@ -163,7 +165,8 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
 
   const robotsRes = await fetch(new URL('/robots.txt', base).href, { redirect: 'follow' });
   const robots = robotsRes.status === 200 ? String(robotsRes.body) : '';
-  const sitemapUrls = await findSitemaps(base, platform, declaredSitemaps(robots, base), fetch);
+  const robotsSitemaps = declaredSitemaps(robots, base);
+  const sitemapUrls = await findSitemaps(base, platform, robotsSitemaps, fetch);
 
   return {
     platform,
@@ -173,6 +176,7 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
     hasRest: detectRest(platform, html, headers),
     hasSitemap: sitemapUrls.length > 0,
     sitemapUrls,
+    robotsSitemaps,
     robots,
     server: headers.server ?? null,
     poweredBy: headers['x-powered-by'] ?? null,
@@ -205,6 +209,7 @@ function printHuman(result) {
     ['plugins', result.plugins.join(', ') || null],
     ['REST API', result.hasRest ? 'yes' : 'no'],
     ['sitemaps', result.sitemapUrls.join('\n            ') || 'none found'],
+    ['robots', result.robotsSitemaps.map((u) => `Sitemap: ${u}`).join('\n            ') || 'no Sitemap: lines'],
     ['server', result.server],
     ['powered by', result.poweredBy],
   ];

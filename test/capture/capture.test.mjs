@@ -798,3 +798,73 @@ test('a capture where no page answers 200 exits 3, not 0', async () => {
     await stub.close();
   }
 });
+
+test('the live 404 page is captured once, from a path that cannot exist, as pages/404.html and meta.json notFound', () => {
+  const meta = readJson(full, 'meta.json');
+  assert.equal(meta.notFound.status, 404);
+  assert.match(meta.notFound.path, /^\/[0-9a-f]{32}\/$/);
+  assert.equal(meta.notFound.snapshot, 'pages/404.html');
+  assert.equal(meta.notFound.text, 'text/404.txt');
+  assert.equal(fullRequests.filter((u) => u === meta.notFound.path).length, 1);
+  assert.match(readFileSync(join(full, 'pages/404.html'), 'utf8'), /<title>Page not found \| Fixture Roofing &amp; Siding<\/title>/);
+  assert.match(readFileSync(join(full, 'text/404.txt'), 'utf8'), /\S/);
+  assert.ok(!readJson(full, 'inventory.json').some((r) => r.path === meta.notFound.path), 'the probe is not a route');
+});
+
+test('a site that answers 200 or redirects for a missing path records that, with no 404 page', async () => {
+  const titled = (title) => `<html><head><title>${title}</title></head><body>${title}</body></html>`;
+  for (const [fallback, expected] of [
+    [{ body: titled('Home again') }, { status: 200, snapshot: null }],
+    [{ status: 302, headers: { Location: '/' } }, { status: 302, location: '/', snapshot: null }],
+  ]) {
+    // Any path the stub does not know answers `fallback`, the way a soft-404 site does.
+    const site = await startStub(new Proxy({ '/': { body: titled('Home') } }, {
+      get: (routes, key) => routes[key] ?? (/^\/[0-9a-f]{32}\/$/.test(key) ? fallback : undefined),
+    }));
+    try {
+      const out = tempDir();
+      const run = await capture([site.origin, '--out', out, '--delay', '0']);
+      assert.equal(run.code, 0, run.stderr);
+      const { notFound } = readJson(out, 'meta.json');
+      assert.equal(notFound.status, expected.status);
+      assert.equal(notFound.snapshot, expected.snapshot);
+      if (expected.location) assert.equal(notFound.location, expected.location);
+      assert.ok(!existsSync(join(out, 'pages/404.html')));
+    } finally {
+      await site.close();
+    }
+  }
+});
+
+test('every sitemap robots.txt names is fetched, saved under sitemaps/ and crawled, even one named nowhere else', async () => {
+  const urlset = (origin, paths) => `<urlset>${paths.map((p) => `<url><loc>${origin}${p}</loc></url>`).join('')}</urlset>`;
+  const xml = (body) => (origin) => ({ headers: { 'Content-Type': 'application/xml' }, body: body(origin) });
+  const titled = (title) => `<html><head><title>${title}</title></head><body>${title}</body></html>`;
+  const stub = await startStub({
+    '/': { body: titled('Home') },
+    '/robots.txt': { headers: { 'Content-Type': 'text/plain' }, body: 'User-agent: *\r\nSitemap: /sitemap_index.xml\r\nsitemap: /wp-sitemap.xml\r\n' },
+    '/sitemap_index.xml': xml((o) => `<sitemapindex><sitemap><loc>${o}/page-sitemap.xml</loc></sitemap></sitemapindex>`),
+    '/page-sitemap.xml': xml((o) => urlset(o, ['/'])),
+    '/wp-sitemap.xml': xml((o) => `<sitemapindex><sitemap><loc>${o}/wp-sitemap-posts-page-1.xml</loc></sitemap></sitemapindex>`),
+    '/wp-sitemap-posts-page-1.xml': xml((o) => urlset(o, ['/only-here/'])),
+    '/only-here/': { body: titled('Only here') },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    for (const name of ['sitemap_index.xml', 'page-sitemap.xml', 'wp-sitemap.xml', 'wp-sitemap-posts-page-1.xml']) {
+      assert.ok(existsSync(join(out, 'sitemaps', name)), name);
+    }
+    const onlyHere = readJson(out, 'inventory.json').find((r) => r.path === '/only-here/');
+    assert.equal(onlyHere?.status, 200);
+    assert.deepEqual(onlyHere.foundBy, ['sitemap']);
+    const fp = readJson(out, 'state.json').fingerprint;
+    assert.deepEqual(fp.robotsSitemaps.map((u) => new URL(u).pathname), ['/sitemap_index.xml', '/wp-sitemap.xml']);
+    for (const path of ['/sitemap_index.xml', '/wp-sitemap.xml', '/page-sitemap.xml', '/wp-sitemap-posts-page-1.xml']) {
+      assert.equal(stub.requests.filter((u) => u === path).length, 1, `${path} is requested once`);
+    }
+  } finally {
+    await stub.close();
+  }
+});

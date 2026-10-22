@@ -347,3 +347,25 @@ test('a tiny untitled 200 home page is a challenge named by the site host', asyn
     await stub.close();
   }
 });
+
+test('fingerprint reports every sitemap robots.txt names, and lists each one it did not expand', async () => {
+  const result = await fingerprint(fixture.origin, { fetch: fast });
+  assert.deepEqual(result.robotsSitemaps.map((u) => new URL(u).pathname), ['/sitemap_index.xml']);
+
+  const xml = (body) => (origin) => ({ headers: { 'Content-Type': 'application/xml' }, body: body(origin) });
+  const stub = await startStub({
+    '/': { body: '<html><head><title>Home</title></head></html>' },
+    '/robots.txt': { headers: { 'Content-Type': 'text/plain' }, body: 'Sitemap: /missing-sitemap.xml\nSitemap: /wp-sitemap.xml\n' },
+    '/wp-sitemap.xml': xml((o) => `<sitemapindex><sitemap><loc>${o}/wp-sitemap-posts-post-1.xml</loc></sitemap></sitemapindex>`),
+  });
+  try {
+    const found = await fingerprint(stub.origin, { fetch: fast });
+    assert.deepEqual(found.robotsSitemaps.map((u) => new URL(u).pathname), ['/missing-sitemap.xml', '/wp-sitemap.xml']);
+    assert.ok(found.sitemapUrls.some((u) => new URL(u).pathname === '/wp-sitemap.xml'), found.sitemapUrls.join(' '));
+    const { stdout } = await run(process.execPath, [SCRIPT, stub.origin, '--delay', '0']);
+    assert.match(stdout, /^robots:\s+.*\/missing-sitemap\.xml/m);
+    assert.match(stdout, /\/wp-sitemap\.xml/);
+  } finally {
+    await stub.close();
+  }
+});
