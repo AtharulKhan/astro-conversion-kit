@@ -22,8 +22,10 @@ stopping again, and ends with a pull request the person merges and a runbook the
    A forced difference is an exception; an improvement is a proposal (`PROPOSALS=on` only).
 4. **Gates on every commit, never softened.** Never edit `baseline/` to pass (only the `keep`
    flags in `baseline/scripts.json`). A skip is not a pass; "Not covered" is never a pass.
-5. **`main` gets the scaffold commit and nothing else.** All work is on `astro-rebuild`, one PR.
-   Never force-push, never merge, never touch DNS, the old host or a dashboard setting.
+5. **`main` gets the scaffold commit and nothing else.** On a new, empty repository init-site
+   makes one commit on `main`, the exception to "never commit to main": the PR needs a base.
+   Everything after it is on `astro-rebuild`, one PR. Never force-push, never merge, never
+   touch DNS, the old host or a dashboard setting.
 6. **No secrets in chat or in the repository.** Never ask the person to paste a token.
    Credentials come from the environment or a CLI's own login.
 
@@ -33,7 +35,8 @@ stopping again, and ends with a pull request the person merges and a runbook the
 `LIVE` is the live origin. `SITE` is the absolute path of the new site repository (default
 `<current folder>/<slug>`); the capture and the run state are written into it from the start,
 and `init-site.mjs` scaffolds around them. Run every command from `SITE`. Every script prints
-`--help`; run that rather than reading the source.
+`--help`; run that rather than reading the source. Every Node command in a fresh shell starts
+with `source ~/.nvm/nvm.sh && nvm use 22.23.4` (or runs in a shell that reads `.nvmrc`).
 
 ## Step 0a: a kit that can run
 
@@ -133,10 +136,8 @@ Vercel by default, Cloudflare Pages on request: `references/hosting-vercel.md` a
 ## Splitting the work
 
 If your agent can run subagents, use one implementer per template (phase 6) or per gate fix,
-never two on the same file. Every brief carries absolute paths (`KIT`, `SITE`, the capture files,
-the layout to write) and the rule set of `build-rules.md`; review their commits before the next
-phase. Without subagents, do the same work in the same order, one template at a time. Either way,
-`state.mjs` writes run one after another.
+never two on one file; each brief carries absolute paths and `build-rules.md`, and you review
+their commits before the next phase. Without subagents, the same work one template at a time.
 
 ## The one message after the plan
 

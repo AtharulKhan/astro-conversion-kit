@@ -64,8 +64,17 @@ Analytics and Tag Manager, Meta pixel, Hotjar, Clarity, HubSpot tracking, Interc
 LinkedIn, TikTok, Pinterest, Segment, Mixpanel, Plausible, Fathom, Matomo cloud, Crisp, Tawk,
 Zendesk), so the conversion never counts as visits in the live site's reports and late widgets
 never land in a shot; `--allow-analytics` on shoot and styles lets them load. The media download
-goes under `.conversion/media-cache/`, which the scaffold's `.gitignore` keeps out of git. On exit 3 from any script, follow the skill's "On exit
-3"; after two stops in a row, tell the person in one line and carry on with what was captured.
+goes under `.conversion/media-cache/`, which the scaffold's `.gitignore` keeps out of git. On
+exit 3 from any script, follow the skill's "On exit 3"; after two stops in a row, tell the
+person in one line and carry on with what was captured.
+
+**A protected site.** When `capture.mjs` exits 3 ("blocked") before the home page is saved
+(bot protection, a firewall or a login wall answers 403, 429 or 503 from the first requests),
+there is nothing to convert. End the run cleanly: add the needs-you item "the live site blocks
+the crawler: allow it (or run from a network it allows), then resume with `node
+$KIT/skills/capture-site/scripts/capture.mjs $LIVE --out capture --resume`", `S set
+phases.capture.result '{"stopped":"blocked"}'`, tell the person in one line with that command,
+and stop. Nothing is scaffolded; a later session resumes at phase 2 (SKILL.md, "Resuming").
 
 Pass `--seed <path>` for every old URL from the intake (`.htaccess`, redirect exports). Write the
 `## Notes` section of `capture/README.md` by hand, as the skill says. List files under `capture/`
@@ -108,7 +117,11 @@ The plan phase decides; the scaffold writes. Every decision goes into state with
    tag, a broken internal link, a redirect chain, a sitemap URL that 404s, a slug claimed twice
    (category base), a shortcode printed as text, an `http://` canonical, mixed content, a
    noindex page in the sitemap, a font loaded from a font service, theme scripts (`build-rules.md`).
-6. **Out-of-scope features** (search, comments, store, logins) with the options.
+6. **Out-of-scope features** the capture found (search, comments, store, logins), with the
+   options; the default reproduces the markup as it is (the feature stops working) and the
+   options are a third-party embed, keeping it on the old platform under a subdomain, or a
+   separate project. The forms, analytics ids and media size found go into the plan and the
+   status message too; the intake never asked for them.
 
 For example:
 

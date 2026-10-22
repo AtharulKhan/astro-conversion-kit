@@ -41,6 +41,34 @@ test('build-rules.md copies media outside the prefix; SKILL.md names routes as a
   assert.doesNotMatch(skill, /Forms, routes and scripts are not exception fields/);
 });
 
+test('intake.md: the message asks only what the owner knows, the Vercel team included', () => {
+  const template = read('references/intake.md').split('## The template')[1].split('\n## ')[0];
+  for (const asked of [/Repository\./, /Hosting\./, /Vercel team/, /`npx vercel teams ls`/, /Domain\./, /Test address\./, /Search Console\./, /Consent/]) {
+    assert.match(template, asked);
+  }
+  // What the capture answers is never asked before it.
+  assert.doesNotMatch(template, /<n> found|Found: <GA4|Out of scope \(needs a server\)|Large media/);
+});
+
+test('hosting-vercel.md: link with the scope, connect Git, deploy, and the needs-you line when a step fails', () => {
+  const vercel = read('references/hosting-vercel.md');
+  const steps = ['npx vercel link --yes --project <slug> --scope <team>', 'npx vercel git connect https://github.com/<owner>/<slug>.git', 'npx vercel deploy --yes'];
+  const at = steps.map((s) => vercel.indexOf(`    ${s}\n`));
+  assert.ok(at.every((i) => i > 0) && at[0] < at[1] && at[1] < at[2], 'the three steps in order');
+  assert.match(vercel, /`link` fails[^\n]*`npx vercel teams ls`/);
+  assert.match(vercel, /`git connect` fails/);
+});
+
+test('a protected site ends the run with the resume command; SKILL.md has the nvm line and the scaffold exception', () => {
+  const capture = read('references/phases.md').split(/^## /m).find((s) => s.startsWith('2. ')).replace(/\s+/g, ' ');
+  assert.match(capture, /\*\*A protected site\.\*\* When `capture\.mjs` exits 3 \("blocked"\)/);
+  assert.match(capture, /capture\.mjs \$LIVE --out capture --resume`/);
+  assert.match(capture, /Nothing is scaffolded/);
+  const skill = read('SKILL.md').replace(/\s+/g, ' ');
+  assert.match(skill, /Every Node command in a fresh shell starts with `source ~\/\.nvm\/nvm\.sh && nvm use 22\.23\.4`/);
+  assert.match(skill, /init-site makes one commit on `main`, the exception to "never commit to main"/);
+});
+
 test('intake.md: the time estimate counts every live read per page, per coverage page, per template and per media file', () => {
   const intake = read('references/intake.md');
   const estimate = intake.split('\n## ')[0];

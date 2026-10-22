@@ -7,8 +7,11 @@ and 2 for the full-set live shots (390 and 1440); per coverage page (up to 10 pe
 coverage loads (one per width); per template, 3 live shots and 3 style loads per review round;
 plus 1 per media file. 200 pages in 4 templates with 1,000 media files:
 (200 × 3 + 40 × 3 + 4 × 6 + 1,000) × 2.5 s, about 73 minutes.
-Fill every `<...>` from what you found; delete a question only when you already know the answer,
-and say what you found instead. Keep each default exactly as stated, so a person who answers
+Fill every `<...>` from what preflight and the fingerprint found; delete a question only when
+you already know the answer, and say what you found instead. Ask only what the owner knows:
+form counts, analytics ids, media size and server-side features (search, comments, store,
+logins) come from the capture in phase 2 and go into the plan and the status message after it,
+never into this message. Keep each default exactly as stated, so a person who answers
 "go" gets a predictable run. For an `experience: new` person, add one plain sentence under the
 opening explaining what a repository, a staging deploy and a pull request are.
 
@@ -21,31 +24,28 @@ opening explaining what a repository, a staging deploy and a pull request are.
     request without stopping. Answer only what you want to change; every line has a default.
 
     1. Repository. Default: a new private GitHub repo <gh user>/<slug>, in <folder>/<slug>.
+       Name another owner (an organisation) or an existing empty repo if you prefer.
        <If gh is not logged in: "Run `gh auth login` in a terminal if you want me to create it;
        otherwise the repo stays on this machine and pushing it is on your list.">
     2. Hosting. Default: Vercel. Or Cloudflare Pages. <Logged in: "You're logged in to <cli>, so
        I'll create a project and a noindexed staging deploy." Not logged in: "Run `npx vercel
        login` (or `npx wrangler login`) if you want a staging deploy; otherwise you get a local
        preview and the deploy is on your list.">
-    3. Forms (<n> found: <pages>). Default: they post to Formspree, with the same fields. If you
-       prefer another form service, name it. (I'll ask for the form id when I wire the forms;
-       nothing waits on it.)
-    4. Test address. One test submission goes to the address you give here, once, from the
+       <Vercel: "Which Vercel team should the project live in? Default: your personal account.
+       `npx vercel teams ls` lists the teams you can use.">
+    3. Domain. Default: <host of LIVE> stays the domain; the new site replaces the old one there
+       on launch day (you move DNS, not me).
+    4. Forms that send a message (contact, quote). Default: they post to Formspree, with the
+       same fields; a search box stays as it is. If you prefer another form service, name it. (I'll ask for the form id when I wire the forms; nothing waits on it.)
+    5. Test address. One test submission goes to the address you give here, once, from the
        staging copy; never to an address found on the site. Default: none, and no test is sent.
-    5. Analytics and tags. Found: <GA4 G-..., GTM-..., others>. Default: every one carries
-       over unchanged. Name any to drop, or IDs I could not see (server-side, consent tools).
-    6. Redirects. Default: every redirect the crawl finds. If you have an old .htaccess, a
+    6. Search Console. Default: you export the current Search Console data before DNS moves (it
+       is on your launch list). Say if there is no Search Console property for the site.
+    7. Consent and tags I cannot see. Default: every tag the capture finds carries over
+       unchanged. Name any consent tool, server-side tag or tag to drop.
+    8. Redirects. Default: every redirect the crawl finds. If you have an old .htaccess, a
        redirect plugin export or a list of old URLs, send the file.
-    7. Pages that must not change, or must be left out. Default: none; every page converts.
-    8. Out of scope (needs a server): <search / comments / store / logins found, or "none
-       found">. Default: the markup is reproduced as it is, the feature stops working, and the
-       plan lists the options (a third-party embed, keeping it on the old platform under a
-       subdomain, a separate project) for you to choose later.
-    9. Large media. <Only when the capture is likely over the limits: "The media library looks
-       large."> Default: media stays in the repo if under 300 MB, every file under 25 MB and
-       under 10,000 files; otherwise it goes to <Vercel Blob / Cloudflare R2> if store
-       credentials are in this machine's environment, else staging borrows it from the live
-       site until you create the store.
+    9. Pages that must not change, or must be left out. Default: none; every page converts.
     10. Components. Default: off. Say "components" if you want repeated blocks (cards, calls
         to action) turned into Astro components after everything matches.
 
@@ -81,7 +81,7 @@ lives in `$SITE/.conversion/` from the start; `init-site.mjs` scaffolds around i
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set site '"<LIVE>"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set hosting '"vercel"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set repo '"<owner>/<slug>"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","analytics":["G-..."],"keepPages":[],"components":false}'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":null,"consent":[],"keepPages":[],"components":false}'
 
 Every default you applied is also a decision (`state.mjs decision`), so the PR shows it. Add each
 missing item to `needsYou` as `{ "item": "...", "command": "...", "before": "<phase or DNS>" }`:

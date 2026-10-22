@@ -4,27 +4,46 @@ The default host. The site is a static project with no adapter; `vercel.json` ca
 the URL mode, the redirects (from `redirects.csv`) and, when media is not in the repo, one rewrite.
 The kit's `docs/hosting.md` explains the background; this file is what you run.
 
-You deploy previews. You never change project settings in the dashboard, never add a domain, and
-never set an environment variable other than the one the runbook names for launch day.
+You create and link the project, connect it to its repository and deploy previews. You never
+change project settings in the dashboard, never add a domain, and never set an environment
+variable other than the one the runbook names for launch day.
 
 ## Project and staging deploy (phase 10, prelaunch)
 
-Only when `preflight.mjs` reports `vercel.loggedIn: true`. From `SITE`:
+Only when `preflight.mjs` reports `vercel.loggedIn: true`. From `SITE`, in this order, with
+`<team>` the Vercel team from the intake (`S get intake.vercelScope`); for the personal account
+(the default, `null`) leave `--scope <team>` out:
 
-    npx vercel link --yes --project <slug>
+    npx vercel link --yes --project <slug> --scope <team>
+    npx vercel git connect https://github.com/<owner>/<slug>.git
     npx vercel deploy --yes
 
-`vercel link` creates the project in the person's default scope when it does not exist; it writes
-`.vercel/`, which must stay out of git (add `.vercel` to `.gitignore` if it is not there). The
-deploy prints the preview URL: that is the staging URL. The CLI uploads the repository minus
-`.vercelignore`, which the scaffold writes with `/.conversion/` (run state and the media
-download), `/review/` and the ignored `/capture/screens/` and `/capture/lighthouse-live/`;
-`capture/` itself is uploaded, because the build reads it. Record the URL:
-`S set staging '"<url>"'`. Previews build without `PUBLIC_INDEXABLE`, so they are noindexed.
+`vercel link` creates the project in that scope when it does not exist; it writes `.vercel/`,
+which must stay out of git (add `.vercel` to `.gitignore` if it is not there). On an account in
+several teams, `link --yes` without `--scope` fails: never guess a team. `vercel git connect`
+links the project to the GitHub repository, so the person's merge to `main` deploys from Git
+(the same link as Project Settings, Git, in the dashboard); it needs the repository pushed and
+the Vercel GitHub app allowed on that owner. `vercel deploy --yes` is the staging deploy: it
+prints the preview URL, the staging URL. The CLI uploads the repository minus `.vercelignore`,
+which the scaffold writes with `/.conversion/` (run state and the media download), `/review/`
+and the ignored `/capture/screens/` and `/capture/lighthouse-live/`; `capture/` itself is
+uploaded, because the build reads it. Record the URL: `S set staging '"<url>"'`. Previews build
+without `PUBLIC_INDEXABLE`, so they are noindexed.
 
-Not logged in: no deploy. `npm run build` and `npm run preview` locally, the staging audit and
-`verify-live` go under "Not covered", and "log in, then `npx vercel link --yes --project <slug>`
-and `npx vercel deploy`" goes on the needs-you list.
+When a step fails, record its needs-you line and go on as the next paragraph says for the
+steps after it:
+
+- `link` fails (scope missing or wrong, no access): "`npx vercel teams ls`, then
+  `npx vercel link --yes --project <slug> --scope <team>`, `npx vercel git connect <repo url>`
+  and `npx vercel deploy --yes`"; no deploy.
+- `git connect` fails (no remote yet, or the GitHub app cannot see the repository): "connect the
+  Vercel project to <owner>/<slug>: `npx vercel git connect <repo url>`, or Project Settings,
+  Git, in the dashboard"; the staging deploy still runs from the CLI.
+
+Not logged in, or no deploy: `npm run build` and `npm run preview` locally, the staging audit
+and `verify-live` go under "Not covered", and "log in (`npx vercel login`), then
+`npx vercel link --yes --project <slug> --scope <team>`, `npx vercel git connect <repo url>`
+and `npx vercel deploy --yes`" goes on the needs-you list.
 
 ## Indexing
 
