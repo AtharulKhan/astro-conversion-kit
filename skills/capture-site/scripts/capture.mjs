@@ -301,7 +301,7 @@ class Crawler {
     return async (url, options) => {
       for (let attempt = 1; ; attempt += 1) {
         const res = await this.fetch(url, options);
-        const verdict = this.judge(res);
+        const verdict = this.judge(res, url);
         if (verdict?.stop) throw new Challenged(url, verdict.stop);
         if (!BLOCK_STATUSES.has(res.status)) {
           this.noteOk();
@@ -329,7 +329,7 @@ class Crawler {
     const fetch = this.discoveryFetch();
     try {
       if (!this.state.fingerprint) {
-        const fp = await fingerprint(this.state.origin, { fetch });
+        const fp = await fingerprint(this.state.origin, { fetch, detect: false });
         if (BLOCK_STATUSES.has(fp.homeStatus)) return 'blocked';
         const live = this.homeRes?.finalUrl ? new URL(this.homeRes.finalUrl) : null;
         this.state.canonicalOrigin =
@@ -380,31 +380,48 @@ class Crawler {
 
   // How much a challenge match weighs. A signature (SiteGround, Cloudflare, a redirect to a
   // captcha path) stops the run at once. The tiny-page heuristic stops it only on the capture's
-  // first HTML response, or on the SUSPECT_LIMIT-th such response in a row (the earlier ones are
-  // queued again with it); otherwise it is a suspect. Any other HTML answer resets the streak.
+  // first HTML answer, or on the SUSPECT_LIMIT-th such page in a row (the earlier ones are queued
+  // again with it); otherwise it is a suspect. A heuristic stop happens at most once per URL
+  // (state.heuristicStops): asked again, a URL that still matches is a suspect and the crawl goes
+  // on, so real tiny pages cannot stop every resume. Only an HTML answer that is neither a
+  // redirect nor a block counts as the first answer or breaks the streak.
+  // `url` is the URL that answered; `item` the queue item (null outside the crawl).
   // Returns null, { stop, requeue[] } or { suspect }.
-  judge(res, item = null) {
+  judge(res, url, item = null) {
     const found = detectChallenge(res);
     if (!found) {
-      if (HTML_TYPE.test(res.headers?.['content-type'] ?? '')) {
+      const { status } = res;
+      const answered = typeof status === 'number' && !BLOCK_STATUSES.has(status) && !(status >= 300 && status < 400);
+      if (answered && HTML_TYPE.test(res.headers?.['content-type'] ?? '')) {
         this.state.firstHtmlSeen = true;
         this.suspects = [];
       }
       return null;
     }
-    if (found.kind === 'signature' || !this.state.firstHtmlSeen) return { stop: found, requeue: [] };
-    this.suspects.push(item);
+    if (found.kind === 'signature') return { stop: found, requeue: [] };
+    const stopped = (this.state.heuristicStops ??= []);
+    if (stopped.includes(pathOf(url))) {
+      this.state.firstHtmlSeen = true;
+      return { suspect: found };
+    }
+    if (!this.state.firstHtmlSeen) {
+      stopped.push(pathOf(url));
+      return { stop: found, requeue: [] };
+    }
+    if (!item) return { suspect: found };
+    this.suspects.push({ url, kind: item.kind });
     if (this.suspects.length < SUSPECT_LIMIT) return { suspect: found };
-    const requeue = this.suspects.slice(0, -1).filter(Boolean).map((i) => ({ url: i.url, attempts: 0, kind: i.kind }));
+    const streak = this.suspects;
     this.suspects = [];
-    return { stop: found, requeue };
+    for (const s of streak) stopped.push(pathOf(s.url));
+    return { stop: found, requeue: streak.slice(0, -1).map((s) => ({ url: s.url, attempts: 0, kind: s.kind })) };
   }
 
   // Where the run stopped on a challenge: state.challenge for meta.json, and (for a page) an
   // inventory row with status "challenge" and no snapshot. Suspect rows queued again with it
   // become "challenge" rows too, so a resume asks for them again.
   noteChallenge(url, found, { row = true, requeue = [] } = {}) {
-    this.state.challenge = { url, path: pathOf(url), provider: found.provider, cause: found.cause };
+    this.state.challenge = { url, path: pathOf(url), provider: found.provider, cause: found.cause, kind: found.kind };
     for (const { url: again } of requeue) {
       for (const r of [this.state.records.find((x) => x.url === again), this.full.get(again)]) if (r) r.status = CHALLENGE;
       this.recorded.delete(again);
@@ -413,17 +430,20 @@ class Crawler {
   }
 
   // The site's own 404 page, from one request for a random path, once per capture. A 200 (a soft
-  // 404) or a redirect is recorded with no page; a challenge stops the run like any other.
+  // 404) or a redirect is recorded with no page; a challenge stops the run like any other; a
+  // blocked answer leaves it for the next run.
   async probeNotFound() {
     if (this.state.notFound) return 'done';
     const path = `/${randomBytes(16).toString('hex')}/`;
     const url = new URL(path, this.state.canonicalOrigin).href;
     const res = await this.fetch(url, { redirect: 'manual' });
-    const verdict = this.judge(res);
+    const verdict = this.judge(res, url);
     if (verdict?.stop) {
       this.noteChallenge(url, verdict.stop, { row: false });
       return 'challenge';
     }
+    // Blocked or unreachable: left unset, so the next run asks again.
+    if (BLOCK_STATUSES.has(res.status)) return 'done';
     const entry = { path, status: verdict?.suspect ? SUSPECT : res.status, snapshot: null, text: null };
     const location = res.headers?.location;
     if (res.status >= 300 && res.status < 400 && location) {
@@ -452,7 +472,7 @@ class Crawler {
     let current = start;
     for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
       const res = await this.fetch(current, { redirect: 'manual' });
-      const verdict = this.judge(res, item);
+      const verdict = this.judge(res, current, item);
       if (verdict?.stop) return { challenge: verdict.stop, requeue: verdict.requeue };
       if (verdict?.suspect) res.suspect = verdict.suspect;
       if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
@@ -1016,12 +1036,16 @@ async function main() {
   const stopChallenge = () => {
     crawler.writeOutputs({ finished: false });
     saveState(out, state);
-    const { provider, cause, path } = state.challenge;
+    const { provider, cause, path, kind } = state.challenge;
+    const tiny = kind === 'heuristic'
+      ? `\nIf ${path} is a real page that is this small and untitled, run --resume anyway: it is then recorded "suspect-challenge" and `
+        + 'the crawl goes on; give pages it cannot reach with --seed <path> (or --seed-file).'
+      : '';
     console.error(
       `blocked: ${provider ?? new URL(state.origin).hostname} anti-bot challenge (${cause}) at ${path}.\n`
         + 'The host or its firewall is checking for a real browser; the capture does not get past that and will not try.\n'
         + 'Needs the site owner: allowlist the capture machine\'s public IP on the host or in the WAF for the capture window, '
-        + 'or send a URL list. Then run the same command with --resume.',
+        + `or send a URL list (then --seed-file it). Then run the same command with --resume.${tiny}`,
     );
     process.exit(3);
   };
@@ -1054,7 +1078,8 @@ async function main() {
   if (failed === inventory.length) {
     console.error(
       `Stopped: no page answered 200 (${inventory.length} recorded, none with content), so there is nothing to build from. `
-        + `Check inventory.json and whether ${state.origin} is blocking the capture; then run again with --resume, or --seed the pages.`,
+        + `Check inventory.json and whether ${state.origin} is blocking the capture or this is the wrong origin. `
+        + 'Then give the pages with --seed <path> or --seed-file <file> on --resume, or start a fresh capture in a new --out folder.',
     );
     process.exit(3);
   }

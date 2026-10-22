@@ -72,3 +72,15 @@ test('known signatures are "signature"; the tiny-page rule alone is "heuristic"'
   assert.equal(detectChallenge({ status: 403, headers: { ...html, 'cf-mitigated': 'challenge' }, body: '' }).kind, 'signature');
   assert.equal(detectChallenge({ status: 200, headers: html, body: '<html><body></body></html>' }).kind, 'heuristic');
 });
+
+test('Cloudflare Bot Fight Mode script alone on a real 403 or 503 is not a challenge; challenge markers are', () => {
+  const jsd = '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>';
+  const real = (status) => ({ status, headers: html, body: `<html><head><title>Forbidden | Acme</title></head><body>No.${jsd}</body></html>` });
+  assert.equal(detectChallenge(real(403)), null);
+  assert.equal(detectChallenge(real(503)), null);
+  const orchestrate = '<html><body><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=1"></script></body></html>';
+  assert.equal(detectChallenge({ status: 403, headers: html, body: orchestrate }).provider, 'Cloudflare');
+  const titled = `<html><head><title>Just a moment...</title></head><body>${jsd}</body></html>`;
+  assert.equal(detectChallenge({ status: 503, headers: html, body: titled }).provider, 'Cloudflare');
+  assert.equal(detectChallenge({ status: 403, headers: { ...html, 'cf-mitigated': 'challenge' }, body: real(403).body }).provider, 'Cloudflare');
+});

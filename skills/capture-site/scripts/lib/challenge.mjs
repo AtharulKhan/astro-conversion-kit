@@ -1,7 +1,9 @@
 // Anti-bot challenges: an answer that is a host's or WAF's "prove you are a browser" page, not
 // the site. detectChallenge({ status, headers, body, finalUrl }) -> { provider, cause } or null.
 // - SiteGround: a redirect, meta refresh or JS redirect to /.well-known/sgcaptcha/;
-// - Cloudflare: the `cf-mitigated: challenge` header, or /cdn-cgi/challenge-platform/ markup;
+// - Cloudflare: the `cf-mitigated: challenge` header, or /cdn-cgi/challenge-platform/ markup with
+//   a challenge marker (/h/, orchestrate, chl_page or a challenge title): Bot Fight Mode puts
+//   /cdn-cgi/challenge-platform/scripts/jsd/main.js on every page, real error pages included;
 // - generic: a tiny HTML page on 202, 403 or 503 that redirects (meta refresh or JS) to a
 //   challenge path;
 // - and any success status whose HTML body is under 2 KB with no <title>, or a challenge title.
@@ -17,12 +19,13 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const HTML_TYPE = /^(text\/html|application\/xhtml\+xml)/i;
 const SITEGROUND = /\/\.well-known\/sgcaptcha\//;
 const CLOUDFLARE = /\/cdn-cgi\/challenge-platform\//;
+const CLOUDFLARE_MARKER = /\/cdn-cgi\/challenge-platform\/h\/|orchestrate|chl_page|<title[^>]*>\s*(just a moment|attention required)/i;
 const CHALLENGE_PATH = /\/\.well-known\/|captcha|challenge|bot-?check|verify|human/i;
 const CHALLENGE_TITLE = /just a moment|attention required|checking your browser|security check|robot challenge|captcha|are you (a )?human|ddos-guard|bot verification/i;
 
 const KNOWN = [
   { provider: 'SiteGround', pattern: SITEGROUND, path: '/.well-known/sgcaptcha/' },
-  { provider: 'Cloudflare', pattern: CLOUDFLARE, path: '/cdn-cgi/challenge-platform/' },
+  { provider: 'Cloudflare', pattern: CLOUDFLARE, path: '/cdn-cgi/challenge-platform/', marker: CLOUDFLARE_MARKER },
 ];
 
 // The target of a meta refresh or a JS location change in the page, or null.
@@ -61,7 +64,7 @@ export function detectChallenge({ status, headers = {}, body = '', finalUrl = nu
   const bytes = Buffer.byteLength(body);
 
   if (MARKUP_STATUSES.has(status)) {
-    for (const k of KNOWN) if (k.pattern.test(body)) return { kind: 'signature', provider: k.provider, cause: `${status} with a page that loads ${k.path}` };
+    for (const k of KNOWN) if (k.pattern.test(body) && (!k.marker || k.marker.test(body))) return { kind: 'signature', provider: k.provider, cause: `${status} with a page that loads ${k.path}` };
     const target = bytes < TINY_BYTES ? redirectTarget(body) : null;
     if (target && CHALLENGE_PATH.test(target)) return { kind: 'signature', provider: null, cause: `${status} with a ${bytes}-byte page that redirects to ${target}` };
   }

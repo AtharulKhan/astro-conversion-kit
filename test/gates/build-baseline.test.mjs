@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
-import { buildRedirects } from '../../skills/parity-gates/scripts/build-baseline.mjs';
+import { buildRedirects, buildRoutes } from '../../skills/parity-gates/scripts/build-baseline.mjs';
 
 const exec = promisify(execFile);
 const script = (path) => fileURLToPath(new URL(`../../skills/${path}`, import.meta.url));
@@ -319,4 +319,12 @@ test('a capture with no page that answered 200 exits 2 and writes nothing', asyn
   assert.equal(result.code, 2);
   assert.match(result.stderr, /no page .*answered 200/i);
   assert.ok(!existsSync(out), 'nothing written');
+});
+
+test('a "suspect-challenge" page stays a route with that status, so the routes gate asks for a decision', () => {
+  const routes = buildRoutes({
+    inventory: [{ path: '/empty/', status: 'suspect-challenge', snapshot: null, bodyClasses: [] }],
+    feeds: [], media: [], templates: [], rest: {}, foundBy: {},
+  });
+  assert.deepEqual(routes.map((r) => `${r.path}:${r.status}`), ['/empty/:suspect-challenge']);
 });

@@ -792,6 +792,7 @@ test('a capture where no page answers 200 exits 3, not 0', async () => {
     const run = await capture([stub.origin, '--out', out, '--delay', '0']);
     assert.equal(run.code, 3, run.stderr);
     assert.match(run.stderr, /no page answered 200/);
+    assert.match(run.stderr, /--seed/);
     assert.doesNotMatch(run.stdout, /Captured/);
     assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:404']);
   } finally {
@@ -926,5 +927,86 @@ test('three tiny untitled pages in a row stop the capture; all three are queued 
     assert.ok(!stub.requests.includes('/d/'), 'the crawl stopped');
   } finally {
     await stub.close();
+  }
+});
+
+test('a real tiny untitled home page stops the capture once; on --resume it is a suspect and --seed supplies real pages', async () => {
+  const stub = await startStub({ '/': untitled, '/real/': titledPage('Real') });
+  try {
+    const out = tempDir();
+    const first = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(first.code, 3, first.stderr);
+    assert.match(first.stderr, /--seed/);
+    const again = await capture([stub.origin, '--out', out, '--delay', '0', '--resume', '--seed', '/real/']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:suspect-challenge', '/real/:200']);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('three real tiny untitled pages stop the capture once; on --resume they are suspects and the crawl goes on', async () => {
+  const stub = await startStub({
+    '/': titledPage('Home', '<a href="/a/">a</a> <a href="/b/">b</a> <a href="/c/">c</a> <a href="/d/">d</a>'),
+    '/a/': untitled,
+    '/b/': untitled,
+    '/c/': untitled,
+    '/d/': titledPage('D'),
+  });
+  try {
+    const out = tempDir();
+    assert.equal((await capture([stub.origin, '--out', out, '--delay', '0'])).code, 3);
+    const again = await capture([stub.origin, '--out', out, '--delay', '0', '--resume']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.deepEqual(
+      readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`),
+      ['/:200', '/a/:suspect-challenge', '/b/:suspect-challenge', '/c/:suspect-challenge', '/d/:200'],
+    );
+  } finally {
+    await stub.close();
+  }
+});
+
+test('suspects reached through redirects are recorded and queued again under the same URL', async () => {
+  const hop = (to) => ({ status: 301, headers: { Location: to } });
+  const stub = await startStub({
+    '/': titledPage('Home', '<a href="/r1/">1</a> <a href="/r2/">2</a> <a href="/r3/">3</a>'),
+    '/r1/': hop('/t1/'),
+    '/r2/': hop('/t2/'),
+    '/r3/': hop('/t3/'),
+    '/t1/': untitled,
+    '/t2/': untitled,
+    '/t3/': untitled,
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 3, run.stderr);
+    const rows = readJson(out, 'inventory.json').filter((r) => r.status === 'challenge').map((r) => r.path);
+    const queued = readJson(out, 'state.json').queue.slice(0, 3).map((q) => new URL(q.url).pathname);
+    assert.deepEqual(queued, ['/t1/', '/t2/', '/r3/']);
+    assert.deepEqual(rows.sort(), [...queued].sort());
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a 404 probe that is blocked leaves notFound unset, so a resume asks again', async () => {
+  let answer = { status: 503, headers: { 'Content-Type': 'text/plain' }, body: 'busy' };
+  const site = await startStub(new Proxy({ '/': titledPage('Home') }, {
+    get: (routes, key) => routes[key] ?? (/^\/[0-9a-f]{32}\/$/.test(key) ? answer : undefined),
+  }));
+  try {
+    const out = tempDir();
+    const run = await capture([site.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(readJson(out, 'meta.json').notFound, null);
+    answer = { status: 404, body: '<html><head><title>Not found</title></head><body>Gone</body></html>' };
+    const again = await capture([site.origin, '--out', out, '--delay', '0', '--resume']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(readJson(out, 'meta.json').notFound.status, 404);
+    assert.ok(existsSync(join(out, 'pages/404.html')));
+  } finally {
+    await site.close();
   }
 });

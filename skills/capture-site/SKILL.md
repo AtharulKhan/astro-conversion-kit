@@ -134,14 +134,17 @@ URL answered; it is usually a block or a challenge (below), or a wrong origin.
 Some hosts and firewalls answer a script with a bot challenge instead of the page: SiteGround
 answers `202` with a page of a few hundred bytes that refreshes to `/.well-known/sgcaptcha/`;
 Cloudflare answers `403` or `503` with `cf-mitigated: challenge` and a "Just a moment..." page
-loading `/cdn-cgi/challenge-platform/`; others send a tiny page with no title, or one that
+loading `/cdn-cgi/challenge-platform/h/...` (the Bot Fight Mode script `.../scripts/jsd/main.js`
+alone, which Cloudflare adds to every page, is not a challenge); others send a tiny page with no title, or one that
 redirects to a captcha path. Every page then looks the same, so a capture of it is worthless.
 
 - `fingerprint` prints `blocked: <host> anti-bot challenge (<cause>)` and exits 3.
 - A tiny untitled page alone (no known signature) stops a run only as the capture's first HTML
   answer or the third in a row; a single one mid-crawl (a stub, an empty archive) is recorded
   with status `"suspect-challenge"`, listed under `## Notes`, and the crawl goes on. Open each
-  in a browser and note whether it is a real page.
+  in a browser and note whether it is a real page. Such a stop happens once per URL: if the
+  page is real, `--resume` records it as a suspect and goes on, and `--seed` supplies pages the
+  crawl cannot reach from it.
 - `capture` stops at the first challenge on the site (exit 3, state saved): the URL is in
   `inventory.json` with status `"challenge"` (never counted as a page) and in `meta.json`
   `challenge`, and the README's `## Notes` name the cause. It is never retried: waiting does not

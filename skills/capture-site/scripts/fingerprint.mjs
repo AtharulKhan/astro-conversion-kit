@@ -131,12 +131,13 @@ async function findSitemaps(origin, platform, declared, fetch) {
   return others;
 }
 
-export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
+// detect: false leaves challenge detection to the caller's fetch (capture.mjs judges every answer).
+export async function fingerprint(origin, { fetch = fetchPaced, detect = true } = {}) {
   const base = new URL(origin).origin;
   const home = await fetch(new URL('/', base).href, { redirect: 'follow' });
   const html = home.status === 200 ? String(home.body) : '';
   const headers = home.headers ?? {};
-  const challenge = detectChallenge(home);
+  const challenge = detect ? detectChallenge(home) : null;
 
   // Unreachable, blocking or challenging: do not keep knocking.
   if (home.status === 0 || BLOCK_STATUSES.has(home.status) || challenge) {
