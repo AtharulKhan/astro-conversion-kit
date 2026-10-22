@@ -9,7 +9,7 @@ export const DEFAULT_PROPOSALS = 'proposals.json';
 export const EXCEPTION_KEYS = ['path', 'field', 'from', 'to', 'reason', 'approvedBy', 'date'];
 export const EXCEPTION_FIELDS = [
   'title', 'description', 'canonical', 'robots', 'lang', 'h1', 'h2', 'text',
-  'og', 'jsonLd', 'link', 'redirect', 'media',
+  'og', 'jsonLd', 'link', 'redirect', 'media', 'routes',
 ];
 const MAY_BE_EMPTY = new Set(['from', 'to']);
 

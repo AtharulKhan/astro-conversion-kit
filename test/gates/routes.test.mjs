@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -136,6 +136,57 @@ test('a page at a baseline redirect source is not an extra', async () => {
   writeFileSync(join(dist, 'old-services', 'index.html'), '<!doctype html><meta http-equiv="refresh" content="0;url=/services/">');
   const result = await routes(dist);
   assert.equal(result.code, 0, result.stdout);
+});
+
+// A copy of the baseline whose routes.json also holds the given rows.
+function baselineWith(name, rows) {
+  const dir = join(root, name);
+  cpSync(baseline, dir, { recursive: true });
+  const list = JSON.parse(readFileSync(join(dir, 'routes.json'), 'utf8'));
+  const route = (path, status) => ({ path, status, kind: 'other', template: 'other', noindex: false, snapshot: null, foundBy: ['crawl'] });
+  writeFileSync(join(dir, 'routes.json'), JSON.stringify([...list, ...rows.map(([path, status]) => route(path, status))]));
+  return dir;
+}
+const record = (fields) => ({ field: 'routes', reason: 'test', approvedBy: 'client', date: '2026-10-22', ...fields });
+const UNCAPTURED = [['/down/', 503], ['/dead/', 0], ['/moved/', 301], ['/gone/', 410], ['/missing/', 404]];
+
+test('a route captured at a status other than 200, 3xx, 404 or 410 fails as not captured', async () => {
+  const dir = baselineWith('baseline-uncaptured', UNCAPTURED);
+  const result = await runGate('routes', ['--dist', good, '--baseline', dir], { cwd: root });
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/down\/ status: expected "200, 3xx, 404 or 410", got "not captured: 503"$/m);
+  assert.match(result.stdout, /^ {2}\/dead\/ status: expected "200, 3xx, 404 or 410", got "not captured: 0"$/m);
+  assert.doesNotMatch(result.stdout, /\/(moved|gone|missing)\//);
+  assert.match(result.stdout, /^ {2}2 routes not captured \(status other than 200, 3xx, 404 or 410\): 2 failed, 0 skipped, 0 replaced$/m);
+  assert.match(result.stdout, /^routes: 16 checked, 2 failed$/m);
+});
+
+test('a routes exception skips an uncaptured route or names its built replacement; a stale one fails', async () => {
+  const dir = baselineWith('baseline-uncaptured-ok', UNCAPTURED);
+  const gate = (exceptions) => {
+    const file = join(root, `routes-exceptions-${exceptions.length}-${Math.random()}.json`);
+    writeFileSync(file, JSON.stringify(exceptions));
+    return runGate('routes', ['--dist', good, '--baseline', dir, '--exceptions', file], { cwd: root });
+  };
+  const passed = await gate([record({ path: '/down/', from: '503', to: 'skip' }), record({ path: '/dead/', from: '0', to: '/about/' })]);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^ {2}\/down\/ skipped: not captured: 503 \(exception: skip\)$/m);
+  assert.match(passed.stdout, /^ {2}2 routes not captured \(status other than 200, 3xx, 404 or 410\): 0 failed, 1 skipped, 1 replaced$/m);
+  assert.match(passed.stdout, /^routes: 16 checked, 0 failed, 1 skipped \(not captured, exception skip\)$/m);
+
+  const unbuilt = await gate([record({ path: '/down/', from: '503', to: 'skip' }), record({ path: '/dead/', from: '0', to: '/nowhere/' })]);
+  assert.equal(unbuilt.code, 1);
+  assert.match(unbuilt.stdout, /^ {2}\/dead\/ file: expected "nowhere\/index\.html", got null$/m);
+
+  const stale = await gate([
+    record({ path: '/down/', from: '503', to: 'skip' }),
+    record({ path: '/dead/', from: '0', to: 'skip' }),
+    record({ path: '/about/', from: '503', to: 'skip' }),
+    record({ path: '/down/', from: '500', to: 'skip' }),
+  ]);
+  assert.equal(stale.code, 1);
+  assert.match(stale.stdout, /^ {2}\/about\/ exception: .*"no longer matches the baseline"$/m);
+  assert.match(stale.stdout, /^ {2}\/down\/ exception: expected \{"field":"routes","from":"500","to":"skip"\}.*"no longer matches the baseline"$/m);
 });
 
 test('--paths limits the check', async () => {

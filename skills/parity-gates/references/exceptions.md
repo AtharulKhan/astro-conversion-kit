@@ -76,8 +76,11 @@ the default `exceptions.json` and `proposals.json` may be missing.
 | `link` | links | the page | the live href (recorded, not compared) / the built href the gate reports as broken |
 | `redirect` | redirects | the redirect source | the baseline target with the site's origin stripped (`/services/`, not `https://www.example.com/services/`) / the new target |
 | `media` | media | the media path | the baseline bytes (a number) / the built bytes, or `""` for a file the build drops |
+| `routes` | routes | a route the capture could not read (status other than 200, 3xx, 404 or 410) | its captured status as a string (`"503"`, `"0"` for a network error) / `"skip"` to leave it out (counted as skipped, never passed), or the path of the built page that replaces it (it must be built) |
 
-`routes`, `sitemaps`, `forms`, `scripts` and `headers` take no exceptions. An extra built path is
+A `routes` exception only covers a route that was not captured; recapture it when you can, since
+a skipped route is a URL the new site may not answer. `sitemaps`, `forms`, `scripts` and
+`headers` take no exceptions. An extra built path is
 `--allow-extra`; a dropped vendor is `keep: false` in `baseline/scripts.json`; forms are set by
 `--endpoint`, `--honeypot` and `--thank-you`.
 

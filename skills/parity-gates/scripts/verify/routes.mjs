@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Routes gate: every page, post, archive and feed the baseline recorded at 200 is built, every
-// noindex route still says noindex, and the build has nothing the live site did not.
+// noindex route still says noindex, the build has nothing the live site did not, and every route
+// the capture could not read (a status other than 200, 3xx, 404 or 410) has an exception.
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
-import { gateArgs, pathMatcher, report } from '../lib/gate-cli.mjs';
+import { gateArgs, gateExceptions, pathMatcher, report } from '../lib/gate-cli.mjs';
+import { exceptionFailure } from '../lib/exceptions.mjs';
 import { attr, find, parseHtml } from '../lib/html.mjs';
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
 
@@ -34,7 +36,14 @@ Redirect sources are allowed as pages (Astro writes a meta-refresh page for each
 The site's own scripts the capture saved (baseline/js.json) may be built at their live paths,
 and the live sitemap file names (baseline/sitemaps.json) at the root; built or not, they are
 never extras.
+A route captured at any status other than 200, 3xx, 404 or 410 (a 503, a 0 for a network error)
+was never read, so it fails as "not captured: <status>" unless a routes exception covers it:
+{ path, field: "routes", from: "<status>", to: "skip" } leaves it out (counted as skipped, not
+passed), and to: "<path>" names the built page that replaces it, which must exist.
 `;
+// Statuses the capture read for what they are; anything else means the route was never captured.
+const CAPTURED = (status) => status === 200 || status === 404 || status === 410 || (status >= 300 && status < 400);
+const WANT = '200, 3xx, 404 or 410';
 
 function robotsOf(html) {
   const meta = find(parseHtml(html), (n) => n.tagName === 'meta' && (attr(n, 'name') ?? '').toLowerCase() === 'robots');
@@ -49,13 +58,42 @@ const decode = (path) => {
   }
 };
 
-export function checkRoutes({ dist, routes, media, redirects = [], scripts = [], sitemaps = [], paths = () => true, allowExtra = () => false }) {
+export function checkRoutes({ dist, routes, media, redirects = [], scripts = [], sitemaps = [], exceptions = [], paths = () => true, allowExtra = () => false }) {
   const files = distFiles(dist);
   const present = new Set(files);
   const format = pageFormat(files);
   const expected = new Set();
   const failures = [];
+  const skips = [];
   let checked = 0;
+
+  // Routes the capture never read: each needs a routes exception.
+  const relevant = exceptions.filter((e) => e.field === 'routes' && paths(e.path));
+  const used = new Set();
+  const uncaptured = { total: 0, failed: 0, skipped: 0, replaced: 0 };
+  for (const route of routes) {
+    if (CAPTURED(route.status) || !paths(route.path)) continue;
+    checked += 1;
+    uncaptured.total += 1;
+    const actual = `not captured: ${route.status}`;
+    const exception = relevant.find((e) => e.path === route.path && String(e.from) === String(route.status));
+    if (!exception) {
+      uncaptured.failed += 1;
+      failures.push({ path: route.path, field: 'status', expected: WANT, actual });
+      continue;
+    }
+    used.add(exception);
+    if (exception.to === 'skip') {
+      uncaptured.skipped += 1;
+      skips.push({ from: route.path, reason: `${actual} (exception: skip)` });
+      continue;
+    }
+    uncaptured.replaced += 1;
+    const candidates = pageFiles(String(exception.to), format);
+    candidates.forEach((c) => expected.add(c));
+    if (!candidates.some((c) => present.has(c))) failures.push({ path: route.path, field: 'file', expected: candidates[0], actual: null });
+  }
+  failures.push(...relevant.filter((e) => !used.has(e)).map((e) => exceptionFailure(e, 'no longer matches the baseline')));
 
   for (const route of routes) {
     if (route.status !== 200) continue;
@@ -86,7 +124,13 @@ export function checkRoutes({ dist, routes, media, redirects = [], scripts = [],
     if (!paths(path) || allowExtra(path) || allowExtra(`/${file}`)) continue;
     failures.push({ path, field: 'extra', expected: null, actual: file });
   }
-  return { checked, failures };
+  const results = { checked, failures };
+  if (uncaptured.total) {
+    const { total, failed, skipped, replaced } = uncaptured;
+    results.notes = [`${total} routes not captured (status other than ${WANT}): ${failed} failed, ${skipped} skipped, ${replaced} replaced`];
+  }
+  if (skips.length) Object.assign(results, { skipped: skips.length, skipReason: 'not captured, exception skip', skips });
+  return results;
 }
 
 function main() {
@@ -100,6 +144,7 @@ function main() {
     redirects: readJson(join(args.baseline, 'redirects.json')),
     scripts: existsSync(join(args.baseline, 'js.json')) ? readJson(join(args.baseline, 'js.json')) : [],
     sitemaps: existsSync(join(args.baseline, 'sitemaps.json')) ? readJson(join(args.baseline, 'sitemaps.json')) : [],
+    exceptions: gateExceptions(NAME, args),
     paths: args.paths,
     allowExtra: args.allowExtra ? pathMatcher(args.allowExtra) : () => false,
   });
