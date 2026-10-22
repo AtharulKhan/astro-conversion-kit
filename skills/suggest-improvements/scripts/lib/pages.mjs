@@ -51,7 +51,7 @@ export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // One finding per key (a script URL, an image, a link) instead of one per page: hits are
 // [{ key, page, element?, detail }]; the first hit for a key sets its element and detail, and
-// the item's path is the first page it was seen on.
+// the item's path is the first page it was seen on and pages lists them all.
 export function acrossPages(hits) {
   const groups = new Map();
   for (const hit of hits) {
@@ -62,6 +62,7 @@ export function acrossPages(hits) {
   return [...groups.values()].map((g) => ({
     path: g.pages[0],
     element: g.element,
+    pages: g.pages,
     evidence: `${g.detail}; on ${plural(g.pages.length, 'page')}: ${listOf(g.pages)}`,
   }));
 }

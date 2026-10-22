@@ -1,5 +1,5 @@
 // An image file over 300 KB (needs media.json), or shown at less than half its natural width
-// with no srcset candidate within 1.5× the shown width for the browser to pick instead. The
+// with no srcset candidate between the shown width and 1.5× it for the browser to pick instead. The
 // natural width comes from a WordPress size suffix (-2048x1365) or the srcset entry for the src
 // itself. Lighthouse's uses-responsive-images and uses-optimized-images add the images they flag.
 // One item per image across every page that shows it.
@@ -25,7 +25,7 @@ function naturalWidth(img) {
 function tooWide(img) {
   const natural = naturalWidth(img);
   if (!natural || !img.width || img.width >= natural * 0.5) return null;
-  if (candidates(img).some((c) => c.w <= img.width * 1.5)) return null;
+  if (candidates(img).some((c) => c.w >= img.width && c.w <= img.width * 1.5)) return null;
   return `shown at ${img.width} px of ${natural} px natural width`;
 }
 

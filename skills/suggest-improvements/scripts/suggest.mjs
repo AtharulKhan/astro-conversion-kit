@@ -29,7 +29,8 @@ can apply it mechanically. Nothing is applied: apply a check later with convert-
   --out <file>        the markdown report to write, e.g. docs/suggestions.md
   --json <file>       also write the result as JSON:
                       { origin, capturedAt, generatedAt, counts, gates, checks[], items[] },
-                      items [{ id, path, element?, evidence, why, effort, risk, applyable }]
+                      items [{ id, path, element?, evidence, why, effort, risk, applyable,
+                      pages? }] (pages: every page an item grouped across pages covers)
   --help              show this help
 
 Checks with no input (no review, no Lighthouse) are listed as not covered.
@@ -73,7 +74,13 @@ export function runChecks(checks, ctx) {
         const problems = itemProblems(item);
         if (problems.length) throw new Error(`malformed item for ${item.path ?? 'no path'} (${problems.join('; ')})`);
       }
-      return { check, items, notCovered: null, partial: check.partial?.(ctx) ?? null };
+      let partial = null;
+      try {
+        partial = check.partial?.(ctx) ?? null;
+      } catch (error) {
+        partial = `coverage note failed: ${error.message}`;
+      }
+      return { check, items, notCovered: null, partial };
     } catch (error) {
       return { check, items: [], notCovered: `check failed: ${error.message}`, partial: null };
     }

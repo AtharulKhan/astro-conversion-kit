@@ -22,6 +22,7 @@ export default defineCheck({
       .map(([title, paths]) => ({
         path: paths[0],
         element: 'title',
+        pages: paths,
         evidence: `"${title}" on ${plural(paths.length, 'page')}: ${listOf(paths)}`,
       }));
   },

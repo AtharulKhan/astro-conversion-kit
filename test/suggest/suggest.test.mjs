@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -34,7 +34,7 @@ const MINIMUM = [
   'shortcode-leftovers', 'placeholder-text',
 ];
 const CATEGORIES = ['seo', 'performance', 'accessibility', 'content', 'links', 'design', 'analytics', 'security'];
-const ITEM_KEYS = ['id', 'path', 'element', 'evidence', 'why', 'effort', 'risk', 'applyable'];
+const ITEM_KEYS = ['id', 'path', 'element', 'evidence', 'why', 'effort', 'risk', 'applyable', 'pages'];
 
 function assertItem(item) {
   for (const key of Object.keys(item)) assert.ok(ITEM_KEYS.includes(key), `unexpected key ${key}`);
@@ -46,6 +46,10 @@ function assertItem(item) {
   assert.ok(['S', 'M', 'L'].includes(item.effort), `${item.id} effort`);
   assert.ok(['none', 'low', 'medium', 'high'].includes(item.risk), `${item.id} risk`);
   assert.equal(typeof item.applyable, 'boolean');
+  if ('pages' in item) {
+    assert.ok(Array.isArray(item.pages) && item.pages.length > 0, `${item.id} pages`);
+    assert.equal(item.pages[0], item.path, `${item.id}: path is the first page`);
+  }
 }
 
 function listing(dir) {
@@ -324,6 +328,8 @@ test('site-wide problems are one item across pages, with the page count in the e
     assertItem(items[0]);
     assert.equal(items[0].path, '/');
     assert.match(items[0].evidence, /on 5 pages: \/, \/about\/, \/contact\/ and 2 more$/, id);
+    assert.equal(items[0].pages.length, 5, id);
+    assert.deepEqual(items[0].pages, paths, id);
   }
 });
 
@@ -400,4 +406,53 @@ test('shortcode-leftovers ignores footnotes and editorial brackets', async () =>
     page({ path: '/form/', text: 'Call us. [contact-form-7 id="12" title="Contact"]' }),
   ];
   assert.deepEqual(c.run(ctx({ inventory })).map((i) => i.path), ['/form/']);
+});
+
+test('oversized-images: a srcset with nothing between the shown width and 1.5x it still fires', async () => {
+  const img = {
+    src: 'https://www.example.com/a-2048x1365.jpg',
+    srcset: 'https://www.example.com/a-300x200.jpg 300w, https://www.example.com/a-2048x1365.jpg 2048w',
+    alt: 'a', width: 900, height: 600, lazy: false,
+  };
+  const items = (await check('oversized-images')).run(ctx({ inventory: [page({ images: [img] })] }));
+  assert.equal(items.length, 1);
+  assert.match(items[0].evidence, /shown at 900 px of 2048 px/);
+  assert.deepEqual(items[0].pages, ['/x/']);
+});
+
+test('a check returning a malformed item is not covered and the run still exits 0', async (t) => {
+  const copy = join(root, 'skills-copy');
+  t.after(() => rmSync(copy, { recursive: true, force: true }));
+  cpSync(skills('suggest-improvements'), join(copy, 'suggest-improvements'), { recursive: true });
+  symlinkSync(fileURLToPath(new URL('../../node_modules', import.meta.url)), join(copy, 'node_modules'), 'dir');
+  writeFileSync(join(copy, 'suggest-improvements', 'scripts', 'checks', 'bad-shape.mjs'), [
+    "import { defineCheck } from '../lib/item.mjs';",
+    "export default defineCheck({ id: 'bad-shape', title: 'Bad shape', category: 'seo', why: 'w', effort: 'XL', risk: 'low', applyable: false,",
+    "  find: () => [{ path: '/', evidence: 'e' }] });",
+  ].join('\n'));
+  const out = join(copy, 's.md');
+  const json = join(copy, 's.json');
+  let result;
+  try {
+    const script = join(copy, 'suggest-improvements', 'scripts', 'suggest.mjs');
+    const { stdout, stderr } = await exec(process.execPath, [script, '--capture', capture, '--baseline', baseline, '--out', out, '--json', json]);
+    result = { code: 0, stdout, stderr };
+  } catch (err) {
+    result = { code: err.code, stdout: err.stdout, stderr: err.stderr };
+  }
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(readFileSync(out, 'utf8'), /^- `bad-shape`: check failed: malformed item for \/ \(effort must be one of S, M, L\)$/m);
+  const entry = readJson(json).checks.find((c) => c.id === 'bad-shape');
+  assert.match(entry.notCovered, /^check failed: malformed item/);
+  assert.ok(!readJson(json).items.some((i) => i.id === 'bad-shape'));
+});
+
+test('a partial() that throws keeps the check items', async () => {
+  const { runChecks } = await import(skills('suggest-improvements/scripts/suggest.mjs'));
+  const fine = await check('missing-h1');
+  const flaky = { ...fine, partial: () => { throw new Error('odd'); } };
+  const [result] = runChecks([flaky], ctx({ inventory: [page({ h1: [] })] }));
+  assert.equal(result.items.length, 1);
+  assert.equal(result.notCovered, null);
+  assert.match(result.partial, /odd/);
 });

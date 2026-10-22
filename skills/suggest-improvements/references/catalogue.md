@@ -1,10 +1,15 @@
 # Suggestion checks
 
 One row per check in `scripts/checks/`. Effort and risk are the defaults each item starts with;
-"applyable" means `convert-site --apply <id>` can make the change mechanically. One problem
-repeated across a site (a script, an image, a link) is one item on the first page it appears on,
-with the page count and the first pages in its evidence. Every check reads the capture and
-baseline only; none of them requests the live site or changes anything.
+"applyable" means `convert-site --apply <id>` can make the change mechanically. Every check
+reads the capture and baseline only; none of them requests the live site or changes anything.
+
+Item shape: `{ id, path, element?, evidence, why, effort, risk, applyable, pages? }`. One
+problem repeated across a site (a script, an image, a link, a title) is one item: `path` is the
+first page it appears on, the evidence names the page count and the first three pages, and
+`pages` lists every page it applies to (in the JSON; the markdown keeps the short evidence). The
+grouped checks, which always fill `pages`, are `render-blocking-scripts`, `missing-alt`,
+`http-links`, `mixed-content`, `oversized-images` and `duplicate-titles`.
 
 | id | category | what it looks for | evidence | effort | risk | applyable |
 |---|---|---|---|---|---|---|
