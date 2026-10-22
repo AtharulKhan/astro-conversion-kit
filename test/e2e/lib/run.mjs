@@ -671,8 +671,8 @@ export async function visual({ site, live }) {
     expectCode(newAll);
     const diffAll = await run('diff', ['--a', 'capture/screens/live-all', '--b', 'review/new-all', '--out', 'review/diff-all']);
     const sheetAll = expectCode(await run('sheet', ['--live', 'capture/screens/live-all', '--new', 'review/new-all', '--diff', 'review/diff-all/diff.json', '--out', 'review/all.html']));
-    // The phase's proof: the site's copy of check.mjs re-reads every diff and style row.
-    const check = await node(site, join(site, 'scripts', 'review', 'check.mjs'), ['--review', 'review']);
+    // The phase's proof: npm run review:check re-reads every diff and style row.
+    const check = await npm(site, ['run', 'review:check']);
     return { templateSet, liveAll, newAll, diffAll, sheetAll, check };
   } finally {
     await preview.close();
@@ -769,12 +769,13 @@ export async function pr({ site, results }) {
   await commit(site, 'docs: launch runbook');
   expectCode(await npm(site, ['run', 'build']));
   const verify = await npm(site, ['run', 'verify', '--', ...VERIFY_FLAGS]);
+  const check = await npm(site, ['run', 'review:check']);
   expectCode(await git(site, ['push', '-q', 'origin', 'astro-rebuild']));
   await setState(site, 'needsYou', [...needsYou, 'open the PR: gh pr create --base main --head astro-rebuild --body-file .conversion/pr-body.md']);
   await setState(site, 'phases.pr.result', { pr: null, draft: false, body: '.conversion/pr-body.md' });
   // The last phase has no next one to stamp it.
   await setState(site, 'phases.pr.finishedAt', new Date().toISOString());
-  return { verify };
+  return { verify, check };
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -159,8 +159,8 @@ the PR" goes on the needs-you list. The body, in this order:
     ## Decisions          the docs/plan.md Decisions table, and every non-default choice
     ## Gate output        `npm run verify` output, verbatim, in a code block, with every skip line;
                           then every row prelaunch-reconcile accepted, as "reproduced from live (dN)"
-    ## Visual review      template and full-set results, every override with its reason,
-                          every bannerClosed and heightMismatch; the contact sheets are
+    ## Visual review      `npm run review:check` output, every docs/visual-overrides.json entry
+                          (route, id, threshold, reason), every bannerClosed and heightMismatch; the contact sheets are
                           review/index.html and review/all.html (local; npm run review:sheet)
     ## Staging            the staging URL, verify-live result, the launch-audit blockers and their state
     ## Suggestions        counts per category, the medium and high risk items, the applyable ids

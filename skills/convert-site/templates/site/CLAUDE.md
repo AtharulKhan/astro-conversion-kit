@@ -25,8 +25,10 @@ npm run verify
 
 - `npm run verify` checks the build in `dist/` against `baseline/` (URLs, status, titles,
   descriptions, canonicals, headings, links, media, redirects).
-- `npm run review:shoot`, `review:diff`, `review:styles` and `review:sheet` produce the visual
-  review under `review/` (not committed). Pixel diff passes at 0.5 % or less per page and width.
+- `npm run review:shoot`, `review:diff`, `review:styles`, `review:sheet` and `review:check`
+  produce and re-check the visual review under `review/` (not committed). Pixel diff passes at
+  0.5 % or less per page and width; a looser threshold is an entry in the committed
+  `docs/visual-overrides.json` with its decision id, at most 2 %.
 
 ## Exceptions and proposals
 - `exceptions.json`: a difference from the live site that is accepted on purpose (a broken embed

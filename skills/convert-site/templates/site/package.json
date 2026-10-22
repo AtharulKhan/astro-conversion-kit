@@ -21,7 +21,8 @@
     "review:shoot": "node scripts/review/shoot.mjs",
     "review:diff": "node scripts/review/diff.mjs",
     "review:styles": "node scripts/review/styles.mjs",
-    "review:sheet": "node scripts/review/sheet.mjs"
+    "review:sheet": "node scripts/review/sheet.mjs",
+    "review:check": "node scripts/review/check.mjs --review review"
   },
   "devDependencies": {}
 }

@@ -178,6 +178,9 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   for (const name of ['shoot', 'diff', 'styles', 'sheet']) {
     assert.equal(pkg.scripts[`review:${name}`], `node scripts/review/${name}.mjs`);
   }
+  assert.equal(pkg.scripts['review:check'], 'node scripts/review/check.mjs --review review');
+  assert.match(readFileSync(join(dir, 'README.md'), 'utf8'), /^\| `npm run review:check` \| Re-reads every diff and style result; exits 1 if any row fails \|$/m);
+  assert.match(agents, /review:shoot`, `review:diff`, `review:styles`, `review:sheet` and `review:check`/);
   assert.equal(pkg.scripts.dev, 'astro dev');
   assert.equal(pkg.scripts.build, 'astro build');
   assert.equal(pkg.scripts.preview, 'astro preview');
@@ -357,6 +360,9 @@ test('docs/LAUNCH.md: every command complete, its flags in the script --help, th
   assert.doesNotMatch(launch, /forms@example\.com style|each miss is an exception/);
   assert.match(launch, /0\.5 % or fewer differing pixels/);
   assert.match(launch, /needs a decision row/);
+  assert.ok(commands.includes('npm run review:check'), 'review:check closes the visual review');
+  assert.match(launch, /`docs\/visual-overrides\.json`/);
+  assert.doesNotMatch(launch, /--per-route/);
 });
 
 test('docs/LAUNCH.md names sitemap.xml when the capture saved no sitemap', (t) => {

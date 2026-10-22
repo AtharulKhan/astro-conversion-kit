@@ -49,8 +49,13 @@ coverage run, which loads up to 10 pages per template (the representative first)
 at the default pacing: a capture step against the live site, landing in `capture/`. Pages of one
 template share their CSS, so ten of them find the rules in use; a rule only some other page needs
 is pruned, and the full-page diff of every page in phase 8 catches that over-pruning (restore the
-rule from `capture/css/`, `build-rules.md`). The media download goes under `.conversion/media-cache/`, which the
-scaffold's `.gitignore` keeps out of git. On exit 3 from any script, follow the skill's "On exit
+rule from `capture/css/`, `build-rules.md`). Every Chromium load of a page (`review:shoot`,
+`review:styles` and `css-coverage`) blocks analytics, tag, pixel and chat hosts (Google
+Analytics and Tag Manager, Meta pixel, Hotjar, Clarity, HubSpot tracking, Intercom, Drift,
+LinkedIn, TikTok, Pinterest, Segment, Mixpanel, Plausible, Fathom, Matomo cloud, Crisp, Tawk,
+Zendesk), so the conversion never counts as visits in the live site's reports and late widgets
+never land in a shot; `--allow-analytics` on shoot and styles lets them load. The media download
+goes under `.conversion/media-cache/`, which the scaffold's `.gitignore` keeps out of git. On exit 3 from any script, follow the skill's "On exit
 3"; after two stops in a row, tell the person in one line and carry on with what was captured.
 
 Pass `--seed <path>` for every old URL from the intake (`.htaccess`, redirect exports). Write the
@@ -189,6 +194,13 @@ match. The proof is `npm run review:diff -- --a capture/screens/live --b review/
 review/diff` and `npm run review:styles -- …` exiting 0 for the template set. From here a fix goes
 in the template, never in one page.
 
+**Overrides.** A looser visual threshold lives in the committed `docs/visual-overrides.json`,
+keyed by route folder: `{ "<route>": { "id": "<decision id>", "threshold": <at most 2>,
+"reason": "<why>" } }`. Record the decision first (`S decision …`); its id goes in `id`.
+`review:diff` reads the file by default and exits 2 on an entry without an id or reason or with
+a threshold above 2 %. Every override is listed in the PR body. Height differences are counted,
+not ignored: the rows one screenshot has beyond the other count as differing pixels.
+
 **Rollout.** Every remaining page through its template's route, from captured markup
 (`build-rules.md`), plus sitemaps, feeds, the 404 page and robots. With subagents, one
 implementer per template.
@@ -228,8 +240,9 @@ passes. Then the `visual-review` reference, step 7: shoot live once more into
 diff into `review/diff-all`, sheet into `review/all.html`, look, fix the template, repeat.
 Rerun the phase 7 gates after every fix.
 
-**Proof:** `review:diff` exits 0 for the template set at three widths and for
-`capture/screens/live-all` against `review/new-all`.
+**Proof:** `npm run review:check` exits 0: it re-reads `review/diff/diff.json`,
+`review/diff-all/diff.json` and `review/styles.json` and fails on any failing row, printing the
+worst pair.
 
 ## 9. components (optional)
 
@@ -305,6 +318,7 @@ Write `docs/LAUNCH.md` (`runbook.md`), the PR body (SKILL.md), commit `docs: lau
 then `npm run build` and the full phase 7 gates once more, push `astro-rebuild` and open the PR
 (`--draft` while `placeholders.form-id` fails). Finish with the final report.
 
-**Proof:** the PR exists (or its body is in `.conversion/pr-body.md` with "open the PR" on the
-needs-you list) and quotes the gate output and every "Not covered" section verbatim.
+**Proof:** `npm run review:check` exits 0 (every template pair, every page pair and every style
+row passes), and the PR exists (or its body is in `.conversion/pr-body.md` with "open the PR" on
+the needs-you list) and quotes the gate output and every "Not covered" section verbatim.
 `S set phases.pr.result '{"pr":"<url>","draft":<true|false>}'`.

@@ -41,8 +41,9 @@ Typical run-specific lines (keep the ones that apply):
 
 - [ ] `npm run build` then `npm run verify -- --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/`
       passes on `astro-rebuild` (paste the summary line).
-- [ ] The visual review passes for templates and every page (`review/all.html`): 0.5 % or fewer
-      differing pixels per page and width; a looser `--per-route` threshold needs a decision row.
+- [ ] The visual review passes for templates and every page (`review/all.html`) and
+      `npm run review:check` exits 0: 0.5 % or fewer differing pixels per page and width; a
+      looser threshold is a `docs/visual-overrides.json` entry with its decision id, at most 2 %.
 - [ ] `npm run redirects:build` output committed.
 - [ ] Staging: `<staging url>`, noindexed (`npm run verify:live -- --base <staging url> --expect-noindex`).
 - [ ] The one test submission sent to the intake address (date), receipt confirmed by the person.

@@ -149,8 +149,10 @@ test('11 suggestions: gates.json collected, docs/suggestions.md with the fixture
   assert.match(readFileSync(file('docs', 'suggestions.md'), 'utf8'), /## From the review\n[^#]*$/);
 });
 
-test('12 pr: the body is written, the gates pass once more, astro-rebuild is pushed; every phase has finished', () => {
+test('12 pr: review:check and the gates pass once more, the body is written, astro-rebuild is pushed; every phase has finished', () => {
   ok(results.pr.verify);
+  ok(results.pr.check);
+  assert.match(results.pr.check.stdout, /^review:check passed$/m);
   assert.match(readFileSync(file('.conversion', 'pr-body.md'), 'utf8'), /## Gate output\n\n```\n[\s\S]*All 10 gates passed/);
   const { phases } = R.state(SITE);
   assert.deepEqual(Object.keys(phases), R.PHASES);

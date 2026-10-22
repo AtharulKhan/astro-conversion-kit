@@ -31,8 +31,10 @@ Things only a person with the accounts can do. Tick each one.
       then `npm run review:diff -- --a capture/screens/live --b review/new --out review/diff`
       exits 0, and
       `npm run review:sheet -- --live capture/screens/live --new review/new --diff review/diff/diff.json --out review/index.html`
-      for a look. Every page and width passes at 0.5 % or fewer differing pixels; a looser
-      threshold for a route (`--per-route`) needs a decision row in `docs/plan.md` naming it.
+      for a look, and `npm run review:check` exits 0. Every page and width passes at
+      0.5 % or fewer differing pixels; a looser threshold for a route is an entry in the committed
+      `docs/visual-overrides.json` (`{ "<route>": { "id": "<decision id>", "threshold": <at most 2>, "reason": "…" } }`)
+      and needs a decision row in `docs/plan.md` with that id.
 - [ ] `npm run redirects:build` run and the output committed.
 - [ ] Preview deployment: `{{DEPLOY_PREVIEW}}`
 - [ ] Preview is noindex: `npm run verify:live -- --base "$STAGING_URL" --expect-noindex` exits 0.

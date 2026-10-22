@@ -21,5 +21,6 @@ Requires Node 22.23.4 or newer (`nvm use`), then `npm install`.
 | `npm run review:diff` | Pixel diff of the screenshots |
 | `npm run review:styles` | Computed-style comparison |
 | `npm run review:sheet` | Contact sheet of the review |
+| `npm run review:check` | Re-reads every diff and style result; exits 1 if any row fails |
 
 See `AGENTS.md` for the working rules and `docs/LAUNCH.md` for launch steps.

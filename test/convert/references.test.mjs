@@ -17,6 +17,14 @@ test('phases.md: CSS coverage runs on up to 10 pages per template, and says the 
   assert.match(phases, /full-page diff[^.]*over-prun/);
 });
 
+test('phases.md: review:check is the proof of phases 8 and 12; overrides and blocked analytics are stated', () => {
+  const phases = read('references/phases.md');
+  const section = (n) => phases.split(/^## /m).find((s) => s.startsWith(`${n}. `));
+  for (const n of [8, 12]) assert.match(section(n), /\*\*Proof:\*\* `npm run review:check` exits 0/);
+  assert.match(phases, /`docs\/visual-overrides\.json`[\s\S]*"threshold": <at most 2>/);
+  assert.match(phases.replace(/\s+/g, ' '), /blocks analytics, tag, pixel and chat hosts/);
+});
+
 test('intake.md: the time estimate counts every live read per page, per coverage page, per template and per media file', () => {
   const intake = read('references/intake.md');
   const estimate = intake.split('\n## ')[0];
