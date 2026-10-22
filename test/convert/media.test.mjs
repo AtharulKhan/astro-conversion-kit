@@ -250,7 +250,10 @@ async function startStoreStub({ lie = false, failPuts = 0, failHeads = 0 } = {})
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+      // Blob puts name the object in ?pathname= (as @vercel/blob does); R2 puts in the path.
+      const requested = new URL(req.url, 'http://x');
+      const named = requested.searchParams.get('pathname');
+      const path = named !== null ? `/${named}` : decodeURIComponent(requested.pathname);
       if (req.method in attempts) attempts[req.method] += 1;
       if (req.method === 'PUT' && failPuts > 0) {
         failPuts -= 1;
@@ -266,7 +269,7 @@ async function startStoreStub({ lie = false, failPuts = 0, failHeads = 0 } = {})
       }
       if (req.method === 'PUT') {
         const body = Buffer.concat(chunks);
-        puts.push({ path, headers: req.headers, bytes: body.length });
+        puts.push({ path, url: req.url, headers: req.headers, bytes: body.length });
         stored.set(path, body);
         res.writeHead(200, { 'content-type': 'application/json', etag: `"etag-${body.length}"` });
         res.end(JSON.stringify({ url: `${origin}/public${path}`, pathname: path.slice(1) }));
@@ -308,7 +311,7 @@ test('blob upload against a stub: 3 files, verified sizes, manifest written, sec
   try {
     const dir = makeCache('cache-blob');
     const manifest = join(work, 'manifest-blob.json');
-    const token = 'vercel_blob_rw_SECRETVALUE123';
+    const token = 'vercel_blob_rw_STOREID42_SECRETVALUE123';
     const args = ['--store', 'blob', '--dir', dir, '--manifest', manifest, '--prefix', '/wp-content/uploads/', '--endpoint', stub.origin];
     const first = await run(UPLOAD, args, { ...NO_CREDS, BLOB_READ_WRITE_TOKEN: token });
     assert.equal(first.code, 0, first.stderr);
@@ -317,8 +320,14 @@ test('blob upload against a stub: 3 files, verified sizes, manifest written, sec
 
     const put = stub.puts.find((p) => p.path === '/wp-content/uploads/2026/01/a.jpg');
     assert.ok(put, 'object key is the site path');
+    // The request @vercel/blob 2.8.2's put() makes: PUT <api>/?pathname=<key>, raw body.
+    assert.equal(put.url, '/?pathname=wp-content%2Fuploads%2F2026%2F01%2Fa.jpg');
+    assert.equal(put.bytes, 4);
     assert.equal(put.headers.authorization, `Bearer ${token}`);
-    assert.equal(put.headers['x-api-version'], '7');
+    assert.equal(put.headers['x-api-version'], '13');
+    assert.equal(put.headers['x-vercel-blob-store-id'], 'STOREID42');
+    assert.match(put.headers['x-api-blob-request-id'], /^STOREID42:\d+:[0-9a-f]+$/);
+    assert.equal(put.headers['x-api-blob-request-attempt'], '0');
     assert.equal(put.headers['x-content-type'], 'image/jpeg');
     assert.equal(put.headers['x-vercel-blob-access'], 'public');
     assert.equal(put.headers['x-add-random-suffix'], '0');

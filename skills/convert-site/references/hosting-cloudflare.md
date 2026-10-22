@@ -80,7 +80,8 @@ R2 custom domain are needed; the function reads the bucket through its binding:
    `bucket_name = "<bucket>"`. (Or the person adds the binding in the dashboard; then it is a
    needs-you item.)
 3. Deploy, then request one media URL on the preview and confirm 200, the content type and the
-   byte size; `verify-live --media-manifest media-manifest.json` samples the rest.
+   byte size; `verify-live --media-manifest media-manifest.json` samples the rest, checking each
+   site-path `url` at `<base><path>` on the deploy.
 
 A redirect row under the media prefix is not applied on the function's route: handle it in the
 function or list it as a runbook step.

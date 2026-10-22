@@ -1,26 +1,49 @@
 // Vercel Blob over its REST API (no SDK): PUT the object, HEAD its public URL.
 // The token is only ever sent in the authorization header, never logged.
+//
+// The request mirrors @vercel/blob 2.8.2's put() for a read-write token (dist/chunk-XKVPKJPO.js,
+// requestApi and createPutHeaders): PUT https://vercel.com/api/blob/?pathname=<key> with the raw
+// body, x-api-version 13, the store id parsed from the token (vercel_blob_rw_<storeId>_<secret>)
+// in x-vercel-blob-store-id and in x-api-blob-request-id, the attempt number, and the put
+// options as x-* headers. The response is JSON: { url, downloadUrl, pathname, contentType,
+// contentDisposition, etag }. Verified against a real Blob store: pending.
+import { randomBytes } from 'node:crypto';
 import { fetchWithRetry } from './retry.mjs';
 
-export const BLOB_ENDPOINT = 'https://blob.vercel-storage.com';
+export const BLOB_ENDPOINT = 'https://vercel.com/api/blob';
+export const BLOB_API_VERSION = '13';
 export const BLOB_ENV = ['BLOB_READ_WRITE_TOKEN'];
 
-// The full PUT header set; authorization and x-content-type are filled per request. The names
-// are the ones @vercel/blob's put() sends; x-vercel-blob-access: public makes the object readable
-// at its returned url, which the media rewrite points at. Verified against a real Blob store: pending.
-// x-allow-overwrite lets a re-PUT succeed after a failed HEAD or a lost manifest.
+// The put options, as @vercel/blob names them. x-vercel-blob-access: public makes the object
+// readable at its returned url, which the media rewrite points at. x-allow-overwrite lets a
+// re-PUT succeed after a failed HEAD or a lost manifest.
 export const BLOB_PUT_HEADERS = Object.freeze({
   authorization: 'Bearer <BLOB_READ_WRITE_TOKEN>',
-  'x-api-version': '7',
-  'x-content-type': '<content type>',
+  'x-api-version': BLOB_API_VERSION,
+  'x-vercel-blob-store-id': '<store id>',
+  'x-api-blob-request-id': '<store id>:<ms>:<random hex>',
+  'x-api-blob-request-attempt': '0',
   'x-vercel-blob-access': 'public',
+  'x-content-type': '<content type>',
   'x-add-random-suffix': '0',
   'x-allow-overwrite': '1',
   'x-cache-control-max-age': '31536000',
 });
 
+// vercel_blob_rw_<storeId>_<secret>, as parseStoreIdFromReadWriteToken reads it.
+export function storeIdFromToken(token) {
+  return String(token ?? '').split('_')[3] ?? '';
+}
+
 function blobPutHeaders(token, contentType) {
-  return { ...BLOB_PUT_HEADERS, authorization: `Bearer ${token}`, 'x-content-type': contentType };
+  const storeId = storeIdFromToken(token);
+  return {
+    ...BLOB_PUT_HEADERS,
+    authorization: `Bearer ${token}`,
+    'x-vercel-blob-store-id': storeId,
+    'x-api-blob-request-id': `${storeId}:${Date.now()}:${randomBytes(6).toString('hex')}`,
+    'x-content-type': contentType,
+  };
 }
 
 export function createBlobStore({ env = process.env, endpoint = BLOB_ENDPOINT } = {}) {
@@ -28,7 +51,7 @@ export function createBlobStore({ env = process.env, endpoint = BLOB_ENDPOINT } 
   const base = endpoint.replace(/\/+$/, '');
   return {
     async put(key, body, contentType) {
-      const res = await fetchWithRetry(`${base}/${encodeKey(key)}`, {
+      const res = await fetchWithRetry(`${base}/?${new URLSearchParams({ pathname: key })}`, {
         method: 'PUT',
         headers: blobPutHeaders(token, contentType),
         body,
@@ -42,7 +65,7 @@ export function createBlobStore({ env = process.env, endpoint = BLOB_ENDPOINT } 
         throw new Error(`Blob PUT ${key} returned a response that is not JSON`);
       }
       if (!json.url) throw new Error(`Blob PUT ${key} response has no url`);
-      return { url: json.url, etag: res.headers.get('etag') ?? json.etag ?? null };
+      return { url: json.url, etag: json.etag ?? res.headers.get('etag') ?? null };
     },
     async head(url) {
       const res = await fetchWithRetry(url, { method: 'HEAD' });
@@ -50,8 +73,4 @@ export function createBlobStore({ env = process.env, endpoint = BLOB_ENDPOINT } 
       return { bytes: Number(res.headers.get('content-length')), etag: res.headers.get('etag') };
     },
   };
-}
-
-function encodeKey(key) {
-  return key.split('/').map(encodeURIComponent).join('/');
 }
