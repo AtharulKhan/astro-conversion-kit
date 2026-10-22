@@ -5,7 +5,8 @@
 // Each URL is requested once with redirects followed by hand, so chains are recorded hop by
 // hop. Shortlinks (`/?p=N`) are recorded as unverified redirects and only requested with
 // --verify-shortlinks. On WordPress the REST lists are dumped after the sitemaps (their pages and
-// posts join the queue); every stylesheet and <style> block goes to css/; after the crawl the
+// posts join the queue); every stylesheet and <style> block goes to css/, every same-site
+// <script src> to js/; after the crawl the
 // Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
 // CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
 import { createHash } from 'node:crypto';
@@ -30,7 +31,8 @@ Crawl a live site, read-only and paced, into a capture folder: one record per pa
 inventory.json, the raw HTML in pages/<slug>.html, the visible text in text/<slug>.txt,
 redirects.json (chains collapsed, hops kept), links.json, scripts.json (third-party vendors),
 meta.json, sitemaps/, robots.txt, feeds/, css/ (every stylesheet, <style> blocks as
-inline-<slug>.css, manifest.json), wp-rest/ (WordPress REST lists), wayback-unverified.txt
+inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
+wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
 to list and download the media.
 
@@ -368,6 +370,7 @@ class Crawler {
       this.addRecord(record);
       if (res.status === 200) {
         this.collectCss(record, body, slug);
+        this.collectJs(record);
         this.follow(record);
       }
       return;
@@ -437,6 +440,57 @@ class Crawler {
         this.state.css.entries.find((e) => e.href === item.url).status = status;
       },
     );
+  }
+
+  // Same-site script files (the theme's own JavaScript) in first-seen order, each fetched once
+  // after the crawl (js/<n>.js). Vendor tags and inline code stay in the page HTML.
+  collectJs(record) {
+    const js = (this.state.js ??= { entries: [], queue: [] });
+    const site = bareHost(new URL(this.state.canonicalOrigin));
+    for (const script of record.scripts) {
+      if (!script.src) continue;
+      let url;
+      try {
+        url = new URL(script.src);
+      } catch {
+        continue;
+      }
+      if (!/^https?:$/.test(url.protocol) || bareHost(url) !== site || forbidden(url)) continue;
+      let entry = js.entries.find((e) => e.src === script.src);
+      if (!entry) {
+        entry = { file: `${js.entries.length + 1}.js`, src: script.src, pages: [], status: null };
+        js.entries.push(entry);
+        js.queue.push({ url: script.src, attempts: 0 });
+      }
+      if (!entry.pages.includes(record.path)) entry.pages.push(record.path);
+    }
+  }
+
+  async visitJs(item) {
+    const res = await this.fetch(item.url, { redirect: 'follow' });
+    if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
+    const entry = this.state.js.entries.find((e) => e.src === item.url);
+    entry.status = res.status;
+    if (res.status === 200) writeText(join(this.out, 'js', entry.file), Buffer.isBuffer(res.body) ? res.body : String(res.body ?? ''));
+    return {};
+  }
+
+  async fetchJs() {
+    if (!this.state.js) return 'done';
+    return this.drain(
+      this.state.js.queue,
+      (item) => this.visitJs(item),
+      (item, status) => {
+        this.state.js.entries.find((e) => e.src === item.url).status = status;
+      },
+    );
+  }
+
+  jsManifest() {
+    return (this.state.js?.entries ?? []).map((e) => {
+      const pages = [...e.pages].sort();
+      return e.status === 200 ? { file: e.file, src: e.src, pages } : { file: null, src: e.src, pages, status: e.status };
+    });
   }
 
   cssManifest() {
@@ -646,6 +700,7 @@ class Crawler {
       wayback: this.state.wayback ?? (this.state.options.noWayback ? { status: 'skipped' } : null),
     });
     json('css/manifest.json', this.cssManifest());
+    if (this.state.js?.entries.length) json('js/manifest.json', this.jsManifest());
 
     const internal = {};
     const external = {};
@@ -738,6 +793,7 @@ async function main() {
   if (args.verifyShortlinks) state.options.verifyShortlinks = true;
   const verify = state.options.verifyShortlinks || (state.verifyQueue?.length ?? 0) > 0;
   if (outcome === 'done') outcome = await crawler.fetchCss();
+  if (outcome === 'done') outcome = await crawler.fetchJs();
   if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();
   if (args.noWayback) state.options.noWayback = true;
   if (outcome === 'done' && !state.options.noWayback && !state.wayback) {

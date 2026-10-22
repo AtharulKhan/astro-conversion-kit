@@ -385,6 +385,31 @@ test('stylesheets and <style> blocks are saved under css/ with a manifest', asyn
   }
 });
 
+test('first-party <script src> files are saved under js/ with a manifest; vendors and inline code are not', async () => {
+  const page = (extra) =>
+    `<html><head><script src="https://www.googletagmanager.com/gtag/js?id=G-X1"></script><script>var inline = 1;</script></head>`
+    + `<body><a href="/one/">1</a><script src="/js/site.js?ver=3"></script>${extra}</body></html>`;
+  const stub = await startStub({
+    '/': { body: page('') },
+    '/one/': { body: page('<script src="/js/gone.js"></script>') },
+    '/js/site.js?ver=3': { headers: { 'Content-Type': 'text/javascript' }, body: 'document.body.className += " js";' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'js/manifest.json'), [
+      { file: '1.js', src: `${stub.origin}/js/site.js?ver=3`, pages: ['/', '/one/'] },
+      { file: null, src: `${stub.origin}/js/gone.js`, pages: ['/one/'], status: 404 },
+    ]);
+    assert.equal(readFileSync(join(out, 'js/1.js'), 'utf8'), 'document.body.className += " js";');
+    assert.deepEqual(readdirSync(join(out, 'js')).sort(), ['1.js', 'manifest.json']);
+    assert.equal(stub.requests.filter((u) => u === '/js/site.js?ver=3').length, 1, 'each script is fetched once');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('--max 3 fetches exactly 3 pages', async () => {
   const out = tempDir();
   const run = await capture([fixture.origin, '--out', out, '--delay', '0', '--max', '3']);
