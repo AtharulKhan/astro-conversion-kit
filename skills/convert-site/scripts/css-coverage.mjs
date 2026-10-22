@@ -14,7 +14,8 @@ const HELP = `Usage: node css-coverage.mjs --base <origin> --routes <list|invent
                            [--widths 390,768,1440] [--delay 2500]
 
 Loads every route at every width in Chromium with CSS coverage on, waits for the
-load event and a short settle, hovers and focuses the first a, button and input,
+load event and a short settle, hovers and focuses the first a, button and input
+larger than 1x1 pixel (a clipped skip link is passed over),
 then stops coverage. Results are merged per stylesheet and written as
   { "<stylesheet url>": { text, usedRanges: [[start, end], ...] },
     "inline:<n>": { text, usedRanges, pages: [path, ...] } }
@@ -109,13 +110,24 @@ function parse(argv) {
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-// Hover and focus the first of each interactive element so their state rules count.
+// The first element matching selector that a pointer can reach: larger than 1x1 and not
+// visibility:hidden, so a clipped skip link is passed over instead of timing out the hover.
+function firstReachable(selector) {
+  return [...document.querySelectorAll(selector)].find((el) => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1 && getComputedStyle(el).visibility !== 'hidden';
+  }) ?? null;
+}
+
+// Hover and focus the first reachable element of each interactive kind so their state rules count.
 async function interact(page) {
   for (const selector of INTERACTIVE) {
-    const element = page.locator(selector).first();
-    if (!(await element.count())) continue;
+    const handle = await page.evaluateHandle(firstReachable, selector).catch(() => null);
+    const element = handle?.asElement();
+    if (!element) continue;
     await element.hover({ timeout: 1000 }).catch(() => {});
-    await element.focus({ timeout: 1000 }).catch(() => {});
+    await element.focus().catch(() => {});
+    await handle.dispose().catch(() => {});
   }
 }
 

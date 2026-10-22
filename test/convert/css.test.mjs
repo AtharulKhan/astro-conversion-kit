@@ -122,6 +122,28 @@ test('coverage keys inline <style> blocks as inline:<n> with the pages they appe
   assert.ok(!overlaps(usedRanges, text.indexOf('.unused'), text.indexOf('.unused') + 7));
 });
 
+test('coverage hovers the first link a person could point at, not a clipped skip link', async () => {
+  const html = '<!doctype html><style>.skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }'
+    + ' .real:hover { color: red; }</style><a class="skip" href="#main">Skip</a><p><a class="real" href="/x/">Real</a></p>';
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(html);
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const out = join(TMP, 'hover.json');
+  try {
+    const result = await coverageCli([
+      '--base', `http://127.0.0.1:${server.address().port}`, '--routes', '/', '--widths', '390', '--out', out, '--delay', '0',
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    server.close();
+  }
+  const { text, usedRanges } = readJson(out)['inline:1'];
+  const start = text.indexOf('.real:hover');
+  assert.ok(overlaps(usedRanges, start, text.indexOf('}', start) + 1), 'the hover rule of the visible link is used');
+});
+
 test('pruning removes the unused rules, keeps pseudo rules and @font-face, and copies kept source as written', async () => {
   const out = join(TMP, 'site.css');
   const report = join(TMP, 'prune-report.json');
