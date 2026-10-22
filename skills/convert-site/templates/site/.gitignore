@@ -5,9 +5,9 @@ dist
 !.env.example
 .DS_Store
 *.log
-# large or regenerable capture and review output
-capture/screens/
-capture/lighthouse-live/
-review/
-media-cache/
+# large or regenerable capture and review output (anchored, so scripts/review/ stays tracked)
+/capture/screens/
+/capture/lighthouse-live/
+/review/
+/media-cache/
 .conversion/*.tmp

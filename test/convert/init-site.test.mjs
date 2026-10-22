@@ -6,7 +6,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const INIT = join(ROOT, 'skills', 'convert-site', 'scripts', 'init-site.mjs');
@@ -30,6 +30,9 @@ const EXPECTED_FILES = [
   'docs/plan.md', 'docs/third-party.md',
 ];
 
+// Copied scripts are copied verbatim: placeholders inside them are not substituted.
+const RUN_ALL = "// dummy gate runner for {{ORIGIN}}\n";
+
 function tempDir(t, prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -52,7 +55,7 @@ function bareKit(t) {
 function fakeKit(t) {
   const kit = bareKit(t);
   cpSync(join(ROOT, 'scripts', 'lib'), join(kit, 'scripts', 'lib'), { recursive: true });
-  plant(join(kit, 'skills', 'parity-gates', 'scripts', 'verify', 'run-all.mjs'));
+  plant(join(kit, 'skills', 'parity-gates', 'scripts', 'verify', 'run-all.mjs'), RUN_ALL);
   plant(join(kit, 'skills', 'parity-gates', 'scripts', 'build-baseline.mjs'));
   plant(join(kit, 'skills', 'parity-gates', 'scripts', 'lib', 'html.mjs'));
   plant(join(kit, 'skills', 'visual-review', 'scripts', 'shoot.mjs'));
@@ -66,9 +69,9 @@ function run(args) {
   return spawnSync(process.execPath, [INIT, ...args], { encoding: 'utf8', env: GIT_ENV });
 }
 
-function baseArgs(dir, kit, { host = 'vercel', extra = [] } = {}) {
+function baseArgs(dir, kit, { host = 'vercel', name = 'Fixture Roofing Co', extra = [] } = {}) {
   return [
-    '--dir', dir, '--origin', 'https://www.fixture-roofing.test/', '--name', 'Fixture Roofing Co',
+    '--dir', dir, '--origin', 'https://www.fixture-roofing.test/', '--name', name,
     '--host', host, '--no-install', '--astro-version', '7.4.2', ...(kit ? ['--kit', kit] : []), ...extra,
   ];
 }
@@ -102,16 +105,24 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.ok(files.includes('vercel.json'));
   assert.ok(!files.includes('_headers'), 'vercel sites get vercel.json, not _headers');
 
-  for (const file of files) {
+  for (const file of files.filter((f) => !f.startsWith('scripts/'))) {
     assert.doesNotMatch(readFileSync(join(dir, file), 'utf8'), /\{\{/, `unsubstituted placeholder in ${file}`);
   }
 
-  // Copied script trees.
+  // Copied script trees, committed (not swallowed by .gitignore) and copied verbatim.
   for (const path of ['verify/run-all.mjs', 'build-baseline.mjs', 'lib/html.mjs', 'lib/node-version.mjs',
     'review/shoot.mjs', 'state.mjs', 'media-plan.mjs']) {
     assert.ok(existsSync(join(dir, 'scripts', path)), `scripts/${path} copied`);
+    assert.notEqual(git(dir, 'ls-files', `scripts/${path}`), '', `scripts/${path} committed`);
   }
+  assert.equal(readFileSync(join(dir, 'scripts', 'verify', 'run-all.mjs'), 'utf8'), RUN_ALL);
   assert.ok(!existsSync(join(dir, 'scripts', 'unrelated.mjs')), 'only the named convert-site scripts are copied');
+
+  // Vercel URL handling for trailing slashes always: trailingSlash true, never cleanUrls.
+  const vercel = JSON.parse(readFileSync(join(dir, 'vercel.json'), 'utf8'));
+  assert.equal(vercel.trailingSlash, true);
+  assert.ok(!('cleanUrls' in vercel));
+  assert.ok(Array.isArray(vercel.headers));
 
   // Substitutions.
   const config = readFileSync(join(dir, 'astro.config.mjs'), 'utf8');
@@ -133,8 +144,8 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
     /export const INDEXABLE = process\.env\.PUBLIC_INDEXABLE === 'true'/);
   assert.match(readFileSync(join(dir, 'src', 'layouts', 'Base.astro'), 'utf8'), /noindex, nofollow/);
   const ignore = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
-  for (const entry of ['capture/screens/', 'capture/lighthouse-live/', 'review/', 'node_modules', 'dist',
-    '.astro', '.env*', '!.env.example', '.conversion/*.tmp', 'media-cache/']) {
+  for (const entry of ['/capture/screens/', '/capture/lighthouse-live/', '/review/', 'node_modules', 'dist',
+    '.astro', '.env*', '!.env.example', '.conversion/*.tmp', '/media-cache/']) {
     assert.ok(ignore.includes(entry), `.gitignore lacks ${entry}`);
   }
 
@@ -184,7 +195,40 @@ test('cloudflare host and --trailing-slash never shape the scaffold', (t) => {
   assert.match(config, /format: 'file'/);
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
   assert.match(pkg.scripts['redirects:build'], /--host cloudflare --out _redirects$/);
-  assert.match(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8'), /wrangler/);
+  const launch = readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8');
+  assert.ok(launch.includes('`npm run build && npx wrangler pages deploy dist --branch astro-rebuild`'));
+  assert.ok(launch.includes('`PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main`'));
+  assert.match(launch, /not in the Pages dashboard/);
+});
+
+test('vercel with --trailing-slash never uses cleanUrls; quotes in the name stay valid JS', async (t) => {
+  const dir = tempDir(t, 'site-');
+  const name = "O'Neil & Sons $1";
+  const result = run(baseArgs(dir, fakeKit(t), { name, extra: ['--trailing-slash', 'never'] }));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const vercel = JSON.parse(readFileSync(join(dir, 'vercel.json'), 'utf8'));
+  assert.equal(vercel.cleanUrls, true);
+  assert.equal(vercel.trailingSlash, false);
+  assert.match(readFileSync(join(dir, 'astro.config.mjs'), 'utf8'), /format: 'file'/);
+  const site = await import(pathToFileURL(join(dir, 'src', 'lib', 'site.mjs')).href);
+  assert.equal(site.SITE_NAME, name);
+  assert.equal(site.ORIGIN, 'https://www.fixture-roofing.test');
+  const lists = await import(pathToFileURL(join(dir, 'src', 'lib', 'exceptions.mjs')).href);
+  assert.deepEqual(lists.exceptions, []);
+  assert.deepEqual(lists.proposals, []);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name, 'o-neil-sons-1');
+});
+
+test('a kit without a readable package.json is a usage error', (t) => {
+  const kit = bareKit(t);
+  writeFileSync(join(kit, 'package.json'), '{ not json');
+  const dir = tempDir(t, 'site-');
+  const invalid = run(baseArgs(dir, kit));
+  assert.equal(invalid.status, 2);
+  assert.match(invalid.stderr, /package\.json/);
+  rmSync(join(kit, 'package.json'));
+  assert.equal(run(baseArgs(dir, kit)).status, 2);
+  assert.deepEqual(readdirSync(dir), []);
 });
 
 test('a README-only directory is accepted and missing kit script trees are skipped', (t) => {

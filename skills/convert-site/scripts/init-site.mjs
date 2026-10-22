@@ -43,9 +43,12 @@ const HOSTS = {
   cloudflare: {
     redirectsOut: '_redirects',
     skip: 'vercel.json',
-    deployPreview: 'npx wrangler pages deploy dist --branch astro-rebuild',
-    deployProduction: 'npx wrangler pages deploy dist --branch main',
-    envCommand: 'Pages project, Settings, Variables, Production: `PUBLIC_INDEXABLE` = `true`.',
+    // wrangler uploads the local dist/, so the flag belongs on the local build, never in the dashboard.
+    deployPreview: 'npm run build && npx wrangler pages deploy dist --branch astro-rebuild',
+    deployProduction: 'PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main',
+    envCommand:
+      'set it on the local build that is deployed (`PUBLIC_INDEXABLE=true npm run build`), not in the ' +
+      'Pages dashboard; every preview deploy is rebuilt with a plain `npm run build` first.',
     dnsNote: 'add the custom domain in the Pages project and set the records it shows.',
   },
 };
@@ -55,6 +58,11 @@ const ALLOWED_EXISTING = new Set(['.git', 'README.md', 'README', '.DS_Store']);
 const CONVERT_SCRIPTS = ['css-coverage', 'css-prune', 'media-plan', 'media-upload', 'state'];
 const PINNED_DEPS = ['parse5', 'playwright', 'pixelmatch', 'pngjs', 'css-tree'];
 const COMMIT_SUBJECT = 'chore: scaffold from astro-conversion-kit';
+// Vercel URL handling per trailing-slash mode; cleanUrls never goes with the directory format.
+const VERCEL_URLS = {
+  always: { trailingSlash: true },
+  never: { cleanUrls: true, trailingSlash: false },
+};
 
 class UsageError extends Error {}
 
@@ -162,6 +170,22 @@ function writePackageJson(dir, kitPkg, astroVersion) {
   writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
+function writeVercelJson(dir, trailing) {
+  const path = join(dir, 'vercel.json');
+  if (!existsSync(path)) return;
+  const config = { ...VERCEL_URLS[trailing], ...JSON.parse(readFileSync(path, 'utf8')) };
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function readKitPackage(kit) {
+  const path = join(kit, 'package.json');
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new UsageError(`cannot read the kit's package.json at ${path}: ${err.message}`);
+  }
+}
+
 function copyIfPresent(source, target) {
   if (!existsSync(source)) return;
   mkdirSync(dirname(target), { recursive: true });
@@ -214,7 +238,11 @@ function npmInstall(dir) {
   try {
     execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'inherit' });
   } catch {
-    throw new UsageError('npm install failed; fix the error above and run it again, or pass --no-install');
+    throw new UsageError(
+      'npm install failed. The scaffold is written but not committed; do not run init-site again.\n' +
+        `Fix the error above, then run in ${dir}:\n` +
+        `  npm install && git add -A && git commit -m "${COMMIT_SUBJECT}" && git switch -c astro-rebuild`,
+    );
   }
 }
 
@@ -228,7 +256,7 @@ export function initSite(argv) {
   const kit = resolve(opts.kit || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
   const templateDir = join(kit, 'skills', 'convert-site', 'templates', 'site');
   if (!existsSync(templateDir)) throw new UsageError(`no site templates found under ${kit}`);
-  const kitPkg = JSON.parse(readFileSync(join(kit, 'package.json'), 'utf8'));
+  const kitPkg = readKitPackage(kit);
 
   const unexpected = existingEntries(dir).filter((name) => !ALLOWED_EXISTING.has(name));
   if (unexpected.length > 0) {
@@ -244,6 +272,8 @@ export function initSite(argv) {
     ORIGIN: opts.url.origin,
     HOST: opts.url.hostname,
     SITE_NAME: opts.name,
+    SITE_NAME_JS: JSON.stringify(opts.name),
+    ORIGIN_JS: JSON.stringify(opts.url.origin),
     SLUG: slugify(opts.name),
     HOSTING: opts.host,
     DATE: new Date().toISOString().slice(0, 10),
@@ -260,6 +290,7 @@ export function initSite(argv) {
   setUpGit(dir, opts.repo);
   copyTemplates(templateDir, dir, values, host.skip);
   writePackageJson(dir, kitPkg, astroVersion);
+  writeVercelJson(dir, opts['trailing-slash']);
   copyScripts(kit, dir);
   if (!opts['no-install']) npmInstall(dir);
   commitAndBranch(dir);
