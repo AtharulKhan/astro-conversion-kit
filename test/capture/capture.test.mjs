@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ import { startStub } from './helpers.mjs';
 
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../skills/capture-site/scripts/capture.mjs', import.meta.url));
+const SITE = fileURLToPath(new URL('../fixture/site/', import.meta.url));
 const README = fileURLToPath(new URL('../../skills/capture-site/scripts/readme.mjs', import.meta.url));
 const dirs = [];
 const tempDir = () => {
@@ -388,6 +389,70 @@ test('stylesheets and <style> blocks are saved under css/ with a manifest', asyn
     assert.equal(readFileSync(join(out, 'css/inline-two.css'), 'utf8'), '.c { margin: 0; }\n');
     assert.deepEqual(readdirSync(join(out, 'css')).sort(), ['1.css', 'inline-home.css', 'inline-two.css', 'manifest.json']);
     assert.equal(stub.requests.filter((u) => u === '/s/main.css?ver=2').length, 1, 'each stylesheet is fetched once');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('@import is followed into css/, on the site and on other hosts, cycle-safe, each sheet recording its importer', async () => {
+  const remote = await startStub({ '/fonts.css': { headers: { 'Content-Type': 'text/css' }, body: '.remote { color: red; }' } });
+  // A copy of the fixture where the about page also links an editor stylesheet that imports a
+  // stylesheet on another host and a part that imports it back. (Added to the copy only: the
+  // gates build their dist from the fixture's own files.)
+  const root = tempDir();
+  cpSync(SITE, root, { recursive: true });
+  const about = join(root, 'about', 'index.html');
+  const link = '<link rel="stylesheet" href="{{ORIGIN}}/wp-content/themes/fixture/css/editor.css">';
+  writeFileSync(about, readFileSync(about, 'utf8').replace('</head>', `${link}\n</head>`));
+  const css = join(root, 'wp-content/themes/fixture/css');
+  mkdirSync(join(css, 'parts'), { recursive: true });
+  writeFileSync(join(css, 'editor.css'), `@import url("${remote.origin}/fonts.css");\n@import url("parts/base.css");\n.editor-note { color: #444; }\n`);
+  writeFileSync(join(css, 'parts', 'base.css'), '@import "../editor.css" screen;\n.editor-base { margin: 0; }\n');
+  const site = await startFixture({ root });
+  try {
+    const out = tempDir();
+    const run = await capture([site.origin, '--out', out, '--delay', '0', '--no-rest']);
+    assert.equal(run.code, 0, run.stderr);
+    const theme = `${site.origin}/wp-content/themes/fixture`;
+    const manifest = readJson(out, 'css/manifest.json');
+    const entry = (href) => manifest.find((e) => e.href === href);
+    const linked = entry(`${theme}/css/editor.css`);
+    const part = entry(`${theme}/css/parts/base.css`);
+    const other = entry(`${remote.origin}/fonts.css`);
+    assert.deepEqual(linked.pages, ['/about/']);
+    assert.deepEqual(linked.importedBy, [part.href], 'the cycle back is recorded, not followed again');
+    assert.deepEqual(part.importedBy, [linked.href]);
+    assert.deepEqual(part.pages, ['/about/'], 'an imported sheet serves the pages of its importer');
+    assert.deepEqual(other.importedBy, [linked.href]);
+    assert.deepEqual(other.pages, ['/about/']);
+    assert.ok(!('importedBy' in entry(`${theme}/style.css?ver=1.4.2`)));
+    assert.match(readFileSync(join(out, 'css', part.file), 'utf8'), /\.editor-base/);
+    assert.equal(readFileSync(join(out, 'css', other.file), 'utf8'), '.remote { color: red; }');
+    assert.equal(site.requests.filter((u) => u === '/wp-content/themes/fixture/css/editor.css').length, 1);
+    assert.equal(site.requests.filter((u) => u === '/wp-content/themes/fixture/css/parts/base.css').length, 1);
+    assert.equal(remote.requests.filter((u) => u === '/fonts.css').length, 1);
+  } finally {
+    await site.close();
+    await remote.close();
+  }
+});
+
+test('@import is followed 5 levels deep; a deeper sheet is listed "too-deep" and not requested', async () => {
+  const routes = { '/': { body: '<html><head><link rel="stylesheet" href="/d0.css"></head><body>deep</body></html>' } };
+  for (let n = 0; n <= 7; n += 1) {
+    routes[`/d${n}.css`] = { headers: { 'Content-Type': 'text/css' }, body: `@import "d${n + 1}.css";\n.d${n} { margin: 0; }` };
+  }
+  const stub = await startStub(routes);
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const manifest = readJson(out, 'css/manifest.json');
+    assert.deepEqual(manifest.map((e) => `${new URL(e.href).pathname}:${e.file ? 'saved' : e.status}`), [
+      '/d0.css:saved', '/d1.css:saved', '/d2.css:saved', '/d3.css:saved', '/d4.css:saved', '/d5.css:saved', '/d6.css:too-deep',
+    ]);
+    assert.deepEqual(manifest[6].importedBy, [`${stub.origin}/d5.css`]);
+    assert.ok(!stub.requests.includes('/d6.css'));
   } finally {
     await stub.close();
   }

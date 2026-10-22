@@ -6,7 +6,7 @@
 // hop. Shortlinks (`/?p=N`) are recorded as unverified redirects and only requested with
 // --verify-shortlinks. On WordPress the REST lists are dumped after the sitemaps (their pages and
 // posts join the queue); every stylesheet and <style> block goes to css/, every same-site
-// <script src> to js/; after the crawl the
+// <script src> to js/ (stylesheets' @import rules are followed, 5 deep); after the crawl the
 // Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
 // CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
 import { createHash } from 'node:crypto';
@@ -23,6 +23,7 @@ import { loadState, newState, saveState } from './lib/state.mjs';
 import { dumpWpRest } from './lib/wp-rest.mjs';
 import { CDX_ENDPOINT, WAYBACK_FILE, waybackPaths } from './lib/wayback.mjs';
 import { extensionOf, NEVER, NOT_PAGES, PAGE_EXTENSIONS } from './lib/page-rules.mjs';
+import { cssImports } from './lib/css-urls.mjs';
 import { parse } from 'parse5';
 
 const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
@@ -30,8 +31,8 @@ const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
 Crawl a live site, read-only and paced, into a capture folder: one record per page in
 inventory.json, the raw HTML in pages/<slug>.html, the visible text in text/<slug>.txt,
 redirects.json (chains collapsed, hops kept), links.json, scripts.json (third-party vendors),
-meta.json, sitemaps/, robots.txt, feeds/, css/ (every stylesheet, <style> blocks as
-inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
+meta.json, sitemaps/, robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
+on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
 wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
 to list and download the media.
@@ -67,6 +68,8 @@ const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
 // Same-site script files: larger ones are not saved, and redirects are followed at most this far.
 const JS_MAX_BYTES = 5 * 1024 * 1024;
 const JS_MAX_HOPS = 5;
+// @import is followed this many levels below a linked stylesheet; a deeper one is "too-deep".
+const IMPORT_MAX_DEPTH = 5;
 // The one block status that can be a URL's real, lasting answer; 429, 503 and network errors
 // are always retried later (exit 3, --resume) rather than recorded.
 const PERMANENT_BLOCK = 403;
@@ -447,8 +450,39 @@ class Crawler {
     if (res.status === 200) {
       const text = Buffer.isBuffer(res.body) ? res.body.toString('utf8') : String(res.body ?? '');
       writeText(join(this.out, 'css', entry.file), text);
+      this.followImports(entry, text, res.finalUrl || item.url);
     }
     return {};
+  }
+
+  // The sheets a stylesheet @imports, on any host, queued once each (a cycle only records its
+  // importer); each records the sheets that import it. Below IMPORT_MAX_DEPTH, listed unfetched.
+  followImports(importer, text, base) {
+    const css = this.state.css;
+    for (const href of cssImports(text, base)) {
+      if (forbidden(new URL(href))) continue;
+      let entry = css.entries.find((e) => e.href === href);
+      if (!entry) {
+        const depth = (importer.depth ?? 0) + 1;
+        const n = css.entries.filter((e) => e.href).length + 1;
+        entry = { file: `${n}.css`, href, pages: [], status: null, depth, importedBy: [] };
+        css.entries.push(entry);
+        if (depth > IMPORT_MAX_DEPTH) entry.status = 'too-deep';
+        else css.queue.push({ url: href, attempts: 0 });
+      }
+      if (entry !== importer && !entry.importedBy?.includes(importer.href)) (entry.importedBy ??= []).push(importer.href);
+    }
+  }
+
+  // The pages a stylesheet serves: those that link it and those of every sheet importing it.
+  cssPages(entry, entries, seen = new Set()) {
+    seen.add(entry);
+    const pages = new Set(entry.pages);
+    for (const href of entry.importedBy ?? []) {
+      const importer = entries.find((e) => e.href === href);
+      if (importer && !seen.has(importer)) for (const page of this.cssPages(importer, entries, seen)) pages.add(page);
+    }
+    return pages;
   }
 
   async fetchCss() {
@@ -532,11 +566,13 @@ class Crawler {
   }
 
   cssManifest() {
-    return (this.state.css?.entries ?? []).map((e) => {
-      const pages = [...e.pages].sort();
-      if (e.inline) return { file: e.file, inline: true, pages };
-      if (e.status === 200) return { file: e.file, href: e.href, pages };
-      return { file: null, href: e.href, pages, status: e.status };
+    const entries = this.state.css?.entries ?? [];
+    return entries.map((e) => {
+      if (e.inline) return { file: e.file, inline: true, pages: [...e.pages].sort() };
+      const pages = [...this.cssPages(e, entries)].sort();
+      const importedBy = e.importedBy?.length ? { importedBy: e.importedBy } : {};
+      if (e.status === 200) return { file: e.file, href: e.href, pages, ...importedBy };
+      return { file: null, href: e.href, pages, status: e.status, ...importedBy };
     });
   }
 

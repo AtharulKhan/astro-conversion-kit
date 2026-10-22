@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
-import { cssUrls } from '../../skills/capture-site/scripts/lib/css-urls.mjs';
+import { cssImports, cssUrls } from '../../skills/capture-site/scripts/lib/css-urls.mjs';
 import { srcsetUrls } from '../../skills/capture-site/scripts/media.mjs';
 
 const exec = promisify(execFile);
@@ -54,6 +54,23 @@ test('cssUrls finds the two fonts in the theme CSS, resolved against the stylesh
     `${fixture.origin}/wp-content/themes/fixture/fonts/fixture-sans.woff2`,
     `${fixture.origin}/wp-content/themes/fixture/fonts/fixture-serif.woff2`,
   ]);
+});
+
+test('cssImports lists every @import target, url() or string, resolved against the stylesheet', () => {
+  const css = [
+    '/* @import "commented.css"; */',
+    '@import url("parts/grid.css");',
+    "@import 'print.css' print;",
+    '@import url(https://fonts.example.com/css?family=Sans) layer(fonts);',
+    '@import "parts/grid.css";',
+    '.a { background: url(img/a.png); }',
+  ].join('\n');
+  assert.deepEqual(cssImports(css, 'https://www.example.com/wp-content/themes/x/style.css?ver=2'), [
+    'https://www.example.com/wp-content/themes/x/parts/grid.css',
+    'https://www.example.com/wp-content/themes/x/print.css',
+    'https://fonts.example.com/css?family=Sans',
+  ]);
+  assert.deepEqual(cssImports('@import url("data:text/css,a{}"); @import "javascript:x";', 'https://www.example.com/'), []);
 });
 
 test('cssUrls keeps image and font url()s only, never a data: URI', () => {

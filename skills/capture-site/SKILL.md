@@ -121,7 +121,10 @@ Never retry in a tight loop. After two stops in a row, tell the person and carry
     links.json            internal and external links, with the pages that carry them
     scripts.json          third-party vendors with their ids and pages
     media.json            every media file with sources, pages, status, type and bytes
-    css/                  every stylesheet, inline <style> blocks, manifest.json
+    css/                  every stylesheet, inline <style> blocks, manifest.json; the sheets a
+                          stylesheet @imports (any host, 5 levels deep) too, their manifest
+                          entries with importedBy: [importer hrefs] and the importer's pages;
+                          one deeper still is listed with status "too-deep", not fetched
     js/                   the site's own <script src> files (theme JavaScript) and manifest.json:
                           [{ file, src, pages }], or { file: null, src, pages, status } for a file
                           not saved (an HTTP status, "off-site" for a redirect off the host,
@@ -170,7 +173,8 @@ wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, befor
 Repeat this list to the person verbatim. None of it was captured:
 
 - Classes and states added by JavaScript after load (open menus, sliders); coverage runs later.
-- CSS `@import` chains: imported stylesheets are not followed.
+- CSS `@import` more than 5 levels below a linked stylesheet (listed `too-deep` in
+  `css/manifest.json`, never fetched).
 - Media on other hosts (platform CDNs, image services): not listed in `media.json`.
 - A URL that answers 503 for good blocks the run until it recovers.
 - Indexing directives from `<meta name="robots">` only; `X-Robots-Tag` headers are not read.
