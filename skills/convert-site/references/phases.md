@@ -302,7 +302,9 @@ Only when the intake said "components" or the person asked: `components-optional
 pre-launch fails a tree with uncommitted changes or no upstream, and `state.json` changes with
 every `S` call, so commit and push first. It runs `npm run build` itself: `PUBLIC_INDEXABLE=true`
 makes that the production build it is meant to gate (without it, the staging build's robots.txt
-blocks everything and fails the robots check). Without a `gh` login there is no remote to push
+blocks everything and fails the robots check). That `PUBLIC_INDEXABLE=true` is a variable for
+this one local command, never the hosting setting: "leave it unset on the host" (or in the
+intake) still means run this command with it, as written. Without a `gh` login there is no remote to push
 to; `hygiene.pushed` then fails until the person pushes, and that is a needs-you line (the
 reconcile accepts it only then: no remote, and a needs-you item that says to push).
 
@@ -312,10 +314,15 @@ Then reconcile what failed with live:
 
 A failing check is accepted only when every row it names (title, description, h1, canonical,
 og:image, favicon, placeholder text) is what live had for that path and a `docs/plan.md`
-decision row names the path or the check id (the home page as `` `/` ``); also `hygiene.pushed`
-with no remote while the push is on the needs-you list; also `placeholders.form-id` while the form id is
-missing (the PR is then a draft, `forms.md`), and the two predecessor checks when every row is
-a trailing-slash rule or a slash-only redirect (a known launch-skills limitation). Everything
+decision row names the check id, or the path and its field (the home page as `` `/` ``, the
+404 page as `` `404.html` ``, compared with the captured 404): a decision that only lists paths,
+such as the templates one, accepts nothing. Also `hygiene.pushed` with no remote while the push
+is on the needs-you list; also `placeholders.form-id` while the form id is missing (the PR is
+then a draft, `forms.md`); the two predecessor slash checks when every row is a trailing-slash
+rule or a slash-only redirect (a known launch-skills limitation); and `predecessor.coverage`
+when live publishes no sitemap (the capture saved none) and every page the crawl found is
+built or on a decision row. A missing root icon counts as live's when the capture's probe
+(`capture/meta.json` `icons`) saw live answer 404; never invent one to pass. Everything
 else blocks and is fixed on the branch, as the `pre-launch` skill's triage says. Keep its
 accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`forms`,
 `analytics`, `hosting`, `payments`, `legal`, `gsc-baseline`, `dns`, `signoff`, `rollback`) go to

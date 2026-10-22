@@ -281,6 +281,104 @@ test('the plain output names each accepted row as reproduced from live, with its
   assert.match(result.stdout, /^accepted {2}predecessor\.redirect-chains: \/about -> \/about is a loop and serves nothing — trailing-slash rule \(known launch-skills limitation\)$/m);
 });
 
+// A plan holding the bare d1 and the given decision rows.
+function planWith(name, ...rows) {
+  const file = join(root, `${name}.md`);
+  writeFileSync(file, `${readFileSync(bare, 'utf8')}${rows.map(([id, topic]) => `| ${id} | 2026-10-22 | ${topic} | reproduce live | reproduce live | parity | none |\n`).join('')}`);
+  return file;
+}
+
+test('a decision that only names the path does not accept a row: it must name the check or the field too', async () => {
+  const h1 = [failing('output.h1', '1 of 14 pages affected', ['services/index.html has 0 h1 elements'])];
+  const pathOnly = await reconcile(h1, { planFile: planWith('path-only', ['d2', 'templates: /services/ and /about/ use the page layout']) });
+  assert.equal(pathOnly.code, 1, pathOnly.stdout);
+  assert.match(parsed(pathOnly).blocking[0].rows[0].reason, /no decision row in the plan names output\.h1, or \/services\/ with its h1/);
+  const field = await reconcile(h1, { planFile: planWith('path-field', ['d2', 'no H1 on /services/, as live']) });
+  assert.equal(field.code, 0, field.stdout);
+  const check = await reconcile(h1, { planFile: planWith('check-only', ['d2', 'output.h1 rows reproduce live']) });
+  assert.equal(check.code, 0, check.stdout);
+});
+
+// A capture holding the live 404 page (meta.json notFound) and the root icon probe.
+function notFoundCapture(name, { icons = {}, head = '<title>Page not found</title>' } = {}) {
+  const dir = join(root, name);
+  mkdirSync(join(dir, 'pages'), { recursive: true });
+  mkdirSync(join(dir, 'text'), { recursive: true });
+  writeFileSync(join(dir, 'pages', '404.html'), `<!doctype html><html><head>${head}</head><body><h1>Oops</h1><p>Nothing here</p></body></html>`);
+  writeFileSync(join(dir, 'text', '404.txt'), 'Oops\nNothing here\n');
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({
+    notFound: { path: '/0123456789abcdef0123456789abcdef/', status: 404, snapshot: 'pages/404.html', text: 'text/404.txt' }, icons,
+  }));
+  return dir;
+}
+
+test('the captured 404 page is a page: its rows reproduce live when the capture shows the same', async () => {
+  const captureDir = notFoundCapture('capture-404');
+  const planFile = planWith('plan-404', ['d2', 'og:image on `404.html`: none, as live']);
+  const og = await reconcile([failing('output.og-image', 'none of the 1 page in the build declares an og:image', ['404.html'], 'file')], { planFile, captureDir });
+  assert.equal(og.code, 0, og.stdout);
+  assert.deepEqual(parsed(og).accepted[0].rows[0].paths, ['404.html']);
+  const withImage = notFoundCapture('capture-404-og', { head: '<title>x</title><meta property="og:image" content="https://live.example.com/card.jpg">' });
+  const notLive = await reconcile([failing('output.og-image', 'none of the 1 page in the build declares an og:image', ['404.html'], 'file')], { planFile, captureDir: withImage });
+  assert.equal(notLive.code, 1);
+  assert.match(parsed(notLive).blocking[0].rows[0].reason, /live recorded og:image https:\/\/live\.example\.com\/card\.jpg/);
+  const noCapture = await reconcile([failing('output.og-image', 'none of the 1 page in the build declares an og:image', ['404.html'], 'file')], { planFile, captureDir: join(root, 'no-capture') });
+  assert.match(parsed(noCapture).blocking[0].rows[0].reason, /live has no page at \/404/);
+});
+
+test('favicon rows read meta.json icons: a root icon live answered 404 for is reproduced, one it served is not', async () => {
+  const planFile = planWith('plan-icons', ['d2', 'output.favicon-set: icons as live had them']);
+  const row = [failing('output.favicon-set', 'apple-touch-icon.png is missing', ['apple-touch-icon.png is missing'], 'file')];
+  const none = await reconcile(row, { planFile, captureDir: notFoundCapture('capture-icons-404', { icons: { '/favicon.ico': 404, '/apple-touch-icon.png': 404 } }) });
+  assert.equal(none.code, 0, none.stdout);
+  const served = await reconcile(row, { planFile, captureDir: notFoundCapture('capture-icons-200', { icons: { '/favicon.ico': 404, '/apple-touch-icon.png': 200 } }) });
+  assert.equal(served.code, 1);
+  assert.match(parsed(served).blocking[0].rows[0].reason, /live served \/apple-touch-icon\.png/);
+});
+
+// A baseline whose live site published no sitemap, and a site whose dist builds the given routes.
+function noSitemapSite(name, { drop = [] } = {}) {
+  const base = join(root, `${name}-baseline`);
+  cpSync(baseline, base, { recursive: true });
+  writeFileSync(join(base, 'sitemaps.json'), '[]\n');
+  const site = join(root, `${name}-site`);
+  const routes = JSON.parse(readFileSync(join(base, 'routes.json'), 'utf8')).filter((r) => r.status === 200 && !drop.includes(r.path));
+  for (const route of routes) {
+    const file = route.path === '/' ? 'index.html' : `${route.path.replace(/^\/|\/$/g, '')}/index.html`;
+    mkdirSync(join(site, 'dist', file, '..'), { recursive: true });
+    writeFileSync(join(site, 'dist', file), '<!doctype html>');
+  }
+  return { base, site };
+}
+
+const NO_SITEMAP = failing('predecessor.coverage', '1 sitemap could not be fetched or parsed, so an unknown number of old urls were never checked', [
+  'no sitemap could be fetched from https://www.fixture-roofing.test (tried robots.txt and the conventional paths)',
+], 'url');
+
+const reconcileAt = (checks, { base, site, planFile = bare }) => run(['--findings', gateFile(checks), '--baseline', base, '--plan', planFile, '--capture', capture, '--dir', site, '--json']);
+
+test('predecessor.coverage with no live sitemap is accepted when every crawled page resolves in the build', async () => {
+  const ok = await reconcileAt([NO_SITEMAP], noSitemapSite('nositemap'));
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.equal(parsed(ok).accepted[0].rule, 'no-sitemap');
+
+  const missing = noSitemapSite('nositemap-drop', { drop: ['/hidden-page/'] });
+  const blocked = await reconcileAt([NO_SITEMAP], missing);
+  assert.equal(blocked.code, 1);
+  assert.match(parsed(blocked).blocking[0].rows[0].reason, /\/hidden-page\/ .*not in the build/);
+  const decided = await reconcileAt([NO_SITEMAP], { ...missing, planFile: planWith('drop-hidden', ['d2', 'drop /hidden-page/ (orphan)']) });
+  assert.equal(decided.code, 0, decided.stdout);
+});
+
+test('predecessor.coverage blocks when live had a sitemap, and for any other row', async () => {
+  const { site } = noSitemapSite('withsitemap');
+  const live = await reconcileAt([NO_SITEMAP], { base: baseline, site });
+  assert.equal(live.code, 1);
+  assert.match(parsed(live).blocking[0].rows[0].reason, /the capture saved a live sitemap/);
+  const leftover = failing('predecessor.coverage', '1 of 14 urls on https://www.fixture-roofing.test exist neither', ['https://www.fixture-roofing.test/old/ has no destination'], 'url');
+  assert.equal((await reconcileAt([leftover], noSitemapSite('leftover'))).code, 1);
+});
+
 test('usage errors exit 2', async () => {
   assert.equal((await run(['--findings', 'nope.json', '--baseline', baseline])).code, 2);
   assert.equal((await run(['--findings', join(root, 'missing.json'), '--baseline', baseline, '--plan', plan])).code, 2);

@@ -1,33 +1,44 @@
 #!/usr/bin/env node
 // Reconcile a failing pre-launch gate with the live site: a failing check is accepted only when
 // every row it names reproduces what the baseline recorded for live and docs/plan.md holds the
-// decision that kept it, plus the two narrow rules (the kit's form-id placeholder, and the
-// predecessor checks that misread the trailing-slash rules). Everything else blocks.
+// decision that kept it, plus the narrow rules (the kit's form-id placeholder, the predecessor
+// checks that misread the trailing-slash rules, a live site with no sitemap). Everything else blocks.
 // Pure: reads files only. Exit codes: 0 nothing blocks, 1 something blocks, 2 usage or input error.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
+import { pageHead } from './lib/page-head.mjs';
 
 const HELP = `Usage: node prelaunch-reconcile.mjs --findings <pre-launch bundle>/gate.json
                                   --baseline baseline --plan docs/plan.md
-                                  [--capture capture] [--dir .] [--state .conversion/state.json] [--json]
+                                  [--capture capture] [--dir .] [--dist <dir>/dist]
+                                  [--state .conversion/state.json] [--json]
 
 Reads the pre-launch bundle (gate.json, or findings.json with gate.json beside it) and sorts
 every failing check into accepted or blocking.
 
 A check is accepted only when every row it names (path and field: title, description, h1,
 canonical, og:image, favicon, placeholder text) equals what baseline/seo.json, baseline/text/,
-baseline/routes.json, baseline/media.json or capture/assets/index.json recorded for live, and a
-row of the Decisions table in --plan names that path or the check id (the home page "/" only
-when written \`/\`). A missing icon counts as live's only when the capture asked for it and live
-answered something other than 200; an icon's size only when live's file has the same size.
+baseline/routes.json, baseline/media.json, capture/assets/index.json or capture/meta.json
+recorded for live, and a row of the Decisions table in --plan names the check id, or names the
+row's path and its field ("h1", "title", "og:image", "favicon", the placeholder string, ...);
+a row that only names the path, such as a templates decision, accepts nothing. The home page "/"
+counts only when written \`/\`. The build's 404.html is the captured 404 page (meta.json
+notFound, its head read from the snapshot), named in a decision as \`404.html\`. A missing icon
+counts as live's only when the capture asked for it (its link, or the /favicon.ico and
+/apple-touch-icon.png probe in meta.json icons) and live answered something other than 200; an
+icon's size only when live's file has the same size.
 Narrow rules that need no decision:
   placeholders.form-id            every hit is the kit's placeholder formspree.io/f/REPLACE
                                   (the form id is still on the needs-you list)
   predecessor.wildcard-redirects  every row is one of the kit's trailing-slash rules
   predecessor.redirect-chains     every row is a slash-only loop (/about -> /about)
+  predecessor.coverage            the row is "no sitemap could be fetched", the capture saved no
+                                  live sitemap (baseline/sitemaps.json, capture/sitemaps/index.json),
+                                  and every page the crawl found at 200 (baseline/routes.json) is
+                                  built in --dist or named on a decision row
   hygiene.pushed                  --dir has no git remote and a needs-you item in --state says
                                   to push (no PR can be opened until the person pushes)
 Any other failing check blocks, a crashed one included, and so does a check whose evidence was
@@ -36,8 +47,10 @@ cut at pre-launch's listing cap (the unlisted rows cannot be compared).
   --findings <file>  gate.json or findings.json from pre-launch's --out bundle (required)
   --baseline <dir>   the baseline folder (required)
   --plan <file>      docs/plan.md with its Decisions table (required)
-  --capture <dir>    the capture folder, for capture/assets/index.json (default: capture)
+  --capture <dir>    the capture folder: assets/index.json, meta.json, sitemaps/index.json and
+                     the 404 page (default: capture)
   --dir <dir>        the site repository, for hygiene.pushed (default: .)
+  --dist <dir>       the build, for predecessor.coverage (default: <dir>/dist)
   --state <file>     the run state with needsYou (default: .conversion/state.json)
   --json             print { failing, accepted[], blocking[] } instead of lines
   --help             show this help
@@ -133,13 +146,29 @@ export function loadBaseline(dir, captureDir = null) {
   const assetsFile = captureDir ? join(captureDir, 'assets', 'index.json') : null;
   const assets = assetsFile && existsSync(assetsFile) ? JSON.parse(readFileSync(assetsFile, 'utf8')) : [];
   const assetAt = (path) => assets.find((a) => a.url && pathnameOf(a.url) === path) ?? null;
+  const captured = (name, fallback) => {
+    const file = captureDir ? join(captureDir, name) : null;
+    return file && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : fallback;
+  };
+  const meta = captured('meta.json', {});
+  const icons = meta.icons ?? {};
+  // The captured 404 page (meta.json notFound) is not a route; its head is read from its snapshot.
+  const notFoundFile = meta.notFound?.snapshot ? join(captureDir, meta.notFound.snapshot) : null;
+  const notFound = notFoundFile && existsSync(notFoundFile) ? pageHead(readFileSync(notFoundFile, 'utf8')) : null;
+  const allSeo = notFound ? { ...seo, [NOT_FOUND]: notFound } : seo;
   return {
-    // The baseline's own spelling of a build path, or null when live had no such page.
+    // The baseline's own spelling of a build path, or null when live had no such page. The build's
+    // 404.html is the captured 404 page.
     page(path) {
+      if (notFound && String(path).trim().replace(/^\/+/, '') === NOT_FOUND) return NOT_FOUND;
       return byNormal.get(normalizePath(path)) ?? null;
     },
-    seo: (page) => seo[page],
+    seo: (page) => allSeo[page],
     text(page) {
+      if (page === NOT_FOUND) {
+        const file = meta.notFound?.text ? join(captureDir, meta.notFound.text) : null;
+        return file && existsSync(file) ? readFileSync(file, 'utf8') : '';
+      }
       const snapshot = snapshots.get(page);
       if (!snapshot) return '';
       const file = join(dir, 'text', snapshot.replace(/^pages\//, '').replace(/\.html$/, '.txt'));
@@ -151,7 +180,7 @@ export function loadBaseline(dir, captureDir = null) {
       const route = routes.find((r) => r.path === path);
       if (route) return route.status;
       if (mediaPaths.has(path)) return 200;
-      return assetAt(path)?.status ?? null;
+      return assetAt(path)?.status ?? icons[path] ?? null;
     },
     // The size of live's PNG at path, from the capture's saved asset.
     livePngSize(path) {
@@ -161,9 +190,16 @@ export function loadBaseline(dir, captureDir = null) {
     servedIcon: (pattern) => [...files].some((p) => pattern.test(p)) || assets.some((a) => a.status === 200 && a.url && pattern.test(pathnameOf(a.url) ?? '')),
     anyFile: (pattern) => [...files].some((p) => pattern.test(p)),
     isMedia: (path) => mediaPaths.has(path),
-    pagesWithOgImage: (image) => Object.keys(seo).filter((p) => sameUrl(seo[p].og?.image, image)),
+    pagesWithOgImage: (image) => Object.keys(allSeo).filter((p) => sameUrl(allSeo[p].og?.image, image)),
+    // Whether live published a sitemap: one the capture saved (baseline/sitemaps.json) or one
+    // capture/sitemaps/index.json records answering 200.
+    hadSitemap: () => read('sitemaps.json', []).length > 0 || captured(join('sitemaps', 'index.json'), []).some((s) => s.status === 200),
+    // The pages the crawl found answering 200 (not media).
+    crawled: () => routes.filter((r) => r.status === 200 && r.kind !== 'media').map((r) => r.path),
   };
 }
+
+const NOT_FOUND = '404.html';
 
 // [{ id, text, topic }] from the Decisions table rows (| dN | date | topic | … |).
 export function loadDecisions(planFile) {
@@ -183,6 +219,29 @@ function names(decision, name) {
 function decisionNaming(decisions, wanted) {
   const tokens = [...new Set(wanted.filter(Boolean))];
   return decisions.find((d) => tokens.some((t) => names(d, t)))?.id ?? null;
+}
+
+// How a decision row names a row's field: the word for it ("h1", "title", "og:image", ...).
+const FIELD_WORDS = {
+  title: /\btitles?\b/i,
+  description: /\bdescriptions?\b/i,
+  h1: /\bh1s?\b/i,
+  canonical: /\bcanonical/i,
+  'og:image': /\bog:image\b|\bog-image\b|\bog image\b|\bshare image\b/i,
+  favicon: /favicon|\bicons?\b|apple-touch-icon|manifest/i,
+  'placeholder text': /placeholder/i,
+};
+
+// The decision accepting a row: one that names the check id, or names the row's path and its
+// field (for placeholder text, the placeholder string itself counts as the field). A row that
+// merely names the path, such as a templates decision listing pages, accepts nothing.
+function decisionFor(decisions, check, row) {
+  const byCheck = decisionNaming(decisions, [check]);
+  if (byCheck) return byCheck;
+  const paths = [...new Set([...row.paths, ...row.paths.map(normalizePath)])];
+  const shown = row.field === 'placeholder text' ? / — (.+)$/.exec(row.text)?.[1] : null;
+  const fieldNamed = (d) => FIELD_WORDS[row.field]?.test(d.text) || (shown && d.text.toLowerCase().includes(shown.toLowerCase()));
+  return decisions.find((d) => fieldNamed(d) && paths.some((p) => names(d, p)))?.id ?? null;
 }
 
 // The failing checks, as { id, detail, evidence[] }: gate.json's fail checks, or findings.json's
@@ -209,7 +268,7 @@ export function loadFailing(file) {
 
 // A row on a page: the baseline page it names, or a failing row when live had no such page.
 function onPage(base, rel, field, text, compare) {
-  const page = base.page(relPath(rel));
+  const page = base.page(rel) === NOT_FOUND ? NOT_FOUND : base.page(relPath(rel));
   if (page === null) return { text, field, paths: [relPath(rel)], ok: false, reason: `live has no page at ${relPath(rel)}` };
   const reason = compare(base.seo(page), page);
   return { text, field, paths: [page], ok: reason === null, reason };
@@ -328,7 +387,7 @@ function needsYou(stateFile) {
   }
 }
 
-function narrow(check, env) {
+function narrow(check, env, base, decisions) {
   const values = check.evidence.map((e) => String(e.value));
   if (check.id === 'hygiene.pushed') {
     const text = values[0] ?? check.detail;
@@ -362,14 +421,48 @@ function narrow(check, env) {
     });
     return { ok: rows.every((r) => r.ok), rule: 'slash', decision: null, rows };
   }
+  if (check.id === 'predecessor.coverage') {
+    const rows = values.map((text) => noSitemapRow(text, base, decisions, env));
+    const ids = [...new Set(rows.flatMap((r) => r.decisions ?? []))];
+    for (const r of rows) delete r.decisions;
+    return { ok: rows.every((r) => r.ok), rule: 'no-sitemap', decision: ids.join(', ') || null, rows };
+  }
   return undefined;
 }
 
-export function reconcile(failing, base, decisions, env = { dir: '.', state: join('.conversion', 'state.json') }) {
+// The file the build serves for a url path, as pre-launch resolves it (plus a feed's index.xml).
+function inBuild(dist, path) {
+  const bare = normalizePath(path).slice(1);
+  const candidates = bare === '' ? ['index.html'] : [bare, `${bare}.html`, `${bare}/index.html`, `${bare}/index.htm`, `${bare}/index.xml`];
+  return candidates.some((c) => existsSync(join(dist, c)) && statSync(join(dist, c)).isFile());
+}
+
+// predecessor.coverage when live publishes no sitemap: pre-launch has no list of old urls, so the
+// crawl stands in for it. Accepted only when the capture saved no live sitemap and every page the
+// crawl found answering 200 is built at its path, or named on a decision row.
+function noSitemapRow(text, base, decisions, env) {
+  if (!/^no sitemap could be fetched from /.test(text)) return { text, ok: false, reason: 'not the no-sitemap row' };
+  if (base.hadSitemap()) return { text, ok: false, reason: 'the capture saved a live sitemap; make it reachable for pre-launch' };
+  const ids = [];
+  const missing = [];
+  for (const path of base.crawled()) {
+    if (inBuild(env.dist, path)) continue;
+    const id = decisionNaming(decisions, [path, normalizePath(path)]);
+    if (id) ids.push(id);
+    else missing.push(path);
+  }
+  if (missing.length) {
+    const listed = missing.slice(0, 10).join(', ') + (missing.length > 10 ? `, and ${missing.length - 10} more` : '');
+    return { text, ok: false, reason: `${listed} ${missing.length === 1 ? 'is' : 'are'} crawled from live but not in the build (${env.dist}) and on no decision row` };
+  }
+  return { text, ok: true, reason: null, decisions: ids };
+}
+
+export function reconcile(failing, base, decisions, env = { dir: '.', dist: 'dist', state: join('.conversion', 'state.json') }) {
   const accepted = [];
   const blocking = [];
   for (const check of failing) {
-    const special = narrow(check, env);
+    const special = narrow(check, env, base, decisions);
     if (special !== undefined) {
       if (special?.ok) accepted.push({ id: check.id, rule: special.rule, decision: special.decision, rows: special.rows });
       else blocking.push({ id: check.id, detail: check.detail, rows: special?.rows ?? [] });
@@ -387,10 +480,11 @@ export function reconcile(failing, base, decisions, env = { dir: '.', state: joi
       continue;
     }
     for (const row of rows.filter((r) => r.ok)) {
-      row.decision = decisionNaming(decisions, [...row.paths, ...row.paths.map(normalizePath), check.id]);
+      row.decision = decisionFor(decisions, check.id, row);
       if (row.decision === null) {
         row.ok = false;
-        row.reason = `no decision row in the plan names ${[...row.paths, check.id].join(' or ')}`;
+        const where = row.paths.length ? `, or ${row.paths.join(' or ')} with its ${row.field}` : '';
+        row.reason = `no decision row in the plan names ${check.id}${where}`;
       }
     }
     const count = listedCount(check.detail);
@@ -411,6 +505,7 @@ function lines(result) {
       if (a.rule === 'slash') out.push(`accepted  ${a.id}: ${r.text} — trailing-slash rule (known launch-skills limitation)`);
       else if (a.rule === 'form-id') out.push(`accepted  ${a.id}: ${r.text} — form id pending (needs you)`);
       else if (a.rule === 'no-remote') out.push(`accepted  ${a.id}: ${r.text} — no remote yet; the push is on the needs-you list`);
+      else if (a.rule === 'no-sitemap') out.push(`accepted  ${a.id}: ${r.text} — live publishes no sitemap; every page the crawl found is built${a.decision ? ` or decided (${a.decision})` : ''}`);
       else out.push(`accepted  ${a.id}: ${r.paths.join(', ') || r.text} ${r.field} — reproduced from live (${r.decision})`);
     }
   }
@@ -427,7 +522,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '--json') opts[arg.slice(2)] = true;
-    else if (['--findings', '--baseline', '--plan', '--capture', '--dir', '--state'].includes(arg)) {
+    else if (['--findings', '--baseline', '--plan', '--capture', '--dir', '--dist', '--state'].includes(arg)) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
       opts[arg.slice(2)] = value;
@@ -452,6 +547,7 @@ function main() {
     const dir = opts.dir ?? '.';
     result = reconcile(loadFailing(opts.findings), loadBaseline(opts.baseline, opts.capture ?? 'capture'), loadDecisions(opts.plan), {
       dir,
+      dist: opts.dist ?? join(dir, 'dist'),
       state: opts.state ?? join(dir, '.conversion', 'state.json'),
     });
   } catch (err) {
