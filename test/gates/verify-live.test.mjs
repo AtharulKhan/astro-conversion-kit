@@ -103,13 +103,13 @@ after(async () => {
 
 const live = (base, args = []) => verifyLive(['--base', base, '--baseline', baseline, '--delay', '0', ...args]);
 
-// 15 routes at 200 (13 pages, the feed, the brochure PDF), 14 redirects (the no-op /?p=2 -> /
+// 15 routes at 200 (13 pages, the feed, the brochure PDF), 15 redirects (the no-op /?p=2 -> /
 // answers 200 in place), the sitemap, 20 media.
 test('a dist-good build served live passes every check', async () => {
   const host = await serve(good);
   const result = await live(host.origin);
   assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /^verify-live: 50 checked, 0 failed$/m);
+  assert.match(result.stdout, /^verify-live: 51 checked, 0 failed$/m);
   assert.match(result.stdout, /^ {2}ok route \/hidden-page\/$/m);
   assert.match(result.stdout, /^ {2}ok redirect \/old-services -> \/services\/$/m);
 });
@@ -119,14 +119,14 @@ test('a route missing from the deploy fails, naming it', async () => {
   const result = await live(host.origin);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^ {2}FAIL route \/hidden-page\/ status: expected 200, got 404$/m);
-  assert.match(result.stdout, /^verify-live: 50 checked, 1 failed$/m);
+  assert.match(result.stdout, /^verify-live: 51 checked, 1 failed$/m);
 });
 
 test('--bypass is sent as x-vercel-protection-bypass on every request', async () => {
   const host = await serve(good);
   const result = await live(host.origin, ['--bypass', 'secret-value']);
   assert.equal(result.code, 0, result.stdout);
-  assert.equal(host.headers.length, 50);
+  assert.equal(host.headers.length, 51);
   assert.ok(host.headers.every((h) => h['x-vercel-protection-bypass'] === 'secret-value'));
 });
 
@@ -211,7 +211,7 @@ test('--media-manifest checks each sampled object at its url against the manifes
   const result = await live(host.origin, ['--media-manifest', manifest, '--json']);
   assert.equal(result.code, 1);
   const json = JSON.parse(result.stdout);
-  assert.equal(json.checked, 32);
+  assert.equal(json.checked, 33);
   assert.deepEqual(json.failures, [{ check: 'media', path: '/wp-content/uploads/2026/01/team.jpg', field: 'bytes', expected: 1, actual: 13704 }]);
 });
 
@@ -245,7 +245,7 @@ test('--sample N checks N routes, always / and one route per template', async ()
   const checked = routes.filter((r) => !skipped.includes(r.path));
   assert.ok(checked.some((r) => r.path === '/'));
   assert.deepEqual(new Set(checked.map((r) => r.template)), templates);
-  assert.equal(json.checked, 8 + 14 + 1 + 20);
+  assert.equal(json.checked, 8 + 15 + 1 + 20);
 });
 
 test('three consecutive 429s stop the run with exit 3', async () => {

@@ -59,11 +59,14 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const gate = (cwd, dist, args = []) => runGate('redirects', ['--dist', dist, '--baseline', baseline, ...args], { cwd });
 const vercelConfig = (dir) => JSON.parse(readFileSync(join(dir, 'vercel.json'), 'utf8'));
 
-test('the live chain /old-services -> /old-services/ -> /services/ compiles to one rule', () => {
+test('the live chain /old-services -> /old-services/ -> /services/ compiles to one rule per hop, each straight to the end', () => {
   const rules = vercelConfig(vercelDir).redirects.filter((r) => r.destination === '/services/' && !r.has);
-  assert.deepEqual(rules, [{ source: '/old-services', destination: '/services/', statusCode: 301 }]);
+  assert.deepEqual(rules, [
+    { source: '/old-services', destination: '/services/', statusCode: 301 },
+    { source: '/old-services/', destination: '/services/', statusCode: 301 },
+  ]);
   const lines = readFileSync(join(cloudflareDir, 'public', '_redirects'), 'utf8').split('\n');
-  assert.deepEqual(lines.filter((l) => l.startsWith('/old-services')), ['/old-services /services/ 301']);
+  assert.deepEqual(lines.filter((l) => l.startsWith('/old-services')), ['/old-services /services/ 301', '/old-services/ /services/ 301']);
 });
 
 test('vercel: the chain resolves in one hop; the gate passes every baseline redirect, the no-op is skipped', async () => {
@@ -72,7 +75,7 @@ test('vercel: the chain resolves in one hop; the gate passes every baseline redi
   const result = await gate(vercelDir, good);
   assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /^ {2}\/\?p=2 skipped: noop: destination equals source path$/m);
-  assert.match(result.stdout, /^redirects: 13 checked, 0 failed, 1 skipped \(noop\)$/m);
+  assert.match(result.stdout, /^redirects: 14 checked, 0 failed, 1 skipped \(noop\)$/m);
 });
 
 test('vercel: a query redirect carries the query in one hop; /?p=2 -> / is not compiled', () => {
@@ -135,7 +138,7 @@ test('cloudflare: the chain resolves in one hop; query rows are skipped and list
   assert.equal(all.code, 0, all.stdout + all.stderr);
   assert.match(all.stdout, /^ {2}\/\?p=7 skipped: query redirect, needs a Cloudflare Single Redirect$/m);
   assert.match(all.stdout, /^ {2}\/\?p=2 skipped: noop: destination equals source path$/m);
-  assert.match(all.stdout, /^redirects: 2 checked, 0 failed, 12 skipped \(query redirect, needs a Cloudflare Single Redirect; noop\)$/m);
+  assert.match(all.stdout, /^redirects: 3 checked, 0 failed, 12 skipped \(query redirect, needs a Cloudflare Single Redirect; noop\)$/m);
   const json = JSON.parse((await gate(cloudflareDir, cloudflareDist, ['--json'])).stdout);
   assert.equal(json.skipped, 12);
   assert.equal(json.skips.length, 12);
@@ -174,14 +177,14 @@ test('a redirect source that is also a built page fails', async () => {
   const result = await gate(vercelDir, dist);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /\/old-services collision: expected null, got "old-services\.html"/);
-  assert.match(result.stdout, /^redirects: 13 checked, 1 failed, 1 skipped \(noop\)$/m);
+  assert.match(result.stdout, /^redirects: 14 checked, 1 failed, 1 skipped \(noop\)$/m);
 });
 
 test('decision rows in redirects.csv are checked too', async () => {
   const dir = await site('site-decision', 'vercel', { rows: ['/promo,/contact/,301,decision,merged promo', '/gone,/missing/,301,decision,'] });
   const result = await gate(dir, good);
   assert.equal(result.code, 1);
-  assert.match(result.stdout, /^redirects: 15 checked, 1 failed, 1 skipped \(noop\)$/m);
+  assert.match(result.stdout, /^redirects: 16 checked, 1 failed, 1 skipped \(noop\)$/m);
   assert.match(result.stdout, /\/gone target: expected "a page or file in dist", got "404 at \/missing\/"/);
 });
 

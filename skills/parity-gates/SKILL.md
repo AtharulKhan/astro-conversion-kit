@@ -39,6 +39,10 @@ It needs `capture/inventory.json`, `media.json` (capture's `media.mjs`) and `tem
 (`templates.mjs`), and exits 2 naming the step to run when one is missing. It writes
 `baseline/{routes,seo,redirects,media,forms,scripts,meta,counts}.json` and `baseline/text/`, and
 `redirects.csv` at the site root. A shortlink with no target is left out and named on stderr.
+Each intermediate hop of a captured chain gets its own row straight to the final target
+(`/old-services` → `/old-services/` → `/services/` also gives `/old-services/,/services/`, note
+`hop of /old-services`), unless that hop is itself a built route, so a link to any URL of the
+chain lands in one hop.
 Commit `baseline/` and `redirects.csv` together. `--check` recounts `baseline/` against
 `counts.json` (exit 1 on drift). Every file's shape is in `references/contracts.md`.
 

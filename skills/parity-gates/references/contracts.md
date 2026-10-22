@@ -37,7 +37,9 @@ A missing scalar is `null`. The seo gate compares `jsonLd` by its `@type` values
     [{ "from": "/old-services", "to": "/services/", "status": 301, "source": "seed" },
      { "from": "/?p=6", "to": "/contact/", "status": 301, "source": "shortlink", "verified": false }]
 
-From the capture's redirects (chains collapsed to their final target) and shortlinks. Only
+From the capture's redirects (chains collapsed to their final target) and shortlinks, plus one
+row per intermediate hop of a chain, straight to the final target (see `note` under
+redirects.csv). Only
 shortlinks carry `verified`: `true` when the capture requested it. A redirect with no target is
 left out and named on stderr.
 
@@ -89,7 +91,7 @@ routes gate lets the build serve each at the root (besides Astro's `sitemap-inde
 
     { "routes": 16, "byStatus": { "200": 15, "404": 1 },
       "byTemplate": { "archive": 2, "home": 1, "other": 3, "page": 6, "page-2": 1, "single-post": 3 },
-      "redirects": { "seed": 2, "shortlink": 12 }, "media": 20, "forms": 1, "scripts": 2 }
+      "redirects": { "seed": 3, "shortlink": 12 }, "media": 20, "forms": 1, "scripts": 2 }
 
 Keys of `byStatus`, `byTemplate` and `redirects` are sorted. `redirects` is counted by
 `source`, `forms` is the total number of forms, `scripts` the number of
@@ -106,6 +108,7 @@ vendors.
 
     from,to,status,source,note
     /old-services,/services/,301,seed,
+    /old-services/,/services/,301,seed,hop of /old-services
     /?p=6,/contact/,301,shortlink,unverified shortlink
     /old-blog/*,/blog/:splat,301,decision,d7
 
@@ -117,7 +120,10 @@ vendors.
 - `status`: 301, 302, 303, 307 or 308.
 - `source`: `crawl`, `sitemap`, `shortlink` or `seed` from the capture; `decision` for a row you
   add. Kept as written.
-- `note`: free text; `unverified shortlink` from the capture, the decision id on a `decision` row.
+- `note`: free text; `unverified shortlink` from the capture, `hop of <from>` on a row for an
+  intermediate hop of a captured chain (A → B → C gives A → C and B → C, with B's row noted
+  `hop of A`; a hop that is a built route gets no row), the decision id on a `decision` row.
+  A hop row keeps the head's status and source; it is in `baseline/redirects.json` too.
 
 The file is RFC 4180 CSV (quote a field holding a comma). A malformed file makes
 `build-redirects.mjs` exit 2 naming the line.

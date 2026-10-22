@@ -17,7 +17,9 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
   seo.json        { "<path>": { title, description, canonical, robots, lang, h1[], h2[], og{},
                   twitter{}, jsonLd[] } } for every page answering 200
   redirects.json  [{ from, to, status, source, verified? }] from the capture's redirects and
-                  shortlinks; shortlinks keep verified (true when it was requested)
+                  shortlinks; shortlinks keep verified (true when it was requested). Each
+                  intermediate hop of a chain (A -> B -> C) gets its own row to the final target
+                  (B -> C, note "hop of A" in redirects.csv) unless it is a built route
   media.json      [{ path, bytes, contentType }] for every media file answering 200
   forms.json      { "<path>": [{ action, method, fields[] }] }
   scripts.json    { "<vendor>": { id, ids[], pages[], keep } }; keep is true, set it to false
@@ -144,10 +146,20 @@ export function buildSeo(inventory) {
 }
 
 // Returns { redirects, csvRows, skipped }. Redirects with no target cannot be served and are skipped.
-export function buildRedirects(captured) {
+// Every intermediate hop of a captured chain (A -> B -> C keeps hops [B]) also gets a row straight
+// to the final target (B -> C, note "hop of A"), so a link to B lands in one hop too; a hop that
+// is a built route (`routes`, the paths answering 200), a captured redirect of its own, or part of
+// a loop gets none.
+export function buildRedirects(captured, { routes = new Set() } = {}) {
   const redirects = [];
   const csvRows = [];
   const skipped = [];
+  const sources = new Set(captured.filter((r) => r.to).map((r) => r.from));
+  const add = (entry, note) => {
+    redirects.push(entry);
+    sources.add(entry.from);
+    csvRows.push([entry.from, entry.to, entry.status, entry.source, note]);
+  };
   for (const r of captured) {
     if (!r.to) {
       skipped.push(r);
@@ -155,9 +167,12 @@ export function buildRedirects(captured) {
     }
     const entry = { from: r.from, to: r.to, status: r.status, source: r.source };
     if (typeof r.verified === 'boolean') entry.verified = r.verified;
-    redirects.push(entry);
-    const note = r.source === 'shortlink' && r.verified === false ? 'unverified shortlink' : '';
-    csvRows.push([r.from, r.to, r.status, r.source, note]);
+    add(entry, r.source === 'shortlink' && r.verified === false ? 'unverified shortlink' : '');
+    if (r.error === 'loop') continue;
+    for (const hop of r.hops ?? []) {
+      if (!hop || hop === r.to || sources.has(hop) || routes.has(hop)) continue;
+      add({ from: hop, to: r.to, status: r.status, source: r.source }, `hop of ${r.from}`);
+    }
   }
   return { redirects, csvRows, skipped };
 }
@@ -294,7 +309,9 @@ function build(capture, out, csvFile) {
     rest: restKinds(capture),
     foundBy: state.foundBy ?? {},
   });
-  const { redirects, csvRows, skipped } = buildRedirects(readJson(join(capture, 'redirects.json'), []));
+  const { redirects, csvRows, skipped } = buildRedirects(readJson(join(capture, 'redirects.json'), []), {
+    routes: new Set(routes.filter((r) => r.status === 200).map((r) => r.path)),
+  });
   const baseline = {
     routes,
     redirects,

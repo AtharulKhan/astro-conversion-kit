@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
+import { buildRedirects } from '../../skills/parity-gates/scripts/build-baseline.mjs';
 
 const exec = promisify(execFile);
 const script = (path) => fileURLToPath(new URL(`../../skills/${path}`, import.meta.url));
@@ -109,23 +110,45 @@ test('seo: head fields per page answering 200', () => {
   assert.deepEqual(seo['/contact/'].h1, ['Contact']);
 });
 
-// Measured: 12 unverified shortlinks (/?p=2 ... /?p=23) plus the two seeds.
+// Measured: 12 unverified shortlinks (/?p=2 ... /?p=23), the two seeds and the middle hop of the
+// /old-services -> /old-services/ -> /services/ chain.
 test('redirects: capture redirects and shortlinks, as JSON and as redirects.csv', () => {
   const redirects = readJson(baseline, 'redirects.json');
-  assert.equal(redirects.length, 14);
+  assert.equal(redirects.length, 15);
   // Shortlinks keep verified, so the redirects gate can tell an unverified one apart.
   for (const r of redirects) {
     const keys = r.source === 'shortlink' ? ['from', 'to', 'status', 'source', 'verified'] : ['from', 'to', 'status', 'source'];
     assert.deepEqual(Object.keys(r), keys);
   }
   assert.deepEqual(redirects.find((r) => r.from === '/old-services'), { from: '/old-services', to: '/services/', status: 301, source: 'seed' });
+  // The chain's middle hop is a redirect of its own, straight to the final target.
+  assert.deepEqual(redirects.find((r) => r.from === '/old-services/'), { from: '/old-services/', to: '/services/', status: 301, source: 'seed' });
   assert.deepEqual(redirects.find((r) => r.from === '/?p=6'), { from: '/?p=6', to: '/contact/', status: 301, source: 'shortlink', verified: false });
 
   const lines = readFileSync(join(root, 'redirects.csv'), 'utf8').trimEnd().split('\n');
   assert.equal(lines[0], 'from,to,status,source,note');
-  assert.equal(lines.length, 15);
+  assert.equal(lines.length, 16);
   assert.ok(lines.includes('/old-services,/services/,301,seed,'));
+  assert.ok(lines.includes('/old-services/,/services/,301,seed,hop of /old-services'));
   assert.ok(lines.includes('/?p=6,/contact/,301,shortlink,unverified shortlink'));
+});
+
+test('buildRedirects: every intermediate hop redirects to the final target, unless it is a built route', () => {
+  const { redirects, csvRows } = buildRedirects(
+    [
+      { from: '/a', to: '/d/', status: 301, source: 'crawl', hops: ['/b', '/c/'] },
+      { from: '/x', to: '/z/', status: 302, source: 'seed', hops: ['/y/'] },
+      { from: '/m', to: '/n/', status: 301, source: 'seed', hops: ['/m/'] },
+      { from: '/m/', to: '/n/', status: 301, source: 'crawl', hops: [] },
+      { from: '/loop', to: '/loop/', status: 301, source: 'crawl', hops: ['/loop/'], error: 'loop' },
+    ],
+    { routes: new Set(['/y/']) },
+  );
+  assert.deepEqual(redirects.map((r) => `${r.from}>${r.to}`), ['/a>/d/', '/b>/d/', '/c/>/d/', '/x>/z/', '/m>/n/', '/m/>/n/', '/loop>/loop/']);
+  assert.deepEqual(redirects.find((r) => r.from === '/b'), { from: '/b', to: '/d/', status: 301, source: 'crawl' });
+  assert.deepEqual(csvRows.find((row) => row[0] === '/c/'), ['/c/', '/d/', 301, 'crawl', 'hop of /a']);
+  // /m/ is captured as a redirect of its own: it keeps its own row and gets no hop row.
+  assert.deepEqual(csvRows.find((row) => row[0] === '/m/'), ['/m/', '/n/', 301, 'crawl', '']);
 });
 
 test('redirects: a shortlink with no target is left out and named on stderr', async (t) => {
@@ -202,7 +225,7 @@ test('counts.json sums the baseline', () => {
     routes: 16,
     byStatus: { 200: 15, 404: 1 },
     byTemplate: { archive: 2, home: 1, other: 3, page: 6, 'page-2': 1, 'single-post': 3 },
-    redirects: { seed: 2, shortlink: 12 },
+    redirects: { seed: 3, shortlink: 12 },
     media: 20,
     forms: 1,
     scripts: 2,
