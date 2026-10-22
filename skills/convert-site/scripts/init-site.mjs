@@ -13,7 +13,8 @@ import { assertNodeVersion } from './lib/node-version.mjs';
 const HELP = `Usage: node init-site.mjs --dir <path> --origin <url> --name "<site name>"
                          --host vercel|cloudflare [options]
 
-Creates <path> (or fills it when it is empty or holds only a README and .git), copies the site
+Creates <path> (or fills it when it holds nothing but .git, .gitignore, a README, capture/ and
+.conversion/: the capture and the run state are kept and committed with the scaffold), copies the site
 templates with placeholders filled in, copies the kit's gate, review and conversion scripts into
 scripts/, writes package.json, makes the first commit on main and switches to astro-rebuild.
 
@@ -54,7 +55,10 @@ const HOSTS = {
 };
 
 const TRAILING = { always: 'directory', never: 'file' };
-const ALLOWED_EXISTING = new Set(['.git', 'README.md', 'README', '.DS_Store']);
+// A run captures and plans before the scaffold exists, so its capture/ and .conversion/ may be here.
+const ALLOWED_EXISTING = new Set(['.git', '.gitignore', 'README.md', 'README', '.DS_Store', 'capture', '.conversion']);
+// Template files appended to an existing file of the same name instead of replacing it.
+const APPEND_TO_EXISTING = new Set(['README.md', '.gitignore']);
 const CONVERT_SCRIPTS = ['css-coverage', 'css-prune', 'media-plan', 'media-upload', 'state'];
 const PINNED_DEPS = ['parse5', 'playwright', 'pixelmatch', 'pngjs', 'css-tree'];
 const COMMIT_SUBJECT = 'chore: scaffold from astro-conversion-kit';
@@ -151,7 +155,7 @@ function copyTemplates(templateDir, dir, values, skip) {
     const target = join(dir, rel);
     const text = substitute(readFileSync(source, 'utf8'), values);
     mkdirSync(dirname(target), { recursive: true });
-    if (rel === 'README.md' && existsSync(target)) {
+    if (APPEND_TO_EXISTING.has(rel) && existsSync(target)) {
       const existing = readFileSync(target, 'utf8').replace(/\s*$/, '\n\n');
       writeFileSync(target, existing + text);
     } else {
@@ -261,7 +265,7 @@ export function initSite(argv) {
   const unexpected = existingEntries(dir).filter((name) => !ALLOWED_EXISTING.has(name));
   if (unexpected.length > 0) {
     throw new UsageError(
-      `${dir} is not empty; init-site only fills an empty or README-only directory. Found:\n` +
+      `${dir} is not empty; init-site only fills a directory holding nothing but .git, .gitignore, a README, capture/ and .conversion/. Found:\n` +
         unexpected.sort().map((name) => `  ${name}`).join('\n'),
     );
   }

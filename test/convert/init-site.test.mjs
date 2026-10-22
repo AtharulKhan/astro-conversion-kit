@@ -268,6 +268,38 @@ test('a README-only directory is accepted and missing kit script trees are skipp
   assert.ok(!existsSync(join(dir, 'scripts')));
 });
 
+test('a folder holding only a capture, run state and .gitignore is scaffolded around them', (t) => {
+  const dir = tempDir(t, 'site-');
+  plant(join(dir, 'capture', 'inventory.json'), '[]\n');
+  plant(join(dir, 'capture', 'screens', 'live', 'home', '390.png'), 'not really a png');
+  plant(join(dir, '.conversion', 'state.json'), '{"version":1,"phase":"plan"}\n');
+  writeFileSync(join(dir, '.gitignore'), '/scratch/\n');
+  const result = run(baseArgs(dir, bareKit(t)));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  // The capture and the state are kept as they were and land in the scaffold commit.
+  assert.equal(readFileSync(join(dir, '.conversion', 'state.json'), 'utf8'), '{"version":1,"phase":"plan"}\n');
+  assert.notEqual(git(dir, 'ls-files', 'capture/inventory.json'), '');
+  assert.notEqual(git(dir, 'ls-files', '.conversion/state.json'), '');
+  assert.equal(git(dir, 'ls-files', 'capture/screens'), '', 'screenshots stay out of git');
+  assert.equal(git(dir, 'rev-list', '--count', 'main'), '1');
+
+  // The existing .gitignore keeps its lines and gains the template's.
+  const ignore = readFileSync(join(dir, '.gitignore'), 'utf8');
+  assert.match(ignore, /^\/scratch\/$/m);
+  assert.match(ignore, /^\/capture\/screens\/$/m);
+});
+
+test('anything else beside the capture is still refused', (t) => {
+  const dir = tempDir(t, 'site-');
+  plant(join(dir, 'capture', 'inventory.json'), '[]\n');
+  plant(join(dir, 'notes.txt'), 'stray\n');
+  const result = run(baseArgs(dir, bareKit(t)));
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /not empty/);
+  assert.match(result.stderr, /Found:\n {2}notes\.txt\n/, 'only the stray file is listed');
+});
+
 test('usage errors exit 2 and write nothing', (t) => {
   const dir = tempDir(t, 'site-');
   const badHost = run(baseArgs(dir, null, { host: 'netlify' }));
