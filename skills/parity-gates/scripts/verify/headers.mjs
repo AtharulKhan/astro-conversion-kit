@@ -18,7 +18,8 @@ const OPTIONS = {
 const NOTES = `
 Only rules for every path count: vercel.json sources /(.*), /:path* and /:path(.*) without
 has/missing conditions, and the _headers path /*. A _headers whole-host pattern such as
-https://*.pages.dev/* counts for X-Robots-Tag only. PUBLIC_INDEXABLE=true in the environment marks a production build: noindex is
+https://*.pages.dev/* counts only as the preview host's noindex: it meets the
+noindex requirement, and is ignored when PUBLIC_INDEXABLE=true. PUBLIC_INDEXABLE=true in the environment marks a production build: noindex is
 then forbidden instead of required.
 `;
 const VERCEL_ALL = new Set(['/(.*)', '/:path*', '/:path(.*)']);
@@ -29,7 +30,8 @@ function fail(message) {
   process.exit(2);
 }
 
-// { source, headers: Map(lower-case name -> value) } of the catch-all vercel.json rules.
+// { source, headers: Map(lower-case name -> value), hostHeaders } of the catch-all vercel.json
+// rules; vercel.json has no whole-host patterns, so hostHeaders is empty.
 export function vercelHeaders(config) {
   const headers = new Map();
   let source = '/(.*)';
@@ -39,12 +41,14 @@ export function vercelHeaders(config) {
     source = rule.source;
     for (const { key, value } of rule.headers ?? []) headers.set(String(key).toLowerCase(), String(value));
   }
-  return { source, headers };
+  return { source, headers, hostHeaders: new Map() };
 }
 
-// The same from a _headers file: a path line, then indented "Name: value" lines.
+// The same from a _headers file: a path line, then indented "Name: value" lines. Headers of a
+// whole-host pattern (https://*.pages.dev/*) go to hostHeaders: they cover that host only.
 export function headersFileHeaders(text) {
   const headers = new Map();
+  const hostHeaders = new Map();
   let current = null;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim() || line.trim().startsWith('#')) continue;
@@ -55,14 +59,15 @@ export function headersFileHeaders(text) {
     const match = /^\s+([^:]+):\s*(.*)$/.exec(line);
     if (!match) continue;
     const name = match[1].trim().toLowerCase();
-    // A whole-host pattern (https://*.pages.dev/*) covers that host only: it can carry the
-    // preview noindex, but not the headers every host needs.
-    if (current === '/*' || (HOST_ALL.test(current ?? '') && name === 'x-robots-tag')) headers.set(name, match[2].trim());
+    if (current === '/*') headers.set(name, match[2].trim());
+    else if (HOST_ALL.test(current ?? '')) hostHeaders.set(name, match[2].trim());
   }
-  return { source: '/*', headers };
+  return { source: '/*', headers, hostHeaders };
 }
 
-export function checkHeaders({ source, headers }, { indexable }) {
+// A whole-host noindex (the preview host) satisfies the staging requirement, but is not a
+// production noindex: only the every-path rule decides whether production is indexable.
+export function checkHeaders({ source, headers, hostHeaders = new Map() }, { indexable }) {
   const failures = [];
   const get = (name) => headers.get(name.toLowerCase()) ?? null;
   const nosniff = get('X-Content-Type-Options');
@@ -73,7 +78,8 @@ export function checkHeaders({ source, headers }, { indexable }) {
   }
   const robots = get('X-Robots-Tag');
   const noindex = /\bnoindex\b/i.test(robots ?? '');
-  if (!indexable && !noindex) failures.push({ path: source, field: 'X-Robots-Tag', expected: 'noindex', actual: robots });
+  const hostNoindex = /\bnoindex\b/i.test(hostHeaders.get('x-robots-tag') ?? '');
+  if (!indexable && !noindex && !hostNoindex) failures.push({ path: source, field: 'X-Robots-Tag', expected: 'noindex', actual: robots });
   if (indexable && noindex) failures.push({ path: source, field: 'X-Robots-Tag', expected: 'no noindex (PUBLIC_INDEXABLE=true)', actual: robots });
   return { checked: 4, failures };
 }

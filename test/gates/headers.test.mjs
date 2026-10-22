@@ -91,6 +91,20 @@ test('a _headers whole-host pattern counts for X-Robots-Tag only', async () => {
   assert.match(failed.stdout, /\/\* X-Content-Type-Options: expected "nosniff", got null/);
 });
 
+test('production: a preview-host noindex passes; noindex on /* fails', async () => {
+  const dist = makeDist(join(root, 'dist-production'));
+  edit(dist, '_headers', '  X-Robots-Tag: noindex\n', '');
+  // The host pattern first, so the result cannot depend on block order.
+  writeFileSync(join(dist, '_headers'), `https://*.pages.dev/*\n  X-Robots-Tag: noindex\n${readFileSync(join(dist, '_headers'), 'utf8')}`);
+  const passed = await headers(dist, [], { indexable: 'true' });
+  assert.equal(passed.code, 0, passed.stdout);
+  const onAll = makeDist(join(root, 'dist-production-noindex'));
+  writeFileSync(join(onAll, '_headers'), `${readFileSync(join(onAll, '_headers'), 'utf8')}https://*.pages.dev/*\n  X-Robots-Tag: noindex\n`);
+  const failed = await headers(onAll, [], { indexable: 'true' });
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /^ {2}\/\* X-Robots-Tag: expected "no noindex \(PUBLIC_INDEXABLE=true\)", got "noindex"$/m);
+});
+
 test('CSP frame-ancestors stands in for X-Frame-Options', async () => {
   const { 'X-Frame-Options': _, ...rest } = SECURE;
   const csp = vercelSite('site-csp', { ...rest, 'Content-Security-Policy': "frame-ancestors 'self'", 'X-Robots-Tag': 'noindex' });
