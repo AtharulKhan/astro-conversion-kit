@@ -180,7 +180,9 @@ test('media, forms, scripts and text', () => {
   for (const m of media) assert.deepEqual(Object.keys(m), ['path', 'bytes', 'contentType']);
 
   const forms = readJson(baseline, 'forms.json');
-  assert.deepEqual(Object.keys(forms), ['/contact/']);
+  assert.deepEqual(Object.keys(forms), ['/blog/', '/contact/']);
+  assert.equal(forms['/blog/'][0].method, 'get');
+  assert.deepEqual(forms['/blog/'][0].fields.map((f) => f.name), ['s']);
   assert.equal(forms['/contact/'].length, 1);
   assert.equal(forms['/contact/'][0].method, 'post');
   assert.deepEqual(forms['/contact/'][0].fields.map((f) => f.name), ['name', 'email', 'message', 'website']);
@@ -227,7 +229,7 @@ test('counts.json sums the baseline', () => {
     byTemplate: { archive: 2, home: 1, other: 3, page: 6, 'page-2': 1, 'single-post': 3 },
     redirects: { seed: 3, shortlink: 12 },
     media: 20,
-    forms: 1,
+    forms: 2,
     scripts: 2,
   });
 });

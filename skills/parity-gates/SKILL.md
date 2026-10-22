@@ -74,12 +74,12 @@ query row whose target is its own path (`/?p=2` to `/`) is a no-op and is left o
 and stops at the first failure. Shared options: `--paths` (comma list, `*` matches anything),
 `--json`, `--origin` (links, seo, sitemaps: the host the build is for), `--allow-extra` (routes),
 `--endpoint`, `--honeypot`, `--thank-you` (forms; `--endpoint` is required when the baseline has a
-form), `--host`, `--config`, `--csv` (redirects), `--media-plan` (media). Fix the first failure,
+POST form), `--host`, `--config`, `--csv` (redirects), `--media-plan` (media). Fix the first failure,
 rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 
 | Gate | Passes when | A skip means |
 |---|---|---|
-| `forms` | Each live form is on its page with the same field names in order, method, and action set to `--endpoint`; `--honeypot` on every form | No `--thank-you`: the thank-you page was not checked |
+| `forms` | Each live form is on its page with the same field names in order and method; a POST form's action is `--endpoint` and it carries `--honeypot`; a GET form (a search box) keeps live's action path and needs neither ("N search/GET forms compared") | No `--thank-you`: the thank-you page of the POST forms was not checked |
 | `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors on every path, and, when not indexable, `X-Robots-Tag: noindex` on every path or (Vercel) the meta robots noindex on every built page; a preview-host rule (`https://*.pages.dev/*`) counts only for the preview host; with `PUBLIC_INDEXABLE=true` noindex on every path is forbidden | |
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media; `/about` where the build serves `/about/` fails | |
 | `media` | Every baseline media file is served by the build with the same bytes: in `dist/` in plan mode `repo`; under the plan's `prefix`, in the store manifest (`store`) or still on live (`live-temporary`); outside the prefix, in `dist/` in every mode. With `PUBLIC_INDEXABLE=true`, `live-temporary` fails every file (a release build may not serve media from the live site) | Plan mode `live-temporary` on a staging build: files under the prefix are served from live, not checked |

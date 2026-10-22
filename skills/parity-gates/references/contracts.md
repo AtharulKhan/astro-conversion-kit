@@ -56,6 +56,9 @@ Every media file that answered 200.
 
 Fields are named `input`, `select` and `textarea` elements in document order, without submit,
 button, reset and image inputs.
+Every form is recorded, a search box (`method: "get"`) too. The forms gate treats only a `post`
+form as a submission form (endpoint, honeypot, thank-you page); a `get` form must keep live's
+action path, method and fields.
 
 ## baseline/scripts.json
 
@@ -91,7 +94,7 @@ routes gate lets the build serve each at the root (besides Astro's `sitemap-inde
 
     { "routes": 16, "byStatus": { "200": 15, "404": 1 },
       "byTemplate": { "archive": 2, "home": 1, "other": 3, "page": 6, "page-2": 1, "single-post": 3 },
-      "redirects": { "seed": 3, "shortlink": 12 }, "media": 20, "forms": 1, "scripts": 2 }
+      "redirects": { "seed": 3, "shortlink": 12 }, "media": 20, "forms": 2, "scripts": 2 }
 
 Keys of `byStatus`, `byTemplate` and `redirects` are sorted. `redirects` is counted by
 `source`, `forms` is the total number of forms, `scripts` the number of

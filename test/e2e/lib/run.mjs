@@ -191,7 +191,7 @@ function planDraft(site, trailingSlash) {
   const media = read('media.json');
   const media200 = media.filter((m) => m.status === 200);
   const scripts = read('scripts.json');
-  const forms = inventory.filter((r) => r.forms?.length);
+  const forms = inventory.filter((r) => r.forms?.some((f) => f.method === 'post'));
   return [
     `# Conversion plan: ${NAME}`,
     '',
@@ -222,7 +222,7 @@ function planDraft(site, trailingSlash) {
     '',
     '| Page | Fields | New endpoint |',
     '| --- | --- | --- |',
-    ...forms.map((r) => `| ${r.path} | ${r.forms[0].fields.map((f) => f.name).join(', ')} | ${ENDPOINT} |`),
+    ...forms.map((r) => `| ${r.path} | ${r.forms.find((f) => f.method === 'post').fields.map((f) => f.name).join(', ')} | ${ENDPOINT} |`),
     '',
     '## Analytics carry-over',
     '',
@@ -359,9 +359,10 @@ export function unlazy(markup) {
 }
 
 // Forms per forms.md: the action is the endpoint, method POST, the live fields kept, Formspree's
-// honeypot and the thank-you field added.
+// honeypot and the thank-you field added. A GET form (a search box) is kept as live has it.
 export function rewireForms(markup, live) {
   return markup.replace(/<form\b([^>]*)>([\s\S]*?)<\/form>/g, (m, attrs, inner) => {
+    if (!/\smethod="post"/i.test(attrs)) return m;
     const opened = attrs.replace(/\saction="[^"]*"/, '').replace(/\smethod="[^"]*"/, '');
     const added = '<input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none" aria-hidden="true">'
       + `<input type="hidden" name="_next" value="${live}/thank-you/">`;

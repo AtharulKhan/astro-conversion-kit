@@ -26,7 +26,8 @@ test('dist-good passes: the contact form has the same fields, method and endpoin
   const result = await forms(good, ['--endpoint', ENDPOINT]);
   assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /^ {2}thank-you: not checked \(no --thank-you\)$/m);
-  assert.match(result.stdout, /^forms: 1 checked, 0 failed, 1 skipped \(thank-you not checked\)$/m);
+  assert.match(result.stdout, /^ {2}1 search\/GET forms compared$/m);
+  assert.match(result.stdout, /^forms: 2 checked, 0 failed, 1 skipped \(thank-you not checked\)$/m);
   const json = JSON.parse((await forms(good, ['--endpoint', ENDPOINT, '--json'])).stdout);
   assert.equal(json.skipped, 1);
 });
@@ -38,7 +39,7 @@ test('--thank-you: a hidden _next equal to it passes; a form without it fails; a
   writeFileSync(join(dist, 'thank-you', 'index.html'), '<!doctype html><title>Thanks</title>');
   const passed = await forms(dist, ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
   assert.equal(passed.code, 0, passed.stdout);
-  assert.match(passed.stdout, /^forms: 1 checked, 0 failed$/m);
+  assert.match(passed.stdout, /^forms: 2 checked, 0 failed$/m);
 
   const missing = await forms(good, ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
   assert.equal(missing.code, 1);
@@ -61,7 +62,7 @@ test('--thank-you: an absolute _next on the canonical host passes; on another ho
   };
   const canonical = await forms(withNext('dist-next-canonical', `${canonicalOrigin}/thank-you/`), ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
   assert.equal(canonical.code, 0, canonical.stdout + canonical.stderr);
-  assert.match(canonical.stdout, /^forms: 1 checked, 0 failed$/m);
+  assert.match(canonical.stdout, /^forms: 2 checked, 0 failed$/m);
 
   const path = await forms(withNext('dist-next-path', '/thank-you/'), ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
   assert.equal(path.code, 0, path.stdout + path.stderr);
@@ -118,12 +119,34 @@ test('--honeypot requires the named field and allows it beside the baseline fiel
   assert.equal((await forms(good, ['--endpoint', ENDPOINT], copy)).code, 1);
 });
 
+test('a GET search form is compared with live: action path, method and fields; no endpoint, honeypot or thank-you', async () => {
+  const only = await forms(good, ['--paths', '/blog/', '--honeypot', '_gotcha', '--thank-you', '/thank-you/']);
+  assert.equal(only.code, 0, only.stdout + only.stderr);
+  assert.match(only.stdout, /^ {2}1 search\/GET forms compared$/m);
+  assert.match(only.stdout, /^forms: 1 checked, 0 failed$/m);
+  const dist = makeDist(join(root, 'dist-search'));
+  edit(dist, 'blog/index.html', 'action="/"', 'action="/search/"');
+  edit(dist, 'blog/index.html', 'name="s"', 'name="q"');
+  const changed = await forms(dist, ['--paths', '/blog/']);
+  assert.equal(changed.code, 1);
+  assert.match(changed.stdout, /^ {2}\/blog\/ action: expected "\/", got "\/search\/"$/m);
+  assert.match(changed.stdout, /^ {2}\/blog\/ fields: expected \["s"\], got \["q"\]$/m);
+  // A search box rewired to the form endpoint is no longer the live search.
+  const posted = makeDist(join(root, 'dist-search-posted'));
+  edit(posted, 'blog/index.html', 'method="get" class="search-form" action="/"', `method="post" class="search-form" action="${ENDPOINT}"`);
+  const result = await forms(posted, ['--paths', '/blog/', '--endpoint', ENDPOINT]);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/blog\/ method: expected "get", got "post"/);
+});
+
 test('--endpoint is required when the baseline has a form', async () => {
   const result = await forms(good);
   assert.equal(result.code, 2);
   assert.match(result.stderr, /--endpoint/);
   // Not when no checked page has one.
   assert.equal((await forms(good, ['--paths', '/about/'])).code, 0);
+  // Nor for a GET form (the /blog/ search box): it is no submission form.
+  assert.equal((await forms(good, ['--paths', '/blog/'])).code, 0);
 });
 
 test('usage and missing inputs exit 2; --help exits 0', async () => {
