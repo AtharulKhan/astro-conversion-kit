@@ -32,7 +32,11 @@ test('the home page record carries head, body classes and vendors', () => {
   const theme = record.scripts.find((s) => s.src?.includes('reveal.js'));
   assert.equal(theme.vendor, 'other');
 
-  assert.deepEqual(record.styles, [{ href: `${ORIGIN}/wp-content/themes/fixture/style.css?ver=1.4.2`, inline: false }]);
+  assert.deepEqual(record.styles, [
+    { href: `${ORIGIN}/wp-content/themes/fixture/style.css?ver=1.4.2`, inline: false },
+    { href: null, inline: true },
+    { href: null, inline: true },
+  ], 'the theme stylesheet and two WordPress <style> blocks');
   assert.equal(record.shortlink, '/?p=2');
   assert.deepEqual(record.alternates, [{ href: `${ORIGIN}/feed/`, type: 'application/rss+xml', hreflang: null }]);
 });

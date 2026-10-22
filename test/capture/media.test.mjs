@@ -96,7 +96,11 @@ test('cssUrls keeps image and font url()s only, never a data: URI', () => {
 
 test('the capture saves the theme stylesheet and a CSS manifest', () => {
   const manifest = readJson(join(cap, 'css/manifest.json'));
-  assert.equal(manifest.length, 1, 'the fixture has one stylesheet and no <style> blocks');
+  // One stylesheet, then the <style> blocks of the two pages that carry them (each page its own set).
+  assert.deepEqual(manifest.slice(1), [
+    { file: 'inline-home.css', inline: true, pages: ['/'] },
+    { file: 'inline-contact.css', inline: true, pages: ['/contact/'] },
+  ]);
   assert.equal(manifest[0].file, '1.css');
   assert.equal(manifest[0].href, `${fixture.origin}${THEME}?ver=1.4.2`);
   const pages = readJson(join(cap, 'inventory.json')).filter((r) => r.status === 200).map((r) => r.path).sort();

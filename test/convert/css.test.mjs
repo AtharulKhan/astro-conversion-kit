@@ -168,7 +168,7 @@ test('pruning removes the unused rules, keeps pseudo rules and @font-face, and c
   assert.deepEqual(errors, []);
 
   const summary = readJson(report);
-  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'removedRules', 'unmatched']);
+  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'removedRules', 'uncoveredInline', 'unmatched']);
   assert.deepEqual(Object.keys(summary.keptBecause).sort(), ['atRule', 'pseudo', 'untestedMedia']);
   assert.deepEqual(summary.unmatched, []);
   assert.ok(summary.removedRules >= 20, `removedRules ${summary.removedRules}`);
@@ -218,6 +218,50 @@ test('a file with no matching coverage is kept whole and the exit code is 1', as
   assert.ok(css.includes('.plugin-other { color: blue; }'));
   assert.ok(!css.includes('.woocommerce-cart'), 'the matched file is still pruned');
   assert.deepEqual(readJson(report).unmatched, ['2.css']);
+});
+
+test('inline <style> blocks of a real capture are matched to their pages: pruned under a comment naming them, and never "unmatched"', async () => {
+  const out = join(TMP, 'capture-inline');
+  rmSync(out, { recursive: true, force: true });
+  const captured = await run(join(ROOT, 'skills', 'capture-site', 'scripts', 'capture.mjs'), [
+    fixture.origin, '--out', out, '--delay', '0', '--no-rest', '--no-wayback',
+  ]);
+  assert.equal(captured.code, 0, captured.stderr);
+  const inline = readJson(join(out, 'css', 'manifest.json')).filter((entry) => entry.inline);
+  // WordPress-style: both pages carry the same two blocks, the contact page one more, so each
+  // page has its own inline file and the shared blocks' coverage belongs to both.
+  assert.deepEqual(inline.map((entry) => entry.pages), [['/'], ['/contact/']]);
+  const css = join(TMP, 'inline-site.css');
+  const report = join(TMP, 'inline-report.json');
+  const result = await pruneCli(['--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report]);
+  assert.equal(result.code, 0, result.stderr);
+  const summary = readJson(report);
+  assert.deepEqual(summary.unmatched, []);
+  assert.deepEqual(summary.uncoveredInline, []);
+  const text = readFileSync(css, 'utf8');
+  const root = ':root{--wp--preset--color--black: #000000;';
+  let from = 0;
+  for (const [path, entry] of [['/', inline[0]], ['/contact/', inline[1]]]) {
+    const comment = text.indexOf(`/* inline <style> blocks of ${path} (${entry.file}) */\n${root}`, from);
+    assert.ok(comment !== -1, `${path}: ${text.slice(-900)}`);
+    from = comment + 1;
+  }
+  for (const gone of ['img.wp-smiley', '.has-vivid-red-color', '.wpcf7-not-valid-tip']) assert.ok(!text.includes(gone), `${gone} removed`);
+  assert.ok(!text.includes('.woocommerce-cart'), 'the theme sheet is still pruned');
+});
+
+test('an inline file no coverage saw is kept whole and listed, without failing the run', async () => {
+  const dir = captureCss('capture-inline-uncovered');
+  writeFileSync(join(dir, 'inline-about.css'), '.about-only { color: red; }\n');
+  const manifest = readJson(join(dir, 'manifest.json'));
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify([...manifest, { file: 'inline-about.css', inline: true, pages: ['/about/'] }]));
+  const out = join(TMP, 'inline-uncovered.css');
+  const report = join(TMP, 'inline-uncovered.json');
+  const result = await pruneCli(['--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(readFileSync(out, 'utf8').includes('/* inline <style> blocks of /about/ (inline-about.css) */\n.about-only { color: red; }'));
+  assert.deepEqual(readJson(report).unmatched, []);
+  assert.deepEqual(readJson(report).uncoveredInline, ['inline-about.css']);
 });
 
 test('rewriteRef makes same-origin references root-relative and leaves the rest alone', () => {

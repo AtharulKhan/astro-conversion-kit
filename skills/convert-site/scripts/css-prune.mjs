@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds one stylesheet from the captured CSS, dropping the rules no page used
 // according to css-coverage.mjs, and keeping the ones coverage cannot see.
-// Exit codes: 0 written, 1 a file had no matching coverage (kept whole), 2 usage or input error.
+// Exit codes: 0 written, 1 a stylesheet file had no matching coverage (kept whole), 2 usage or input error.
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -18,7 +18,9 @@ Reads every .css file in --css (in capture/css/manifest.json order when present,
 css-coverage.mjs and writes one stylesheet in source order. Coverage URLs match
 a manifest href on path and query, ignoring the origin (then on path alone);
 without a manifest they match a file of the same basename. inline:<n> entries
-match the file that contains their text.
+(one <style> block each) match every inline file (inline-<slug>.css, a page's
+blocks) that contains their text, trimmed, and serves one of their pages; an
+inline file's kept rules follow a comment naming its pages and file.
 
 Kept:
   - every rule any page used (its range overlaps a used range)
@@ -30,7 +32,9 @@ Kept:
   - every @media block that none of --widths satisfies (print, very wide or
     narrow queries, features this script cannot evaluate): no evidence, no removal
   - other @media blocks only when a rule inside them is kept
-A file that no coverage entry matches is kept whole and the exit code is 1.
+A stylesheet file that no coverage entry matches is kept whole and the exit
+code is 1. An inline file no coverage saw is kept whole too, listed in
+uncoveredInline, and does not change the exit code.
 
 Kept rules are copied from the source as written (comments inside them too);
 a pruned @media block is its original prelude around the kept rules.
@@ -48,13 +52,14 @@ defaults to the most common origin among the manifest's hrefs and pages
 (the coverage URLs when there is no manifest).
 
 The report is { before: bytes, after: bytes, removedRules: n,
-keptBecause: { pseudo: n, atRule: n, untestedMedia: n }, unmatched: [file] },
+keptBecause: { pseudo: n, atRule: n, untestedMedia: n }, unmatched: [file],
+uncoveredInline: [file] },
 where keptBecause counts rules and blocks no page used that were kept by the
 exceptions above.
 
   --widths  the viewport widths the coverage run used (default 390,768,1440)
 
-Exit codes: 0 written, 1 a file had no matching coverage (written, kept whole),
+Exit codes: 0 written, 1 a stylesheet file had no matching coverage (written, kept whole),
 2 usage or input error.`;
 
 const PSEUDO = /:hover|:focus|:active|:visited|:target|:checked|::before|::after|:nth|:not\(|::selection|::placeholder|:disabled|:invalid|:focus-visible|:focus-within/;
@@ -376,24 +381,55 @@ function findFileForUrl(files, key) {
   return byName.length === 1 ? byName[0] : null;
 }
 
-// Gives each coverage entry to the file it describes; returns Map<file name,
-// { ranges, url }>, url being the first coverage URL matched to the file.
+// A capture's file of a page's <style> blocks (inline-<slug>.css), not a stylesheet file.
+const isInline = (file) => (file.entry ? Boolean(file.entry.inline) : file.name.startsWith('inline-'));
+
+// The files an inline:<n> coverage entry describes. The capture trims each block and joins a
+// page's blocks into one file, so a block shared by pages with different block sets sits in
+// several files: every inline file holding the block on one of the entry's pages gets it.
+function inlineTargets(files, trimmed, pages = []) {
+  const holders = files.filter((f) => isInline(f) && f.text.includes(trimmed));
+  const onPage = holders.filter((f) => (f.entry?.pages ?? []).some((page) => pages.includes(page)));
+  if (onPage.length) return onPage;
+  if (holders.length) return holders;
+  const any = files.find((f) => f.text.includes(trimmed));
+  return any ? [any] : [];
+}
+
+// Gives each coverage entry to the file(s) it describes; returns Map<file name,
+// { ranges, matched, url }>, url being the first coverage URL matched to the file.
 function assignCoverage(files, coverage) {
   const assigned = new Map(files.map((file) => [file.name, { ranges: [], matched: false, url: null }]));
-  for (const [key, { text = '', usedRanges = [] }] of Object.entries(coverage)) {
-    let file = null;
+  for (const [key, { text = '', usedRanges = [], pages }] of Object.entries(coverage)) {
     if (key.startsWith('inline:')) {
-      if (!text) continue;
-      file = files.find((f) => f.entry?.inline !== undefined && f.text.includes(text))
-        ?? files.find((f) => f.text.includes(text));
-    } else file = findFileForUrl(files, key);
+      const trimmed = text.trim();
+      if (!trimmed) continue;
+      const lead = text.length - text.trimStart().length;
+      const shifted = usedRanges.map(([start, end]) => [Math.max(0, start - lead), Math.min(trimmed.length, end - lead)])
+        .filter(([start, end]) => end > start);
+      for (const file of inlineTargets(files, trimmed, pages)) {
+        const slot = assigned.get(file.name);
+        slot.matched = true;
+        slot.ranges.push(...mapRanges(file.text, trimmed, shifted));
+      }
+      continue;
+    }
+    const file = findFileForUrl(files, key);
     if (!file) continue;
     const slot = assigned.get(file.name);
     slot.matched = true;
-    slot.url ??= key.startsWith('inline:') ? null : key;
+    slot.url ??= key;
     slot.ranges.push(...mapRanges(file.text, text, usedRanges));
   }
   return assigned;
+}
+
+// The comment that heads an inline file's kept rules in the combined stylesheet.
+function inlineComment(file) {
+  const pages = file.entry?.pages ?? [];
+  const shown = pages.slice(0, 3).join(', ') + (pages.length > 3 ? ` and ${pages.length - 3} more` : '');
+  const inner = `inline <style> blocks${shown ? ` of ${shown}` : ''} (${file.name})`;
+  return `/* ${inner.replaceAll('*/', '* /')} */`;
 }
 
 export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
@@ -404,19 +440,27 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
   const assigned = assignCoverage(files, coverage);
   const header = { layers: [], imports: [], namespaces: [] };
   const bodies = [];
-  const report = { before: 0, after: 0, removedRules: 0, keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0 }, unmatched: [] };
+  const report = {
+    before: 0, after: 0, removedRules: 0, keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0 }, unmatched: [], uncoveredInline: [],
+  };
   for (const file of files) {
     const slot = assigned.get(file.name);
+    const inline = isInline(file);
     let used = slot.ranges;
     if (!slot.matched) {
-      report.unmatched.push(file.name);
       used = [[0, file.text.length]];
-      console.error(`no coverage matched ${file.name}${file.entry?.href ? ` (${file.entry.href})` : ''}; kept it whole`);
+      if (inline) {
+        report.uncoveredInline.push(file.name);
+        console.error(`no coverage saw the <style> blocks in ${file.name}${file.entry?.pages?.length ? ` (${file.entry.pages.join(', ')})` : ''}; kept them whole`);
+      } else {
+        report.unmatched.push(file.name);
+        console.error(`no coverage matched ${file.name}${file.entry?.href ? ` (${file.entry.href})` : ''}; kept it whole`);
+      }
     }
     const base = file.entry?.href ?? file.entry?.pages?.[0] ?? slot.url;
     const result = pruneCss(file.text, used, { base, siteOrigin, widths });
     for (const part of ['layers', 'imports', 'namespaces']) header[part].push(...result.header[part]);
-    if (result.css) bodies.push(result.css);
+    if (result.css) bodies.push(inline ? `${inlineComment(file)}\n${result.css}` : result.css);
     report.before += Buffer.byteLength(file.text);
     report.removedRules += result.removedRules;
     for (const reason of Object.keys(report.keptBecause)) report.keptBecause[reason] += result.keptBecause[reason];
