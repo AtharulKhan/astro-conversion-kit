@@ -1,6 +1,7 @@
 // Fixture server: a static imitation of a WordPress site for tests.
-// startFixture({ port, blockAfter, delayMs, root }) -> { origin, close() }
-// root serves pages and assets from another copy of site/ (wp-json and redirects stay the fixture's).
+// startFixture({ port, blockAfter, delayMs, root }) -> { origin, requests, close() }
+// root serves pages and assets from another copy of site/ (wp-json and redirects stay the fixture's);
+// `requests` lists every request URL in order.
 import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, resolve, sep } from 'node:path';
@@ -150,8 +151,10 @@ function respond(req, origin, site) {
 export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, root = SITE } = {}) {
   const site = resolve(root);
   let requests = 0;
+  const log = [];
   const server = createServer((req, res) => {
     requests += 1;
+    log.push(req.url);
     const blocked = requests > blockAfter;
     setTimeout(() => {
       const origin = `http://${req.headers.host ?? `127.0.0.1:${server.address().port}`}`;
@@ -170,6 +173,7 @@ export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, roo
       const origin = `http://127.0.0.1:${server.address().port}`;
       resolveStart({
         origin,
+        requests: log,
         close: () =>
           new Promise((resolveClose) => {
             server.closeAllConnections();

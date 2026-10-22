@@ -1,7 +1,9 @@
 // One page's inventory record from its HTML. Pure: HTML string and URL in, record out.
-// extractPage(html, url, { status, finalUrl, snapshot }) -> the record described in the
-// capture-site SKILL.md. Besides the inventory fields it carries `alternates[]` and `shortlink`
-// (from <link rel>) so the crawler can follow them without parsing the page twice.
+// extractPage(html, url, { status, finalUrl, snapshot }) -> one inventory.json record (the fields
+// returned at the end of extractPage). Besides the inventory fields it carries
+// `alternates[]` ({ href, type, hreflang } from <link rel=alternate>) and `shortlink` (from
+// <link rel=shortlink>: a site-relative path such as `/?p=7` when on the same site) so the
+// crawler can use them without parsing the page twice.
 import { attr, byTag, find, findAll, parseHtml, walk } from '../../../parity-gates/scripts/lib/html.mjs';
 import { normaliseText, visibleText } from '../../../parity-gates/scripts/lib/visible-text.mjs';
 
@@ -279,7 +281,26 @@ export function extractPage(html, url, { status = null, finalUrl = null, snapsho
     externalLinks: unique(externalLinks),
     snapshot,
     text,
-    alternates: unique(linkHref('alternate')),
-    shortlink: linkHref('shortlink')[0] ?? null,
+    alternates: alternatesOf(links, resolve),
+    shortlink: sitePath(linkHref('shortlink')[0] ?? null, page),
   };
+}
+
+function alternatesOf(links, resolve) {
+  const seen = new Set();
+  const found = [];
+  for (const n of links.filter((l) => relTokens(l).includes('alternate'))) {
+    const href = resolve(attr(n, 'href'));
+    if (!href || seen.has(href)) continue;
+    seen.add(href);
+    found.push({ href, type: (attr(n, 'type') || '').toLowerCase() || null, hreflang: attr(n, 'hreflang') || null });
+  }
+  return found;
+}
+
+// Same-site URLs become a path with their query; other sites stay absolute.
+function sitePath(href, page) {
+  if (!href) return null;
+  const url = new URL(href);
+  return bareHost(url.hostname) === bareHost(page.hostname) ? url.pathname + url.search : url.href;
 }

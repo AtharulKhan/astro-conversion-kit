@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
+import { startStub } from './helpers.mjs';
 
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../skills/capture-site/scripts/capture.mjs', import.meta.url));
@@ -31,10 +32,12 @@ async function capture(args) {
 let fixture;
 let full;
 let fullRun;
+let fullRequests;
 before(async () => {
   fixture = await startFixture();
   full = tempDir();
   fullRun = await capture([fixture.origin, '--out', full, '--delay', '0', '--seed', '/old-services']);
+  fullRequests = [...fixture.requests];
 });
 after(async () => {
   await fixture.close();
@@ -67,10 +70,76 @@ test('redirect chains collapse to their final target and shortlinks are recorded
   const old = redirects.find((r) => r.from === '/old-services');
   assert.deepEqual(old, { from: '/old-services', to: '/services/', status: 301, source: 'seed', hops: ['/old-services/'] });
   const short = redirects.find((r) => r.from === '/?p=7');
-  assert.equal(short.to, '/services/');
-  assert.equal(short.status, 301);
-  assert.equal(short.source, 'shortlink');
-  assert.deepEqual(short.hops, []);
+  assert.deepEqual(short, { from: '/?p=7', to: '/services/', status: 301, source: 'shortlink', verified: false, hops: [] });
+  assert.ok(!fullRequests.some((url) => url.includes('?p=')), 'shortlinks are not requested by default');
+  const services = readJson(full, 'inventory.json').find((r) => r.path === '/services/');
+  assert.equal(services.shortlink, '/?p=7');
+  const meta = readJson(full, 'meta.json');
+  assert.equal(meta.canonicalOrigin, fixture.origin);
+  assert.ok(meta.finishedAt);
+});
+
+test('--verify-shortlinks requests each shortlink and records where it goes', async () => {
+  const out = tempDir();
+  const before = fixture.requests.length;
+  const run = await capture([fixture.origin, '--out', out, '--delay', '0', '--verify-shortlinks']);
+  assert.equal(run.code, 0, run.stderr);
+  assert.ok(fixture.requests.slice(before).includes('/?p=7'));
+  const redirects = readJson(out, 'redirects.json');
+  const short = redirects.find((r) => r.from === '/?p=7');
+  assert.deepEqual(short, { from: '/?p=7', to: '/services/', status: 301, source: 'shortlink', verified: true, hops: [] });
+  assert.ok(redirects.filter((r) => r.source === 'shortlink').every((r) => r.verified));
+  assert.equal(readJson(out, 'inventory.json').length, 13);
+});
+
+test('a page that is always 403 is recorded with its status, not treated as a block', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><body><a href="/forbidden/">f</a></body></html>' },
+    '/forbidden/': { status: 403, body: '<html><body>no</body></html>' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const inventory = readJson(out, 'inventory.json');
+    assert.deepEqual(inventory.map((r) => `${r.path}:${r.status}`), ['/:200', '/forbidden/:403']);
+    assert.equal(stub.requests.filter((u) => u === '/forbidden/').length, 3);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('only HTML and hreflang alternates are followed; feeds go to feeds/, wp-json is never requested', async () => {
+  const head = `<link rel="alternate" type="application/json" href="/wp-json/wp/v2/pages/2">
+    <link rel="alternate" type="application/json+oembed" href="/wp-json/oembed/1.0/embed?url=x">
+    <link rel="alternate" type="text/xml+oembed" href="/oembed.xml?url=x">
+    <link rel="alternate" type="application/rss+xml" href="/news-feed/">
+    <link rel="alternate" hreflang="fr" href="/fr/">`;
+  const stub = await startStub({
+    '/': { body: `<html><head>${head}</head><body><a href="/wp-json/">api</a></body></html>` },
+    '/fr/': { body: '<html><body>bonjour</body></html>' },
+    '/news-feed/': { headers: { 'Content-Type': 'application/rss+xml' }, body: '<rss version="2.0"></rss>' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.ok(!stub.requests.some((u) => u.startsWith('/wp-json') || u.includes('oembed')), stub.requests.join(' '));
+    assert.ok(stub.requests.includes('/fr/'));
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => r.path), ['/', '/fr/']);
+    assert.deepEqual(readJson(out, 'feeds/index.json').map((f) => f.path), ['/news-feed/']);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('an unreachable site exits 3 so it can be resumed', async () => {
+  const stub = await startStub({});
+  await stub.close();
+  const out = tempDir();
+  const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+  assert.equal(run.code, 3, run.stderr);
+  assert.equal(readJson(out, 'state.json').phase, 'discover');
 });
 
 test('snapshots, text, robots, sitemaps, feeds, links and scripts are written', () => {
@@ -105,7 +174,7 @@ test('a blocked crawl exits 3 with a resumable state, and --resume finishes it',
   await probe.close();
 
   const out = tempDir();
-  const blocking = await startFixture({ port: Number(port), blockAfter: 6 });
+  const blocking = await startFixture({ port: Number(port), blockAfter: 12 });
   const stopped = await capture([blocking.origin, '--out', out, '--delay', '0', '--seed', '/old-services']);
   await blocking.close();
   assert.equal(stopped.code, 3, stopped.stderr);
@@ -113,6 +182,8 @@ test('a blocked crawl exits 3 with a resumable state, and --resume finishes it',
   const state = readJson(out, 'state.json');
   assert.equal(state.phase, 'crawl');
   assert.ok(state.queue.length > 0);
+  assert.ok(state.records.length > 0, 'some pages were captured before the block');
+  assert.ok(state.records.every((r) => !('text' in r) && !('jsonLd' in r)), 'text and JSON-LD stay on disk');
 
   const open = await startFixture({ port: Number(port) });
   const resumed = await capture([open.origin, '--out', out, '--delay', '0', '--resume']);
@@ -121,6 +192,11 @@ test('a blocked crawl exits 3 with a resumable state, and --resume finishes it',
   const paths = (dir) => readJson(dir, 'inventory.json').map((r) => r.path).sort();
   assert.deepEqual(paths(out), paths(full));
   assert.equal(readJson(out, 'inventory.json').length, 13);
+  const froms = readJson(out, 'redirects.json').map((r) => r.from);
+  assert.equal(new Set(froms).size, froms.length, 'no duplicate redirects');
+  assert.deepEqual(froms, readJson(full, 'redirects.json').map((r) => r.from));
+  const home = readJson(out, 'inventory.json').find((r) => r.path === '/');
+  assert.match(home.text, /Roofs and siding/, 'text of a page captured before the block is read back');
   assert.ok(readJson(out, 'redirects.json').some((r) => r.from === '/old-services'));
 });
 

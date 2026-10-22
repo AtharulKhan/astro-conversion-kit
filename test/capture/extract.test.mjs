@@ -33,8 +33,8 @@ test('the home page record carries head, body classes and vendors', () => {
   assert.equal(theme.vendor, 'other');
 
   assert.deepEqual(record.styles, [{ href: `${ORIGIN}/wp-content/themes/fixture/style.css?ver=1.4.2`, inline: false }]);
-  assert.equal(record.shortlink, `${ORIGIN}/?p=2`);
-  assert.ok(record.alternates.includes(`${ORIGIN}/feed/`));
+  assert.equal(record.shortlink, '/?p=2');
+  assert.deepEqual(record.alternates, [{ href: `${ORIGIN}/feed/`, type: 'application/rss+xml', hreflang: null }]);
 });
 
 test('the lazy image takes data-src and the noscript copy is not counted twice', () => {
