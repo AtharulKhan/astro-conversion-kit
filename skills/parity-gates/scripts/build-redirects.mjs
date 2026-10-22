@@ -41,7 +41,10 @@ cleanUrls, ...) and replacing "redirects". Entries are { source, destination, st
 /old/:path*) is written in both its /:path* and /:path*/ forms. Vercel applies "trailingSlash"
 before "redirects", so an unslashed source would take two hops (308 to the slashed URL, then the
 redirect); the key is therefore replaced by the same 308 normalisation written as the last
-redirects, after the site's own. Warns near Vercel's 2,048-route limit, and in "always" mode on a
+redirects, after the site's own. Only a path ending in a static-file extension (html, xml, json,
+txt, css, js, mjs, map, ico, png, jpg, jpeg, gif, webp, avif, svg, woff, woff2, ttf, otf, eot,
+pdf, zip, mp4, webm, mp3, wasm, webmanifest, lower or upper case) counts as a file and keeps its
+unslashed URL; /upgrade-guide/3.5/ is a page like any other. Warns near Vercel's 2,048-route limit, and in "always" mode on a
 target without its trailing slash (the slash rule would add a second hop).
 
 cloudflare: writes "from to status" lines, static rules first, then splats and placeholders. A
@@ -72,15 +75,27 @@ const warn = (message) => process.stderr.write(`${NAME}: warning: ${message}\n`)
 const pathToRegexpSafe = (path) => path.replace(/(:\w+[*+?]?)|([(){}*+?])/g, (m, param, ch) => param ?? `\\${ch}`);
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// The extensions that make a path a static file for the slash rules. Anything else after a dot
+// (/upgrade-guide/3.5/, /v1.2/) is a page, slashed like every other page.
+export const FILE_EXTENSIONS = [
+  'html', 'htm', 'xml', 'json', 'txt', 'css', 'js', 'mjs', 'map', 'ico', 'png', 'jpg', 'jpeg', 'gif', 'webp',
+  'avif', 'svg', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'pdf', 'zip', 'mp4', 'webm', 'mp3', 'wasm', 'webmanifest',
+];
+const EXT = `\\.(?:${[...FILE_EXTENSIONS, ...FILE_EXTENSIONS.map((e) => e.toUpperCase())].join('|')})`;
+
 // The site's trailing-slash normalisation as redirects, matching what vercel.json's
-// "trailingSlash" does, so it runs after the site's own rules instead of before them.
+// "trailingSlash" does (except that only a real static-file extension makes a path a file), so it
+// runs after the site's own rules instead of before them.
 export const SLASH_RULES = {
   always: [
-    { source: '/:path((?!\\.well-known(?:/|$))(?:[^/]+/)*[^/.]+)', destination: '/:path/', statusCode: 308 },
-    { source: '/:path((?:[^/]+/)*[^/]+\\.\\w+)/', destination: '/:path', statusCode: 308 },
+    { source: `/:path((?!\\.well-known(?:/|$))(?!(?:[^/]+/)*[^/]+${EXT}$)(?:[^/]+/)*[^/]+)`, destination: '/:path/', statusCode: 308 },
+    { source: `/:path((?:[^/]+/)*[^/]+${EXT})/`, destination: '/:path', statusCode: 308 },
   ],
   never: [{ source: '/:path(.+)/', destination: '/:path', statusCode: 308 }],
 };
+const FILE_PATH = new RegExp(`${EXT}$`);
+// The first "always" rule an earlier version wrote, so its mode is still read back.
+const LEGACY_ALWAYS = { source: '/:path((?!\\.well-known(?:/|$))(?:[^/]+/)*[^/.]+)', destination: '/:path/', statusCode: 308 };
 
 // [{ source, destination }] for every feed route answering 200: its live path -> <path>/index.xml.
 export function feedRewrites(routes) {
@@ -149,6 +164,7 @@ export function inferMode(existing) {
   for (const mode of MODES) {
     if (redirects.some((r) => isDeepStrictEqual(r, SLASH_RULES[mode][0]))) return mode;
   }
+  if (redirects.some((r) => isDeepStrictEqual(r, LEGACY_ALWAYS))) return 'always';
   if (existing.trailingSlash === true) return 'always';
   if (existing.trailingSlash === false || existing.cleanUrls === true) return 'never';
   return 'always';
@@ -159,7 +175,7 @@ function unslashedTargets(rows) {
   return rows.filter((row) => {
     if (isCatchAll(row.from) || isExternal(row.to)) return false;
     const path = row.to.split(/[?#]/)[0];
-    return !path.endsWith('/') && !/\.[^/]*$/.test(path);
+    return !path.endsWith('/') && !FILE_PATH.test(path);
   });
 }
 

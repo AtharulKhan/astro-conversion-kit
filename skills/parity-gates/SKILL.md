@@ -58,6 +58,8 @@ Commit `baseline/` and `redirects.csv` together. `--check` recounts `baseline/` 
 `--host cloudflare --out public/_redirects` for Pages (Astro copies it into `dist/`). Vercel: the
 `redirects` key is replaced, every other key kept, and `trailingSlash` is removed and written as
 the compiler's own 308 slash rules after the site's, so an unslashed source is still one hop.
+Only a path ending in a static-file extension (html, css, js, pdf, jpg, woff2, ... see
+`--help`) counts as a file to those rules; `/upgrade-guide/3.5/` is a page and keeps its slash.
 Cloudflare: a query row (`/?p=7`) cannot be matched by `_redirects` and goes to
 `cloudflare-query-redirects.csv`, to be created as a Single Redirect (a "needs you" item). A
 query row whose target is its own path (`/?p=2` to `/`) is a no-op and is left out on both hosts.
@@ -81,7 +83,7 @@ rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 | `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors on every path, and, when not indexable, `X-Robots-Tag: noindex` on every path or (Vercel) the meta robots noindex on every built page; a preview-host rule (`https://*.pages.dev/*`) counts only for the preview host; with `PUBLIC_INDEXABLE=true` noindex on every path is forbidden | |
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media; `/about` where the build serves `/about/` fails | |
 | `media` | Every baseline media file is served by the build with the same bytes: in `dist/` in plan mode `repo`; under the plan's `prefix`, in the store manifest (`store`) or still on live (`live-temporary`); outside the prefix, in `dist/` in every mode. With `PUBLIC_INDEXABLE=true`, `live-temporary` fails every file (a release build may not serve media from the live site) | Plan mode `live-temporary` on a staging build: files under the prefix are served from live, not checked |
-| `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file | A no-op query row, or any query row on Cloudflare |
+| `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file; no built page or file is redirected away from its own URL (`built page redirected by rule <rule>`) | A no-op query row, or any query row on Cloudflare |
 | `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built (the capture's own scripts in `baseline/js.json` at their live paths, the live sitemap names in `baseline/sitemaps.json`, and the launch icon set are not extras); a route captured at any status other than 200, 3xx, 404 or 410 fails as `not captured: <status>` unless a `routes` exception skips it or names its built replacement | A `routes` exception with `to: "skip"`: that route was never captured |
 | `scripts` | Each kept vendor is on exactly its live pages with the same ids; a dropped one on none; no new vendor | |
 | `seo` | Title, description, canonical, robots, lang, h1, h2, og and JSON-LD @types equal per page; site URLs on the site's origin. Unless `PUBLIC_INDEXABLE=true`, robots must carry the staging `noindex, nofollow` and the rest of it equals live's past those two; a release build compares robots exactly | |

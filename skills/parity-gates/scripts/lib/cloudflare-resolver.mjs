@@ -48,8 +48,9 @@ const decode = (path) => {
   }
 };
 
-// cloudflareResolver({ rules, dist, origins }) -> (url) => { hops, final }
-export function cloudflareResolver({ rules = [], dist, origins = [] }) {
+// cloudflareResolver({ rules, dist, origins, explain }) -> (url) => { hops, final }
+// explain: every hop names its rule (the _redirects line, or "Pages trailing-slash handling").
+export function cloudflareResolver({ rules = [], dist, origins = [], explain = false }) {
   const files = distSet(dist);
 
   function redirect(path) {
@@ -59,7 +60,7 @@ export function cloudflareResolver({ rules = [], dist, origins = [] }) {
       const params = Object.fromEntries(rule.names.map((name, i) => [name, m[i + 1]]));
       const to = rule.to.replace(/:(\w+)/g, (match, name) => (name in params ? params[name] : match));
       if (rule.status === 200) return { path, status: serve(to).status };
-      return { to, status: rule.status };
+      return { to, status: rule.status, rule: `${rule.from} ${rule.to} ${rule.status}` };
     }
     return null;
   }
@@ -82,7 +83,12 @@ export function cloudflareResolver({ rules = [], dist, origins = [] }) {
     return found(404);
   }
 
-  return (url) => follow(url, (path) => redirect(path) ?? serve(path), origins);
+  const PAGES = 'Pages trailing-slash handling';
+  const served = (path) => {
+    const answer = serve(path);
+    return 'to' in answer ? { ...answer, rule: PAGES } : answer;
+  };
+  return (url) => follow(url, (path) => redirect(path) ?? served(path), origins, { explain });
 }
 
 export const resolveCloudflare = (url, options) => cloudflareResolver(options)(url);

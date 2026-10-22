@@ -233,6 +233,37 @@ test('a changed target needs a redirect exception; a stale one fails', async () 
   assert.match(stale.stdout, /\/nowhere exception: .*"path not checked"/);
 });
 
+// A dist with a version-numbered page (/upgrade-guide/3.5/) and a real file beside it.
+function dottedDist(name) {
+  const dist = makeDist(join(root, name));
+  mkdirSync(join(dist, 'upgrade-guide', '3.5'), { recursive: true });
+  copyFileSync(join(dist, 'about', 'index.html'), join(dist, 'upgrade-guide', '3.5', 'index.html'));
+  mkdirSync(join(dist, 'downloads'), { recursive: true });
+  writeFileSync(join(dist, 'downloads', 'tool-1.5.zip'), 'zip');
+  return dist;
+}
+
+test('every built page and file is requested through the rules: one the rules redirect away fails, naming the rule', async () => {
+  const dist = dottedDist('dist-dotted');
+  const passed = await gate(vercelDir, dist, ['--json']);
+  assert.equal(passed.code, 0, passed.stdout);
+  const dir = join(root, 'site-old-slash-rules');
+  mkdirSync(dir);
+  copyFileSync(join(vercelDir, 'redirects.csv'), join(dir, 'redirects.csv'));
+  // The slash rules an earlier compiler wrote: any ".<word>" ending counted as a file.
+  const old = vercelConfig(vercelDir).redirects.slice(0, -2).concat([
+    { source: '/:path((?!\\.well-known(?:/|$))(?:[^/]+/)*[^/.]+)', destination: '/:path/', statusCode: 308 },
+    { source: '/:path((?:[^/]+/)*[^/]+\\.\\w+)/', destination: '/:path', statusCode: 308 },
+  ]);
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify({ redirects: old }));
+  const failed = await gate(dir, dist);
+  assert.equal(failed.code, 1, failed.stdout);
+  assert.match(failed.stdout, /^ {2}\/upgrade-guide\/3\.5\/ redirected: expected "no redirect", got "built page redirected by rule \/:path\(\(\?:\[\^\/\]\+\/\)\*\[\^\/\]\+\\\\\.\\\\w\+\)\/: 308 \/upgrade-guide\/3\.5"$/m);
+  assert.doesNotMatch(failed.stdout, /tool-1\.5\.zip redirected/, 'a real file is served where it is');
+  assert.doesNotMatch(failed.stdout, /\/about\/ redirected/);
+  assert.match(failed.stdout, /^ {2}\d+ built pages and files requested through the rules: 1 redirected$/m);
+});
+
 test('usage and missing inputs exit 2; --help exits 0', async () => {
   assert.equal((await gate(vercelDir, good, ['--bogus'])).code, 2);
   assert.equal((await gate(vercelDir, join(root, 'nope'))).code, 2);

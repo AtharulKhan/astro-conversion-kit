@@ -130,8 +130,9 @@ export function distSet(dist) {
 // Both hosts pass the request's query string on to a destination that has none, so it is carried
 // across hops (and `final.path` keeps it). A hop to an absolute URL on one of `origins` continues
 // at its path; any other absolute URL ends the chain with { path: url, status: null }. A URL
-// requested twice, or more than MAX_HOPS hops, ends it with status "loop".
-export function follow(url, next, origins = []) {
+// requested twice, or more than MAX_HOPS hops, ends it with status "loop". With explain, each hop
+// also names the `rule` that made it, when next() gave one.
+export function follow(url, next, origins = [], { explain = false } = {}) {
   const hops = [];
   const seen = new Set([url]);
   let current = url;
@@ -142,7 +143,7 @@ export function follow(url, next, origins = []) {
     const result = next(path, search);
     if (!('to' in result)) return { hops, final: { path: current, status: result.status } };
     const to = result.to.includes('?') ? result.to : `${result.to}${search}`;
-    hops.push({ from: current, to, status: result.status });
+    hops.push({ from: current, to, status: result.status, ...(explain && result.rule ? { rule: result.rule } : {}) });
     if (isExternal(to)) {
       const own = origins.find((o) => o && (to === o || to.startsWith(`${o}/`) || to.startsWith(`${o}?`)));
       if (!own) return { hops, final: { path: to, status: null } };
@@ -155,8 +156,9 @@ export function follow(url, next, origins = []) {
   return { hops, final: { path: current, status: 'loop' } };
 }
 
-// vercelResolver({ config, dist, origins }) -> (url) => { hops: [{ from, to, status }], final: { path, status } }
-export function vercelResolver({ config = {}, dist, origins = [] }) {
+// vercelResolver({ config, dist, origins, explain }) -> (url) => { hops: [{ from, to, status, rule? }], final: { path, status } }
+// explain: every hop names its rule (a redirect's source, or "cleanUrls" / "trailingSlash").
+export function vercelResolver({ config = {}, dist, origins = [], explain = false }) {
   const files = distSet(dist);
   const { cleanUrls = false, trailingSlash } = config;
   const rules = (config.redirects ?? []).map((rule) => ({ rule, ...compileSource(rule.source) }));
@@ -165,19 +167,19 @@ export function vercelResolver({ config = {}, dist, origins = [] }) {
   function urlRules(path) {
     if (cleanUrls) {
       let m = /^\/(?:(.+)\/)?index(?:\.html)?\/?$/.exec(path);
-      if (m) return { to: m[1] ? `/${m[1]}${slash}` : '/', status: 308 };
+      if (m) return { to: m[1] ? `/${m[1]}${slash}` : '/', status: 308, rule: 'cleanUrls' };
       m = /^\/(.*)\.html\/?$/.exec(path);
-      if (m) return { to: `/${m[1]}${slash}`, status: 308 };
+      if (m) return { to: `/${m[1]}${slash}`, status: 308, rule: 'cleanUrls' };
     }
     if (trailingSlash === true && !/^\/\.well-known(?:\/.*)?$/.test(path)) {
       let m = /^\/((?:[^/]+\/)*[^/.]+)$/.exec(path);
-      if (m) return { to: `/${m[1]}/`, status: 308 };
+      if (m) return { to: `/${m[1]}/`, status: 308, rule: 'trailingSlash' };
       m = /^\/((?:[^/]+\/)*[^/]+\.\w+)\/$/.exec(path);
-      if (m) return { to: `/${m[1]}`, status: 308 };
+      if (m) return { to: `/${m[1]}`, status: 308, rule: 'trailingSlash' };
     }
     if (trailingSlash === false) {
       const m = /^\/(.+)\/$/.exec(path);
-      if (m) return { to: `/${m[1]}`, status: 308 };
+      if (m) return { to: `/${m[1]}`, status: 308, rule: 'trailingSlash' };
     }
     return null;
   }
@@ -191,7 +193,7 @@ export function vercelResolver({ config = {}, dist, origins = [] }) {
       if (rule.missing && rule.missing.some((c) => conditionHolds(c, query))) continue;
       const params = Object.fromEntries(names.map((name, i) => [name, m[i + 1]]));
       const status = rule.statusCode ?? (rule.permanent === false ? 307 : 308);
-      return { to: fillDestination(rule.destination, params), status };
+      return { to: fillDestination(rule.destination, params), status, rule: rule.source };
     }
     return null;
   }
@@ -210,7 +212,7 @@ export function vercelResolver({ config = {}, dist, origins = [] }) {
     return { path, status: serve(rewrites.get(path)).status };
   }
 
-  return (url) => follow(url, (path, search) => urlRules(path) ?? redirect(path, search) ?? rewrite(path), origins);
+  return (url) => follow(url, (path, search) => urlRules(path) ?? redirect(path, search) ?? rewrite(path), origins, { explain });
 }
 
 export const resolveVercel = (url, options) => vercelResolver(options)(url);

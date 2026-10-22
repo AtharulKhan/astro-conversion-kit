@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveVercel } from '../../skills/parity-gates/scripts/lib/vercel-resolver.mjs';
 import { parseRedirectsFile, resolveCloudflare } from '../../skills/parity-gates/scripts/lib/cloudflare-resolver.mjs';
+import { SLASH_RULES, vercelRules } from '../../skills/parity-gates/scripts/build-redirects.mjs';
 
-const FILES = ['index.html', 'feed/index.xml', 'about/index.html', 'news/index.html', 'news/a/index.html', 'kept/index.html', 'people/ann/index.html', 'y/index.html'];
+const FILES = ['index.html', 'feed/index.xml', 'about/index.html', 'news/index.html', 'news/a/index.html', 'kept/index.html', 'people/ann/index.html', 'y/index.html',
+  'upgrade-guide/3.5/index.html', 'files/guide.pdf', 'files/Photo.JPG'];
 let dist;
 before(() => {
   dist = mkdtempSync(join(tmpdir(), 'resolvers-'));
@@ -122,4 +124,23 @@ test('vercel: loops end with status "loop", including a query rule to its own pa
   // A chain that never repeats still stops at the hop limit.
   const endless = { redirects: [{ source: '/n/:k', destination: '/n/:k/x', statusCode: 301 }, { source: '/n/:k/:rest+', destination: '/n/:k-:rest', statusCode: 301 }] };
   assert.equal(vc(endless, '/n/a').final.status, 'loop');
+});
+
+// A version-numbered page such as /upgrade-guide/3.5/ is not a file: ".5" is no static-file extension.
+test('vercel: the compiled slash rules leave a dotted page alone and only treat real file extensions as files', () => {
+  const always = { redirects: vercelRules([], 'always') };
+  assert.deepEqual(vc(always, '/upgrade-guide/3.5/'), { hops: [], final: { path: '/upgrade-guide/3.5/', status: 200 } });
+  assert.deepEqual(vc(always, '/upgrade-guide/3.5').hops, [hop('/upgrade-guide/3.5', '/upgrade-guide/3.5/', 308)]);
+  assert.deepEqual(vc(always, '/files/guide.pdf'), { hops: [], final: { path: '/files/guide.pdf', status: 200 } });
+  assert.deepEqual(vc(always, '/files/Photo.JPG').hops, []);
+  assert.deepEqual(vc(always, '/files/guide.pdf/').hops, [hop('/files/guide.pdf/', '/files/guide.pdf', 308)]);
+  assert.deepEqual(vc(always, '/about').hops, [hop('/about', '/about/', 308)]);
+  assert.deepEqual(vc(always, '/.well-known/x').hops, []);
+  assert.ok(SLASH_RULES.always.every((r) => !r.source.includes('\\w')), 'no "any word after a dot" extension test');
+});
+
+test('cloudflare: Pages serves a dotted page at its slashed URL without a hop', () => {
+  assert.deepEqual(cf('', '/upgrade-guide/3.5/'), { hops: [], final: { path: '/upgrade-guide/3.5/', status: 200 } });
+  assert.deepEqual(cf('', '/upgrade-guide/3.5').hops, [hop('/upgrade-guide/3.5', '/upgrade-guide/3.5/', 308)]);
+  assert.deepEqual(cf('', '/files/guide.pdf').hops, []);
 });

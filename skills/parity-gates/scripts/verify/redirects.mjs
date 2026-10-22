@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // Redirects gate: every baseline redirect and every redirects.csv row answers, through the host's
 // compiled config, in exactly one hop to its target; every target is a page or file in dist or an
-// external URL; no redirect source is also a page or file in dist.
+// external URL; no redirect source is also a page or file in dist; and no built page or file is
+// redirected away from its own URL by the rules (the slash rules included).
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { applyExceptions, exceptionFailure } from '../lib/exceptions.mjs';
-import { distFiles, readJson, requireInputs } from '../lib/dist.mjs';
+import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
 import { isDynamic, isExternal, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
 import { vercelResolver } from '../lib/vercel-resolver.mjs';
 import { cloudflareResolver, parseRedirectsFile } from '../lib/cloudflare-resolver.mjs';
@@ -37,6 +38,10 @@ and on Cloudflare every query row (_redirects cannot match one; build-redirects 
 Single Redirects).
 A shortlink the capture did not request (verified: false) is checked the same way; a failure on
 one says "[unverified live]".
+Every built page and file is also requested at its own URL (a baseline route at its baseline
+path, any other page in the site's slash form, any other file at its path); one the rules
+redirect away fails as "built page redirected by rule <rule>" (a slash rule that took
+/upgrade-guide/3.5/ for a file, say). Redirect sources are left to the collision check.
 A redirect exception (field "redirect", path = the source, from = the baseline target, to = the
 new target) approves a changed target. Write the host config with build-redirects.mjs first.
 `;
@@ -115,7 +120,36 @@ export function samplesFor(from, to, pages) {
   return samples;
 }
 
-export function checkRedirects({ dist, baseline, rows = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true }) {
+const HOST_FILES = new Set(['_redirects', '_headers', '_routes.json', '404.html']);
+
+// The URL each built page and file answers at: [{ url, page }]. A built baseline route keeps its
+// baseline path; any other page takes the site's slash form (from the baseline's pages, slashed when
+// they say nothing), any other file its own path.
+export function builtUrls(files, routes = []) {
+  const present = new Set(files);
+  const format = pageFormat(files);
+  const covered = new Set();
+  const urls = [];
+  const pages = routes.filter((r) => r.status === 200 && PAGE_KINDS.has(r.kind) && r.path !== '/');
+  const slashed = pages.filter((r) => r.path.endsWith('/')).length >= pages.length / 2;
+  for (const route of routes) {
+    if (route.status !== 200 || !(PAGE_KINDS.has(route.kind) || route.kind === 'feed')) continue;
+    const file = (route.kind === 'feed' ? feedFiles(route.path) : pageFiles(route.path, format)).find((c) => present.has(c));
+    if (!file || covered.has(file)) continue;
+    covered.add(file);
+    urls.push({ url: route.path, page: true });
+  }
+  for (const file of files) {
+    if (covered.has(file) || HOST_FILES.has(file)) continue;
+    if (file.endsWith('.html')) {
+      const path = servedPath(file);
+      urls.push({ url: slashed || path === '/' ? path : path.slice(0, -1), page: true });
+    } else urls.push({ url: encodeURI(`/${file}`), page: false });
+  }
+  return urls;
+}
+
+export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true }) {
   const relevant = exceptions.filter((e) => e.field === 'redirect');
   const entries = entriesOf(baseline, rows).filter((e) => paths(e.from));
   const known = new Set(entries.map((e) => e.from));
@@ -165,9 +199,18 @@ export function checkRedirects({ dist, baseline, rows = [], resolve, host = 'ver
       failures.push({ path: entry.from, field: 'collision', expected: null, actual: served.get(entry.from) });
     }
   }
-  if (!skips.length) return { checked, failures };
+  const built = builtUrls(distFiles(dist), routes).filter((b) => !known.has(b.url) && paths(b.url));
+  let redirected = 0;
+  for (const { url, page } of built) {
+    const { hops } = resolve(url);
+    if (!hops.length) continue;
+    redirected += 1;
+    failures.push({ path: url, field: 'redirected', expected: 'no redirect', actual: `built ${page ? 'page' : 'file'} redirected by rule ${hops[0].rule ?? 'unknown'}: ${show(hops)}` });
+  }
+  const notes = [`${built.length} built pages and files requested through the rules: ${redirected} redirected`];
+  if (!skips.length) return { checked, failures, notes };
   const skipReason = [...new Set(skips.map((s) => s.reason.split(':')[0]))].join('; ');
-  return { checked, failures, skipped: skips.length, skipReason, skips };
+  return { checked, failures, skipped: skips.length, skipReason, skips, notes };
 }
 
 const exit2 = (message) => {
@@ -214,8 +257,8 @@ function main() {
   try {
     resolve =
       host === 'vercel'
-        ? vercelResolver({ config: readJson(config), dist: args.dist, origins })
-        : cloudflareResolver({ rules: parseRedirectsFile(readFileSync(config, 'utf8')), dist: args.dist, origins });
+        ? vercelResolver({ config: readJson(config), dist: args.dist, origins, explain: true })
+        : cloudflareResolver({ rules: parseRedirectsFile(readFileSync(config, 'utf8')), dist: args.dist, origins, explain: true });
   } catch (error) {
     exit2(`${config}: ${error.message}`);
   }
@@ -223,6 +266,7 @@ function main() {
     dist: args.dist,
     baseline: readJson(join(args.baseline, 'redirects.json')),
     rows,
+    routes: existsSync(join(args.baseline, 'routes.json')) ? readJson(join(args.baseline, 'routes.json')) : [],
     resolve,
     host,
     exceptions: gateExceptions(NAME, args),
