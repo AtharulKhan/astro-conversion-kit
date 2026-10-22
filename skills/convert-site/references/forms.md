@@ -51,7 +51,9 @@ none) and whose pathname equals `--thank-you`; the page must be built.
 
 Use the live site's thank-you URL when it has one (it is a captured page and already built).
 When it has none, build `/thank-you/` from the site's plain page template with a one-line
-message, pass `--allow-extra /thank-you/` to the routes gate, and record a decision. Whether the
+message, `noindex` robots and its own canonical (`https://<canonical host>/thank-you/`;
+pre-launch fails a utility page without either), keep it out of the sitemaps, pass
+`--allow-extra /thank-you/` to the routes gate, and record a decision. Whether the
 endpoint honours `_next` depends on its plan: if it does not, that is a needs-you line.
 
 ## The gate flags

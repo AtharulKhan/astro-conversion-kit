@@ -235,7 +235,16 @@ Only when the intake said "components" or the person asked: `components-optional
 ## 10. prelaunch
 
     S phase prelaunch
-    node $KIT/skills/pre-launch/scripts/pre-launch.mjs --dir $SITE --production-url $LIVE --predecessor-url $LIVE --ignore-dir capture --out $SITE/review/pre-launch
+    git add -A
+    git commit -m "chore: state before pre-launch"
+    git push -u origin astro-rebuild
+    PUBLIC_INDEXABLE=true node $KIT/skills/pre-launch/scripts/pre-launch.mjs --dir $SITE --production-url $LIVE --predecessor-url $LIVE --ignore-dir capture --out $SITE/review/pre-launch
+
+pre-launch fails a tree with uncommitted changes or no upstream, and `state.json` changes with
+every `S` call, so commit and push first. It runs `npm run build` itself: `PUBLIC_INDEXABLE=true`
+makes that the production build it is meant to gate (without it, the staging build's robots.txt
+blocks everything and fails the robots check). Without a `gh` login there is no remote to push
+to; `hygiene.pushed` then fails until the person pushes, and that is a needs-you line.
 
 Triage as the `pre-launch` skill says; every failure blocks and is fixed on the branch. The one
 allowed failure is `placeholders.form-id` while the form id is on the needs-you list (`forms.md`);
