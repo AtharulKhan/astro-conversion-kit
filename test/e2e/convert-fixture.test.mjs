@@ -1,18 +1,13 @@
-// The whole pipeline on the fixture site: scaffold a site with init-site (Astro installed for
-// real), capture the fixture, freeze the baseline, build one page per captured route the way an
-// agent would, then gate the staging and the release build, review it visually, list
-// suggestions, run pre-launch on the release build and verify-live on the staging build.
+// The convert-site run on the fixture, phase by phase as skills/convert-site/SKILL.md and
+// references/phases.md write it (test/e2e/lib/run.mjs), each phase's proof asserted below.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startFixture } from '../fixture/serve.mjs';
 import * as R from './lib/run.mjs';
 
 const SITE = join(R.TMP, 'e2e', 'site');
-const PREVIEW_PORT = 4683;
-const PHASES = ['capture', 'baseline', 'build', 'gates', 'review', 'suggest', 'verify-live', 'pre-launch'];
-
 const results = {};
 let fixture;
 
@@ -20,108 +15,122 @@ before(async () => {
   fixture = await startFixture();
   const live = fixture.origin;
   const site = SITE;
-
-  results.scaffold = await R.scaffold({ site });
-  await R.phase(site, 'capture');
-  await R.captureSite({ site, live });
-
-  await R.phase(site, 'baseline');
-  await R.baseline(site);
-
-  await R.phase(site, 'build');
-  R.writePages({ site, live });
-  R.write404({ site, live });
-  R.importSiteCss(site);
-  await R.writeIcons(site);
-  await R.pruneCss({ site, live });
-  R.copyScripts(site);
-  R.copyFeeds({ site, live });
-  R.writeSitemap(site);
-  results.forms = R.rewireForms(site);
-  await R.buildRedirects(site);
-
-  await R.phase(site, 'gates');
-  await R.build(site, { indexable: true });
-  results.verifyRelease = await R.verify(site, { indexable: true });
-  await R.build(site);
-  results.verifyStaging = await R.verify(site);
-  results.stagingAbout = readFileSync(join(site, 'dist', 'about', 'index.html'), 'utf8');
-  results.stagingContact = readFileSync(join(site, 'dist', 'contact', 'index.html'), 'utf8');
-
-  await R.phase(site, 'review');
-  const preview = await R.astroPreview(site, PREVIEW_PORT);
-  try {
-    results.review = await R.review({ site, live, preview: preview.origin });
-  } finally {
-    await preview.close();
-  }
-
-  await R.phase(site, 'suggest');
-  await R.suggest(site);
-
-  await R.phase(site, 'verify-live');
-  const host = await R.serveLikeVercel(site);
-  try {
-    results.verifyLive = await R.verifyLive(site, host.origin);
-  } finally {
-    await host.close();
-  }
-
-  // pre-launch gates the release build from a clean, pushed tree.
-  await R.phase(site, 'pre-launch');
-  await R.build(site, { indexable: true });
-  await R.commitSite(site, 'feat: convert the fixture site');
-  results.preLaunch = await R.preLaunch(site);
-  await R.finishLastPhase(site);
+  results.intake = await R.intake({ site, live });
+  results.capture = await R.capture({ site, live });
+  results.plan = await R.plan({ site });
+  results.scaffold = await R.scaffold({ site, live, trailingSlash: results.plan.trailingSlash });
+  results.baseline = await R.baseline({ site });
+  results.build = await R.build({ site, live });
+  results.gates = await R.gates({ site });
+  results.visual = await R.visual({ site, live });
+  await R.components({ site });
+  results.prelaunch = await R.prelaunch({ site, live });
+  results.suggestions = await R.suggestions({ site });
+  results.pr = await R.pr({ site, results });
 });
 
 after(async () => {
   await fixture?.close();
 });
 
-const passed = (result) => `${result.command} exited ${result.code}\n${result.stdout}\n${result.stderr}`;
+const shown = (result) => `${result.command} exited ${result.code}\n${result.stdout}\n${result.stderr}`;
+const ok = (result) => assert.equal(result.code, 0, shown(result));
+const file = (...parts) => join(SITE, ...parts);
 
-test('init-site scaffolds the site on astro-rebuild with Astro installed', () => {
-  assert.equal(results.scaffold.code, 0);
-  assert.ok(existsSync(join(SITE, 'node_modules', 'astro', 'package.json')));
-  assert.equal(results.forms, 1, 'the contact form is rewired to the endpoint');
+test('1 intake: the answers and the needs-you list are in state', () => {
+  const { intake, needsYou } = R.state(SITE);
+  assert.equal(intake.hosting, 'vercel');
+  assert.equal(intake.platform, 'wordpress');
+  assert.ok(needsYou.length >= 3);
+  assert.equal(results.intake.preflight.tools.gh.present, false, 'no CLI is reachable from the run');
 });
 
-test('the release build (PUBLIC_INDEXABLE=true) passes all ten gates', () => {
-  assert.equal(results.verifyRelease.code, 0, passed(results.verifyRelease));
-  assert.match(results.verifyRelease.stdout, /^All 10 gates passed$/m);
+test('2 capture: into SITE before the scaffold, Notes written, coverage and templates in capture/', () => {
+  for (const f of ['README.md', 'templates.json', 'css-coverage.json', 'inventory.json', 'js/manifest.json']) assert.ok(existsSync(file('capture', f)), f);
+  assert.match(readFileSync(file('capture', 'README.md'), 'utf8'), /## Notes\n[\s\S]*Lighthouse:/);
+  assert.ok(R.readJson(file('capture', 'inventory.json')).every((r) => typeof r.status === 'number'));
+  assert.ok(existsSync(file('.conversion', 'media-cache', 'wp-content', 'uploads', '2026', '01', 'og-card.jpg')), 'media downloaded into .conversion/media-cache');
 });
 
-test('the staging build passes all ten gates on its meta robots noindex', () => {
-  const { stdout } = results.verifyStaging;
-  assert.equal(results.verifyStaging.code, 0, passed(results.verifyStaging));
-  assert.match(stdout, /^All 10 gates passed$/m);
-  assert.match(stdout, /^headers: 4 checked, 0 failed$/m);
-  assert.match(stdout, /^seo: 13 checked, 0 failed$/m);
-  // No thank-you page on the live site: the forms gate names the skip, which is not a pass.
-  assert.match(stdout, /^forms: 1 checked, 0 failed, 1 skipped \(thank-you not checked\)$/m);
-  const built = results.stagingAbout;
-  assert.match(built, /<meta name="robots" content="noindex, nofollow">/);
-  assert.match(built, /<link rel="canonical" href="https:\/\/example\.com\/about\/">/);
-  assert.match(results.stagingContact, /<form class="contact-form" action="https:\/\/formspree\.io\/f\/test" method="post">/);
+test('3 plan: every decision recorded, the media plan drafted under .conversion/', () => {
+  assert.equal(results.plan.trailingSlash, 'always');
+  assert.equal(results.plan.mediaPlan.mode, 'repo');
+  assert.deepEqual(results.plan.decisions, results.plan.decisions.map((_, i) => `d${i + 1}`));
 });
 
-test('every template at every width is within 0.5 % of live, styles match and the sheet is written', () => {
-  const { diff, styles, sheet } = results.review;
-  assert.equal(diff.code, 0, passed(diff));
-  const templates = R.readJson(join(SITE, 'capture', 'templates.json'));
-  const rows = R.readJson(join(SITE, 'review', 'diff', 'diff.json'));
+test('4 scaffold: init-site around capture/ and .conversion/; main holds the one scaffold commit', () => {
+  ok(results.scaffold.build);
+  assert.deepEqual(results.scaffold.mainLog.length, 1);
+  assert.match(results.scaffold.mainLog[0], /chore: scaffold from astro-conversion-kit/);
+  assert.equal(results.scaffold.branch, 'astro-rebuild');
+  assert.ok(existsSync(file('docs', 'media-plan.json')) && !existsSync(file('.conversion', 'media-plan.json')));
+  assert.match(readFileSync(file('docs', 'plan.md'), 'utf8'), /\| d1 \| .* \| one pruned site\.css \|/);
+  assert.match(readFileSync(file('.gitignore'), 'utf8'), /^\/\.conversion\/media-cache\/$/m);
+});
+
+test('5 baseline: written, js.json lists the theme script, --check passes', () => {
+  ok(results.baseline.check);
+  assert.deepEqual(R.readJson(file('baseline', 'js.json')).map((s) => new URL(s.src).pathname), ['/wp-content/themes/fixture/js/reveal.js']);
+});
+
+test('6 build: the seven gates pass on the templates and then on every path; the design lock holds', () => {
+  for (const [gate, result] of Object.entries(results.build.templateGates)) assert.equal(result.code, 0, `${gate} (templates)\n${shown(result)}`);
+  for (const [gate, result] of Object.entries(results.build.allGates)) assert.equal(result.code, 0, `${gate} (every path)\n${shown(result)}`);
+  ok(results.build.lock.diff);
+  ok(results.build.lock.styles);
+  for (const f of ['Header.astro', 'Nav.astro', 'Footer.astro']) assert.ok(existsSync(file('src', 'components', f)), f);
+  assert.ok(existsSync(file('src', 'pages', '[...path].astro')));
+  assert.match(R.readJson(file('vercel.json')).rewrites.map((r) => `${r.source} ${r.destination}`).join(), /\/feed\/ \/feed\/index\.xml/);
+});
+
+test('7 gates: npm run verify passes the staging build and verify:release the release build', () => {
+  ok(results.gates.staging);
+  assert.match(results.gates.staging.stdout, /^All 10 gates passed$/m);
+  assert.match(results.gates.staging.stdout, /^headers: 4 checked, 0 failed$/m);
+  assert.match(results.gates.stagingAbout, /<meta name="robots" content="noindex, nofollow">/);
+  ok(results.gates.release);
+  assert.match(results.gates.release.stdout, /^All 10 gates passed$/m);
+});
+
+test('8 visual: every template at 390, 768 and 1440, and every page at 390 and 1440, within 0.5 %', () => {
+  const { templateSet, diffAll, sheetAll } = results.visual;
+  ok(templateSet.diff);
+  ok(templateSet.styles);
+  ok(diffAll);
+  const templates = R.readJson(file('capture', 'templates.json'));
+  const rows = R.readJson(file('review', 'diff', 'diff.json'));
   assert.equal(rows.length, templates.length * R.WIDTHS.length);
-  for (const row of rows) assert.ok(row.pass && row.percent <= 0.5, `${row.route}/${row.width}: ${row.percent} %`);
-  assert.deepEqual([...new Set(rows.map((r) => r.width))].sort((a, b) => a - b), R.WIDTHS);
-  assert.equal(styles.code, 0, passed(styles));
-  assert.equal(sheet.code, 0);
-  assert.ok(existsSync(join(SITE, 'review', 'index.html')));
+  for (const row of [...rows, ...R.readJson(file('review', 'diff-all', 'diff.json'))]) assert.ok(row.pass && row.percent <= 0.5, `${row.route}/${row.width}: ${row.percent} %`);
+  assert.equal(R.readJson(file('review', 'diff-all', 'diff.json')).length, templates.reduce((n, t) => n + t.paths.length, 0) * 2);
+  ok(sheetAll);
+  assert.ok(existsSync(file('review', 'index.html')) && existsSync(file('review', 'all.html')));
 });
 
-test('suggest writes docs/suggestions.md with the fixture findings', () => {
-  assert.ok(existsSync(join(SITE, 'docs', 'suggestions.md')));
-  const { items } = R.readJson(join(SITE, '.conversion', 'suggestions.json'));
+test('9 components: skipped, off by default', () => {
+  assert.equal(R.state(SITE).phases.components.result, 'skipped: off by default');
+});
+
+// pre-launch with --predecessor-url fails two checks that read the kit's trailing-slash
+// normalisation wrongly (upstream, in the launch skills): the slash rules count as wildcards, and
+// the live /about -> /about/ redirect looks like a loop once trailing slashes are ignored.
+test('10 prelaunch: pre-launch fails only the two upstream predecessor checks; verify-live passes staging and release', () => {
+  const failing = results.prelaunch.gate.checks.filter((c) => c.status === 'fail');
+  assert.deepEqual(failing.map((c) => c.id).sort(), ['predecessor.redirect-chains', 'predecessor.wildcard-redirects'], shown(results.prelaunch.preLaunch));
+  const chains = failing.find((c) => c.id === 'predecessor.redirect-chains');
+  assert.deepEqual(chains.evidence.map((e) => e.value), ['/about -> /about is a loop and serves nothing']);
+  const wildcards = failing.find((c) => c.id === 'predecessor.wildcard-redirects');
+  assert.ok(wildcards.evidence.every((e) => e.value.startsWith('"/:path(')), 'only the slash rules');
+  ok(results.prelaunch.stagingLive);
+  assert.match(results.prelaunch.stagingLive.stdout, /^verify-live: \d+ checked, 0 failed$/m);
+  ok(results.prelaunch.releaseLive);
+  assert.equal(results.prelaunch.audit.code, 0, shown(results.prelaunch.audit));
+  assert.ok(existsSync(file('docs', 'launch', 'audit-baseline.json')));
+});
+
+test('11 suggestions: gates.json collected, docs/suggestions.md with the fixture findings and "From the review"', () => {
+  assert.equal(results.suggestions.gatesJson.length, 10);
+  assert.ok(results.suggestions.gatesJson.every((g) => g.failed === 0));
+  const { items } = R.readJson(file('suggestions.json'));
   const paths = (id) => items.filter((i) => i.id === id).map((i) => i.path);
   assert.deepEqual(paths('shortcode-leftovers'), ['/choosing-siding-colors/']);
   assert.deepEqual(paths('missing-alt'), ['/']);
@@ -129,27 +138,14 @@ test('suggest writes docs/suggestions.md with the fixture findings', () => {
   assert.deepEqual(paths('redirect-chains'), ['/old-services']);
   assert.deepEqual(paths('broken-links'), ['/deleted-post/']);
   assert.ok(paths('no-webp').includes('/wp-content/uploads/2026/01/hero-1024x683.jpg'));
+  assert.match(readFileSync(file('docs', 'suggestions.md'), 'utf8'), /## From the review\n[^#]*$/);
 });
 
-test('verify-live passes against the staging build served the way Vercel serves it', () => {
-  assert.equal(results.verifyLive.code, 0, passed(results.verifyLive));
-  assert.match(results.verifyLive.stdout, /^verify-live: \d+ checked, 0 failed$/m);
-});
-
-// Two pre-launch blockers no parity build can clear on its own: the live og:image is 1536x1024,
-// and pre-launch does not read vercel.json rewrites, so /feed/ (served from feed/index.xml through
-// a rewrite) looks unserved. Everything else passes on a clean, pushed tree.
-test('pre-launch passes the release build but for the live og:image size and the rewritten feed', () => {
-  const gate = R.readJson(join(`${SITE}-pre-launch`, 'gate.json'));
-  const failing = gate.checks.filter((c) => c.status === 'fail');
-  assert.deepEqual(failing.map((c) => c.id).sort(), ['output.internal-refs'], passed(results.preLaunch));
-  const refs = failing.find((c) => c.id === 'output.internal-refs');
-  assert.ok(refs.evidence.every((e) => / -> \/feed$/.test(e.value ?? e.text ?? JSON.stringify(e))), JSON.stringify(refs.evidence));
-  assert.equal(results.preLaunch.code, 1);
-});
-
-test('state.json records every phase with a finish time', () => {
-  const { phases } = R.readJson(join(SITE, '.conversion', 'state.json'));
-  assert.deepEqual(Object.keys(phases), PHASES);
-  for (const name of PHASES) assert.ok(phases[name].finishedAt, `${name} finished`);
+test('12 pr: the body is written, the gates pass once more, astro-rebuild is pushed; every phase has finished', () => {
+  ok(results.pr.verify);
+  assert.match(readFileSync(file('.conversion', 'pr-body.md'), 'utf8'), /## Gate output\n\n```\n[\s\S]*All 10 gates passed/);
+  const { phases } = R.state(SITE);
+  assert.deepEqual(Object.keys(phases), R.PHASES);
+  for (const name of R.PHASES) assert.ok(phases[name].finishedAt, `${name} finished`);
+  assert.ok(readdirSync(`${SITE}-remote.git`).includes('refs'));
 });
