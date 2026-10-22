@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:f
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
+import { compareSamples, firstFamily, parseRoutes } from '../../skills/visual-review/scripts/styles.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..', '..');
@@ -14,6 +15,8 @@ const SITE = join(ROOT, 'test', 'fixture', 'site');
 const STYLESHEET = '/wp-content/themes/fixture/style.css';
 const TMP = join(ROOT, 'test', 'tmp', 'styles');
 const TYPES = { '.html': 'text/html; charset=UTF-8', '.css': 'text/css; charset=UTF-8' };
+// Pages the copy does not have, so they 404 there while the fixture serves them.
+const REMOVED_FROM_COPY = new Set(['/contact/']);
 
 // A second copy of the fixture pages whose stylesheet also sets h1 to 40px.
 function startCopy() {
@@ -22,6 +25,7 @@ function startCopy() {
     const { pathname } = new URL(req.url, origin);
     let file = resolve(SITE, `.${decodeURIComponent(pathname)}`);
     if (pathname.endsWith('/')) file = join(file, 'index.html');
+    if (REMOVED_FROM_COPY.has(pathname)) file = join(SITE, 'missing');
     let isFile = false;
     try {
       isFile = file.startsWith(SITE + sep) && statSync(file).isFile();
@@ -128,4 +132,52 @@ test('a copy whose CSS sets h1 to 40px fails the h1 font-size row', async () => 
   const failing = rows.filter((r) => !r.pass);
   assert.ok(failing.every((r) => r.selector === 'h1'), JSON.stringify(failing));
   assert.ok(rows.filter((r) => r.selector === 'p').every((r) => r.pass));
+});
+
+test('--routes / is a route, not a folder to read', async () => {
+  assert.deepEqual(parseRoutes('/'), ['/']);
+  assert.deepEqual(parseRoutes('/,/about/'), ['/', '/about/']);
+  const out = join(TMP, 'root.json');
+  const { code, stdout, stderr } = await run([
+    '--live', fixture.origin, '--new', fixture.origin, '--routes', '/',
+    '--widths', '390', '--out', out, '--delay', '0',
+  ]);
+  assert.equal(code, 0, stdout + stderr);
+  const rows = JSON.parse(readFileSync(out, 'utf8'));
+  assert.ok(rows.length > 0 && rows.every((r) => r.route === '/' && r.pass));
+});
+
+test('a route missing on the new site fails one status row', async () => {
+  const out = join(TMP, 'status.json');
+  const { code } = await run([
+    '--live', fixture.origin, '--new', copy.origin, '--routes', '/contact/',
+    '--widths', '390', '--out', out, '--delay', '0',
+  ]);
+  assert.equal(code, 1);
+  const rows = JSON.parse(readFileSync(out, 'utf8'));
+  assert.deepEqual(rows, [
+    { route: '/contact/', width: 390, selector: 'document', property: 'status', live: 200, new: 404, pass: false },
+  ]);
+});
+
+test('firstFamily takes the first family and strips quotes', () => {
+  assert.equal(firstFamily('"Fixture Serif", Georgia, serif'), 'Fixture Serif');
+  assert.equal(firstFamily("'Open Sans',sans-serif"), 'Open Sans');
+  assert.equal(firstFamily('Arial'), 'Arial');
+});
+
+test('compareSamples: a selector on one side only fails a present row; letter-spacing normal equals 0px', () => {
+  const style = {
+    'font-family': 'Arial', 'font-size': '16px', 'font-weight': '400', 'line-height': 'normal',
+    'letter-spacing': 'normal', color: 'rgb(0, 0, 0)', 'background-color': 'rgba(0, 0, 0, 0)',
+    'text-transform': 'none', 'margin-top': '0px', 'margin-bottom': '0px', 'padding-top': '0px',
+    'padding-right': '0px', 'padding-bottom': '0px', 'padding-left': '0px',
+  };
+  const live = { status: 200, styles: { p: style, footer: style } };
+  const next = { status: 200, styles: { p: { ...style, 'letter-spacing': '0px', 'font-size': '16.8px' }, footer: null } };
+  const rows = compareSamples('/', 390, live, next);
+  assert.deepEqual(rows.filter((r) => !r.pass), [
+    { route: '/', width: 390, selector: 'footer', property: 'present', live: true, new: false, pass: false },
+  ]);
+  assert.equal(rows.find((r) => r.property === 'letter-spacing').live, '0px');
 });

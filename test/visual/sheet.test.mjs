@@ -54,6 +54,8 @@ const styles = [
   { route: '/about/', width: 1440, selector: 'h1', property: 'margin-top', live: '21.44px', new: '26.8px', pass: false },
   { route: '/about/', width: 1440, selector: 'p', property: 'line-height', live: '25.6px', new: '25.6px', pass: true },
   { route: '/', width: 390, selector: 'a', property: 'color', live: 'rgb(178, 60, 40)', new: 'rgb(0, 0, 0)', pass: false },
+  // A route-width pair with no screenshots or diff: still listed, under a style-only card.
+  { route: '/blog/', width: 768, selector: 'h2', property: 'color', live: 'rgb(0, 0, 0)', new: 'rgb(1, 1, 1)', pass: false },
 ];
 
 before(() => {
@@ -68,6 +70,7 @@ before(() => {
       diff.push({ route, width, percent: pass ? 0.1 : 3.25, pass, heightA: 4, heightB: 4 });
     }
   }
+  delete diff[diff.length - 1].percent;
   writeFileSync(join(TMP, 'diff', 'diff.json'), JSON.stringify(diff));
   writeFileSync(join(TMP, 'styles.json'), JSON.stringify(styles));
 });
@@ -104,6 +107,12 @@ test('the contact sheet embeds every image and marks every failing row', async (
   assert.match(html, /3\.25\s*%/);
   assert.match(html, /margin-top/);
   assert.doesNotMatch(html, /line-height/, 'passing style rows are not listed');
+  assert.match(html, /style only/);
+  assert.match(html, /\/blog\//);
+  assert.doesNotMatch(html, /NaN/);
+  assert.match(html, /n\/a/);
+  assert.doesNotMatch(html, /href="data:/, 'each image is embedded once');
+  assert.equal((html.match(/data:image\/png;base64,/g) ?? []).length, images.length);
 });
 
 test('without --styles the sheet still renders, failing diff rows only', async () => {

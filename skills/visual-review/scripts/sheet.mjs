@@ -45,7 +45,7 @@ function figure(label, file, extra = '') {
   const caption = `<figcaption>${escapeHtml(label)}${extra ? ` <span class="muted">${escapeHtml(extra)}</span>` : ''}</figcaption>`;
   if (!file || !existsSync(file)) return `<figure class="missing">${caption}<div class="none">no image</div></figure>`;
   const data = readFileSync(file).toString('base64');
-  return `<figure>${caption}<a href="data:image/png;base64,${data}" target="_blank" rel="noopener"><img src="data:image/png;base64,${data}" alt="${escapeHtml(label)}" loading="lazy"></a></figure>`;
+  return `<figure>${caption}<div class="frame"><img src="data:image/png;base64,${data}" alt="${escapeHtml(label)}" loading="lazy"></div></figure>`;
 }
 
 const verdict = (pass) => (pass ? '<span class="pass">PASS</span>' : '<span class="fail">FAIL</span>');
@@ -69,7 +69,7 @@ export function buildSheet({ liveDir, newDir, diffFile, stylesFile }) {
   const diffByKey = new Map(diff.map((d) => [key(d.route, d.width), d]));
   const order = [];
   const seen = new Set();
-  for (const { route, width } of [...diff, ...live.values(), ...next.values()]) {
+  for (const { route, width } of [...diff, ...live.values(), ...next.values(), ...styles]) {
     const k = key(route, width);
     if (!seen.has(k)) {
       seen.add(k);
@@ -90,16 +90,20 @@ export function buildSheet({ liveDir, newDir, diffFile, stylesFile }) {
       const badStyles = styles.filter((s) => s.route === route && s.width === width && !s.pass);
       if (d && !d.pass) failing += 1;
       failing += badStyles.length;
+      const percent = Number.isFinite(d?.percent) ? `${d.percent.toFixed(2)} %` : 'n/a';
       const summary = d
-        ? `${verdict(d.pass)} <strong>${escapeHtml(Number(d.percent).toFixed(2))} %</strong> differing pixels <span class="muted">heights ${escapeHtml(d.heightA)} / ${escapeHtml(d.heightB)} px</span>`
-        : '<span class="muted">no diff</span>';
-      return `<div class="row${d && !d.pass ? ' bad' : ''}">
-<h3>${escapeHtml(width)} px ${summary}</h3>
-<div class="shots">
+        ? `${verdict(d.pass)} <strong>${escapeHtml(percent)}</strong> differing pixels <span class="muted">heights ${escapeHtml(d.heightA ?? '?')} / ${escapeHtml(d.heightB ?? '?')} px</span>`
+        : `<span class="muted">${a || b ? 'no diff' : 'style only'}</span>`;
+      const shots = a || b || d
+        ? `<div class="shots">
 ${figure('Live', a?.path, a?.bannerClosed ? 'banner closed' : '')}
 ${figure('New', b?.path, b?.bannerClosed ? 'banner closed' : '')}
 ${d ? figure('Diff', diffImage) : ''}
-</div>
+</div>`
+        : '';
+      return `<div class="row${d && !d.pass ? ' bad' : ''}">
+<h3>${escapeHtml(width)} px ${summary}</h3>
+${shots}
 ${styleTable(badStyles)}
 </div>`;
     });
@@ -128,7 +132,8 @@ h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
 .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: start; }
 figure { margin: 0; }
 figcaption { font-size: 13px; margin-bottom: 4px; }
-img { width: 100%; height: auto; display: block; border: 1px solid var(--line); max-height: 1600px; object-fit: cover; object-position: top; }
+.frame { max-height: 1600px; overflow-y: auto; border: 1px solid var(--line); }
+img { width: 100%; height: auto; display: block; }
 .none { padding: 24px; text-align: center; color: var(--muted); border: 1px dashed var(--line); }
 table.styles { margin-top: 12px; border-collapse: collapse; width: 100%; font-size: 13px; display: block; overflow-x: auto; }
 table.styles th, table.styles td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }

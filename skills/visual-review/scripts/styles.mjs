@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Computed-style parity: samples the first match of each selector on the live
 // and new site, per route and width, and compares typography, colour and spacing.
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -14,7 +14,8 @@ const HELP = `Usage: node styles.mjs --live <origin> --new <origin> --routes <te
 Opens every route at every width on both origins and compares, on the first
 match of each sampled selector, font-family (first family), font-size,
 font-weight, line-height, letter-spacing, color, background-color,
-text-transform, margin-top/bottom and the four paddings.
+text-transform, margin-top/bottom and the four paddings. A route that is not
+2xx on either side gives one failing status row instead.
 Lengths pass within ${LENGTH_TOLERANCE_PX} px; colours and families must match exactly.
 
   --routes   a templates.json path ([{ name, representative }]) or a comma list of paths
@@ -34,7 +35,7 @@ class UsageError extends Error {}
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 export function parseRoutes(value) {
-  if (value.endsWith('.json') || existsSync(value)) {
+  if (value.endsWith('.json') || (existsSync(value) && statSync(value).isFile())) {
     let templates;
     try {
       templates = JSON.parse(readFileSync(value, 'utf8'));
@@ -82,8 +83,13 @@ function sampleInPage({ selectors, properties }) {
   return result;
 }
 
+// Opens a page and returns it with the final document status (after redirects).
 async function openPage(context, url) {
   const page = await context.newPage();
+  let status = null;
+  page.on('response', (res) => {
+    if (res.request().isNavigationRequest() && res.frame() === page.mainFrame()) status = res.status();
+  });
   try {
     await page.goto(url, { waitUntil: 'load', timeout: NAV_TIMEOUT_MS });
   } catch (err) {
@@ -94,22 +100,37 @@ async function openPage(context, url) {
     }
   }
   await page.evaluate(() => document.fonts?.ready);
-  return page;
+  return { page, status };
 }
 
 async function sample(context, origin, route) {
-  const page = await openPage(context, new URL(route, origin).href);
+  const { page, status } = await openPage(context, new URL(route, origin).href);
   try {
-    return await page.evaluate(sampleInPage, {
+    const styles = await page.evaluate(sampleInPage, {
       selectors: SELECTORS,
       properties: PROPERTIES.map((p) => p.name),
     });
+    return { status, styles };
   } finally {
     await page.close();
   }
 }
 
-export function compareSamples(route, width, live, next) {
+const isOk = (status) => status !== null && status >= 200 && status < 300;
+
+// Computed values that mean the same length.
+function normalise(name, value) {
+  if (name === 'letter-spacing' && value === 'normal') return '0px';
+  return value;
+}
+
+// live and next are { status, styles }. A non-2xx side yields one failing status row.
+export function compareSamples(route, width, liveSample, nextSample) {
+  if (!isOk(liveSample.status) || !isOk(nextSample.status)) {
+    return [{ route, width, selector: 'document', property: 'status', live: liveSample.status, new: nextSample.status, pass: false }];
+  }
+  const live = liveSample.styles;
+  const next = nextSample.styles;
   const rows = [];
   for (const selector of SELECTORS) {
     const a = live[selector];
@@ -120,9 +141,9 @@ export function compareSamples(route, width, live, next) {
       continue;
     }
     for (const { name, kind } of PROPERTIES) {
-      const liveValue = kind === 'family' ? firstFamily(a[name]) : a[name];
-      const newValue = kind === 'family' ? firstFamily(b[name]) : b[name];
-      rows.push({ route, width, selector, property: name, live: liveValue, new: newValue, pass: compareValue(kind, a[name], b[name]) });
+      const liveValue = kind === 'family' ? firstFamily(a[name]) : normalise(name, a[name]);
+      const newValue = kind === 'family' ? firstFamily(b[name]) : normalise(name, b[name]);
+      rows.push({ route, width, selector, property: name, live: liveValue, new: newValue, pass: compareValue(kind, liveValue, newValue) });
     }
   }
   return rows;
