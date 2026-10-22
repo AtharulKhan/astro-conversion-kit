@@ -25,6 +25,22 @@ test('phases.md: review:check is the proof of phases 8 and 12; overrides and blo
   assert.match(phases.replace(/\s+/g, ' '), /blocks analytics, tag, pixel and chat hosts/);
 });
 
+test('phases.md §2: the Wayback second pass, its Notes proof, and route statuses in the proof', () => {
+  const capture = read('references/phases.md').split(/^## /m).find((s) => s.startsWith('2. '));
+  assert.match(capture, /capture\.mjs \$LIVE --out capture --resume --seed-file capture\/wayback-unverified\.txt/);
+  assert.match(capture, /Wayback second pass: N of M archived paths verified/);
+  assert.match(capture, /Still failing after retries: <path> \(<status> after 3 attempts\)/);
+  const proof = capture.split('**Proof:**')[1].replace(/\s+/g, ' ');
+  assert.match(proof, /no route with a status other than 200\/3xx\/404\/410, or an exception for each/);
+});
+
+test('build-rules.md copies media outside the prefix; SKILL.md names routes as an exception field', () => {
+  assert.match(read('references/build-rules.md').replace(/\s+/g, ' '), /files outside the media prefix are copied to `?public\/`? at their live paths/);
+  const skill = read('SKILL.md').replace(/\s+/g, ' ');
+  assert.match(skill, /`routes`[^.]*a route the capture could not read: `from` is its status as a string, `to` is `"skip"` or the built replacement path/);
+  assert.doesNotMatch(skill, /Forms, routes and scripts are not exception fields/);
+});
+
 test('intake.md: the time estimate counts every live read per page, per coverage page, per template and per media file', () => {
   const intake = read('references/intake.md');
   const estimate = intake.split('\n## ')[0];

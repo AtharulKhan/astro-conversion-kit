@@ -30,6 +30,15 @@ Follow the `capture-site` skill exactly, from `SITE`, with `KIT` paths:
 
     S phase capture
     node $KIT/skills/capture-site/scripts/capture.mjs $LIVE --out capture
+
+When `capture/wayback-unverified.txt` is not empty, run the Wayback second pass, then carry on
+(`readme.mjs` runs last below):
+
+    node $KIT/skills/capture-site/scripts/capture.mjs $LIVE --out capture --resume --seed-file capture/wayback-unverified.txt
+
+Archived paths that still redirect are in `capture/redirects.json` with `source: "seed"`, so
+build-baseline carries them into the baseline's redirects. Then:
+
     node $KIT/skills/capture-site/scripts/media.mjs --capture capture --download .conversion/media-cache
     node $KIT/skills/capture-site/scripts/templates.mjs --capture capture
     node $KIT/skills/capture-site/scripts/assets.mjs --capture capture
@@ -64,7 +73,12 @@ over 25 MB (`find capture -size +25M`) in the Notes: they are added to `.gitigno
 scaffold, before its commit.
 
 **Proof:** `capture/README.md` exists with Notes; `capture/templates.json` and
-`capture/css-coverage.json` exist; every URL in `inventory.json` has a status.
+`capture/css-coverage.json` exist; every URL in `inventory.json` has a status; no route with
+a status other than 200/3xx/404/410, or an exception for each (`routes`, SKILL.md). After a
+Wayback second pass, `## Notes` opens with `Wayback second pass: N of M archived paths verified`
+and one line per path with its status or redirect target. `## Notes` also lists every URL still
+failing after its retries (`Still failing after retries: <path> (<status> after 3 attempts)`)
+and a Wayback listing that failed or was refused for size: repeat those to the person.
 
 ## 3. plan
 

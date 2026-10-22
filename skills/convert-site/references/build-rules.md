@@ -56,7 +56,9 @@ parity and this file is wrong: say so and fix this file.
   file is at its site path (`cp -R .conversion/media-cache/. public/`), every file the capture
   listed, referenced or not
   (WordPress image sizes included). Mode `store` or `live-temporary`: nothing under the media
-  prefix goes in `public/`; the host file says how the prefix is reached.
+  prefix goes in `public/`; the host file says how the prefix is reached. In every mode, files
+  outside the media prefix are copied to `public/` at their live paths (the media gate checks
+  them in `dist/`).
 - **Optimiser suffixes are separate files.** `-scaled`, `-e1612345678`, `photo.jpg.webp`,
   `-300x200`: each variant is kept at its own URL. `?ver=` query strings on assets stay in the
   markup as written; the static host ignores them.

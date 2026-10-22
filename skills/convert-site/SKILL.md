@@ -114,7 +114,9 @@ This section is the rule; the references link here.
 - **Exception** (`exceptions.json`, `{ path, field, from, to, reason, approvedBy, date }`): a
   difference the static build cannot avoid; the gates substitute `to` for `from` for that one
   field on that one path. `approvedBy` is `"default, <decision id>"` until a person signs it off
-  in the PR. Forms, routes and scripts are not exception fields: they have their own flags.
+  in the PR. Forms and scripts are not exception fields (they have their own flags). `routes`
+  is: a route the capture could not read: `from` is its status as a string, `to` is `"skip"` or
+  the built replacement path.
 - **Proposal** (`proposals.json`, the same shape plus `id`, the decision id, and
   `approvedBy: "proposed"`; several records may share one id): an improvement. Code switches it
   with `proposalOn(id)`; it ships only in a `PROPOSALS=on` build, gated by `npm run
@@ -124,11 +126,9 @@ This section is the rule; the references link here.
 ## Hosting
 
 Vercel by default, Cloudflare Pages on request: `references/hosting-vercel.md` and
-`references/hosting-cloudflare.md`. Staging builds leave `PUBLIC_INDEXABLE` unset, so every page
-carries `noindex`; only the production build sets `PUBLIC_INDEXABLE=true`. The media decision
-comes from `media-plan.mjs`: `repo`, `store` (upload with `media-upload.mjs`), or
-`live-temporary` (staging only, with its warning, and the runbook item "create the store, upload,
-regenerate rewrites; live-temporary must be gone before DNS moves").
+`references/hosting-cloudflare.md`. Every page carries `noindex` unless the production build sets
+`PUBLIC_INDEXABLE=true`. Media is `repo`, `store` (`media-upload.mjs`) or `live-temporary`
+(staging only; gone before DNS moves), as `media-plan.mjs` decides (`references/phases.md` §3).
 
 ## Splitting the work
 
