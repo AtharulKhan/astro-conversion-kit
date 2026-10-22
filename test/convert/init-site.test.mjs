@@ -161,7 +161,7 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.match(readFileSync(join(dir, 'src', 'layouts', 'Base.astro'), 'utf8'), /noindex, nofollow/);
   const ignore = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
   for (const entry of ['/capture/screens/', '/capture/lighthouse-live/', '/review/', 'node_modules', 'dist',
-    '.astro', '.env*', '!.env.example', '.conversion/*.tmp', '/media-cache/']) {
+    '.astro', '.env*', '!.env.example', '.conversion/*.tmp', '/media-cache/', '.vercel']) {
     assert.ok(ignore.includes(entry), `.gitignore lacks ${entry}`);
   }
 
@@ -326,6 +326,7 @@ const LAUNCH_SCRIPTS = {
   'review:shoot': ['visual-review', 'shoot.mjs'],
   'review:diff': ['visual-review', 'diff.mjs'],
   'review:sheet': ['visual-review', 'sheet.mjs'],
+  'review:styles': ['visual-review', 'styles.mjs'],
   'verify:live': ['parity-gates', 'verify-live.mjs'],
   verify: ['parity-gates', 'verify/forms.mjs', 'verify/routes.mjs'],
   'verify:release': ['parity-gates', 'verify/forms.mjs', 'verify/routes.mjs'],
@@ -363,6 +364,12 @@ test('docs/LAUNCH.md: every command complete, its flags in the script --help, th
   assert.ok(commands.includes('npm run review:check'), 'review:check closes the visual review');
   assert.match(launch, /`docs\/visual-overrides\.json`/);
   assert.doesNotMatch(launch, /--per-route/);
+  // review:check reads review/styles.json, so B writes it; and says where the step can run.
+  assert.match(launch, /npm run review:styles -- --live https:\/\/www\.fixture-roofing\.test --new http:\/\/localhost:4321 --routes capture\/templates\.json --widths 390,768,1440 --out review\/styles\.json/);
+  assert.match(launch.replace(/\s+/g, ' '), /on the machine that ran the conversion/);
+  const agents = readFileSync(join(dir, 'AGENTS.md'), 'utf8');
+  assert.doesNotMatch(agents, /forms@example\.com/);
+  assert.match(agents.replace(/\s+/g, ' '), /goes only to the address given at intake/);
 });
 
 test('docs/LAUNCH.md names sitemap.xml when the capture saved no sitemap', (t) => {

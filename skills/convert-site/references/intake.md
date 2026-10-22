@@ -2,11 +2,14 @@
 
 Send this once, after preflight and the fingerprint, and never send a second question message.
 If your environment cannot wait for a reply (a non-interactive run), apply every default and
-go. Estimate the time the live site is read at 2.5 s per request: per page, 1 for the capture
+go. Estimate, roughly, the time the live site is read at 2.5 s per request: per page, 1 for the capture
 and 2 for the full-set live shots (390 and 1440); per coverage page (up to 10 per template), 3
 coverage loads (one per width); per template, 3 live shots and 3 style loads per review round;
 plus 1 per media file. 200 pages in 4 templates with 1,000 media files:
-(200 × 3 + 40 × 3 + 4 × 6 + 1,000) × 2.5 s, about 73 minutes.
+(200 × 3 + 40 × 3 + 4 × 6 + 1,000) × 2.5 s, about 73 minutes. Say "about": the estimate leaves
+out the Wayback second pass, retries and back-off after 429 or 503, assets and fonts, Lighthouse
+runs, each extra review round, and the reads of phase 10 (`launch-audit --old-url`, `pre-launch
+--predecessor-url`).
 Fill every `<...>` from what preflight and the fingerprint found; delete a question only when
 you already know the answer, and say what you found instead. Ask only what the owner knows:
 form counts, analytics ids, media size and server-side features (search, comments, store,

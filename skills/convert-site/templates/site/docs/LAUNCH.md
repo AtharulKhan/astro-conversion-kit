@@ -26,11 +26,15 @@ Things only a person with the accounts can do. Tick each one.
 - [ ] `npm run build`, then
       `npm run verify -- --endpoint "$FORM_ENDPOINT" --honeypot _gotcha --thank-you /thank-you/ --allow-extra /thank-you/`
       passes on `astro-rebuild` (drop `--allow-extra /thank-you/` when live already had that page).
-- [ ] Visual review: with `npm run preview` running in a second terminal,
+- [ ] Visual review, on the machine that ran the conversion: `capture/screens/` and `review/`
+      are not committed, so a fresh clone cannot run it; there, read the `npm run review:check`
+      output quoted in the pull request instead. With `npm run preview` running in a second terminal,
       `npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/new`,
       then `npm run review:diff -- --a capture/screens/live --b review/new --out review/diff`
-      exits 0, and
-      `npm run review:sheet -- --live capture/screens/live --new review/new --diff review/diff/diff.json --out review/index.html`
+      exits 0,
+      `npm run review:styles -- --live {{ORIGIN}} --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json`
+      (it reads the live site, paced),
+      `npm run review:sheet -- --live capture/screens/live --new review/new --diff review/diff/diff.json --styles review/styles.json --out review/index.html`
       for a look, and `npm run review:check` exits 0. Every page and width passes at
       0.5 % or fewer differing pixels; a looser threshold for a route is an entry in the committed
       `docs/visual-overrides.json` (`{ "<route>": { "id": "<decision id>", "threshold": <at most 2>, "reason": "…" } }`)

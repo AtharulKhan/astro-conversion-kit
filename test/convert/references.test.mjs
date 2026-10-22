@@ -91,6 +91,18 @@ test('forms.md: GET forms are compared with live and need no endpoint', () => {
   assert.match(forms, /applies to POST forms only/);
 });
 
+test('round 3 lines: styles spelled out, redirects:build after the first build, hygiene.pushed in the proof, 404 assets, suspect-challenge, the estimate is "about"', () => {
+  const phases = read('references/phases.md').replace(/\s+/g, ' ');
+  assert.match(phases, /npm run review:styles -- --live \$LIVE --new http:\/\/localhost:4321 --routes capture\/templates\.json --widths 390,768,1440 --out review\/styles\.json/);
+  assert.match(phases, /`npm run redirects:build`, and again after the first `npm run build`/);
+  const proof = phases.split('## 10. prelaunch')[1].split('**Proof:**')[1];
+  assert.match(proof, /accepts `hygiene\.pushed` only while the repository has no remote and the push is on the needs-you list/);
+  assert.match(phases, /A route with status "suspect-challenge"/);
+  assert.match(read('references/build-rules.md').replace(/\s+/g, ' '), /The 404 page's own stylesheets, scripts and media are not collected/);
+  const intake = read('references/intake.md').split('\n## ')[0].replace(/\s+/g, ' ');
+  assert.match(intake, /Say "about": the estimate leaves out/);
+});
+
 test('intake.md: the time estimate counts every live read per page, per coverage page, per template and per media file', () => {
   const intake = read('references/intake.md');
   const estimate = intake.split('\n## ')[0];

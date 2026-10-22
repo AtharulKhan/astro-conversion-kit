@@ -113,7 +113,10 @@ parity and this file is wrong: say so and fix this file.
   `notFound.snapshot`. The capture fetched it once from a path that cannot exist; it is not a
   route and is not in `inventory.json`. When `notFound.snapshot` is null the live site has no
   404 page (`notFound.status` is 200 for a soft 404, or a 3xx with `notFound.location`): keep
-  the scaffold's 404 page and say so in the PR.
+  the scaffold's 404 page and say so in the PR. The 404 page's own stylesheets, scripts and
+  media are not collected (it is not a crawled page): build `src/pages/404.astro` from
+  `capture/pages/404.html` markup inside the site layout, using the site's `site.css`; a style
+  or image only the 404 page uses is reproduced from that markup or noted in the PR.
 
 ## What is never fixed in the build
 

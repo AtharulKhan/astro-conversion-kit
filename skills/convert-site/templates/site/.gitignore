@@ -4,6 +4,7 @@ dist
 .env*
 !.env.example
 .DS_Store
+.vercel
 *.log
 # large or regenerable capture and review output (anchored, so scripts/review/ stays tracked)
 /capture/screens/

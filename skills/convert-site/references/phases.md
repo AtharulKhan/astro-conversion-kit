@@ -98,6 +98,11 @@ and one line per path with its status or redirect target. `## Notes` also lists 
 failing after its retries (`Still failing after retries: <path> (<status> after 3 attempts)`)
 and a Wayback listing that failed or was refused for size: repeat those to the person.
 
+A route with status "suspect-challenge" (a tiny untitled page the capture could not tell from a
+bot challenge) fails the routes gate as "not captured" until you decide: open it in a browser
+and record what it is with a routes exception `{ path, field: "routes", from:
+"suspect-challenge", to: "skip" | "<built path>", reason }`.
+
 ## 3. plan
 
     S phase plan
@@ -202,7 +207,8 @@ Read `build-rules.md`, `forms.md`, `third-party.md` and your host file first. In
 3. One layout per template, with the header, navigation and footer as components.
 4. The representative page of each template, its content moved from the captured markup.
 5. Forms (`forms.md`) and third-party scripts (`third-party.md`).
-6. Redirects: `npm run redirects:build`.
+6. Redirects: `npm run redirects:build`, and again after the first `npm run build`, so the
+   slash rules pick up every file type the build ships (the compiler scans `dist/`).
 
 **Gates on every template commit.** `npm run verify` stops at the first failing gate, and links,
 redirects and sitemaps are expected to fail until every page exists. So during the template work
@@ -227,7 +233,7 @@ the seven must exit 0 before the commit (`feat: <template> template`). `links`,
 template set: shoot new at 390, 768 and 1440, diff against `capture/screens/live`, styles, sheet,
 look, write down every difference, fix from `capture/`, repeat. Never reshoot live to get a
 match. The proof is `npm run review:diff -- --a capture/screens/live --b review/new --out
-review/diff` and `npm run review:styles -- …` exiting 0 for the template set. From here a fix goes
+review/diff` and `npm run review:styles -- --live $LIVE --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json` exiting 0 for the template set (with `npm run preview` serving the build). From here a fix goes
 in the template, never in one page.
 
 **Overrides.** A looser visual threshold lives in the committed `docs/visual-overrides.json`,
@@ -297,7 +303,8 @@ pre-launch fails a tree with uncommitted changes or no upstream, and `state.json
 every `S` call, so commit and push first. It runs `npm run build` itself: `PUBLIC_INDEXABLE=true`
 makes that the production build it is meant to gate (without it, the staging build's robots.txt
 blocks everything and fails the robots check). Without a `gh` login there is no remote to push
-to; `hygiene.pushed` then fails until the person pushes, and that is a needs-you line.
+to; `hygiene.pushed` then fails until the person pushes, and that is a needs-you line (the
+reconcile accepts it only then: no remote, and a needs-you item that says to push).
 
 Then reconcile what failed with live:
 
@@ -305,7 +312,8 @@ Then reconcile what failed with live:
 
 A failing check is accepted only when every row it names (title, description, h1, canonical,
 og:image, favicon, placeholder text) is what live had for that path and a `docs/plan.md`
-decision row names the path or the check id; also `placeholders.form-id` while the form id is
+decision row names the path or the check id (the home page as `` `/` ``); also `hygiene.pushed`
+with no remote while the push is on the needs-you list; also `placeholders.form-id` while the form id is
 missing (the PR is then a draft, `forms.md`), and the two predecessor checks when every row is
 a trailing-slash rule or a slash-only redirect (a known launch-skills limitation). Everything
 else blocks and is fixed on the branch, as the `pre-launch` skill's triage says. Keep its
@@ -330,8 +338,10 @@ the audit's `baseline.json` and `redirects.csv` to `docs/launch/audit-baseline.j
 branch, or list it in the PR with why it cannot be fixed. Then the one test submission
 (`forms.md`).
 
-**Proof:** `prelaunch-reconcile` exits 0; `verify-live` exits 0 or its gap is listed; every
-audit blocker is fixed or listed.
+**Proof:** `prelaunch-reconcile` exits 0 (with no `gh` login it accepts `hygiene.pushed` only
+while the repository has no remote and the push is on the needs-you list; the PR cannot be
+opened until then); `verify-live` exits 0 or its gap is listed; every audit blocker is fixed or
+listed.
 
 ## 11. suggestions
 

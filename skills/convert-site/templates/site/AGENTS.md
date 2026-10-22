@@ -60,4 +60,5 @@ npm run verify
 
 ## Secrets
 - No keys, tokens or real email addresses in the repo. Use `.env` (ignored) and `.env.example`.
-- Test form submissions go to a placeholder address such as forms@example.com.
+- The one test form submission goes only to the address given at intake, never to one found
+  on the site.
