@@ -1,0 +1,141 @@
+# Baseline contracts
+
+What `build-baseline.mjs` writes, and what every gate reads. All of it is derived from `capture/`
+and committed. Nothing here is edited by hand except `keep` in `scripts.json`. `--check`
+recounts `routes`, `redirects`, `media`, `forms` and `scripts` against `counts.json`.
+
+## baseline/routes.json
+
+One record per captured page, feed and linked file, sorted by path:
+
+    [{ "path": "/contact/", "status": 200, "kind": "page", "template": "page-2",
+       "noindex": false, "snapshot": "pages/contact.html", "foundBy": ["sitemap", "crawl"] }]
+
+- `kind`: `page` | `post` | `archive` | `feed` | `file` | `other`. A WordPress REST dump decides
+  page or post; otherwise body classes do (`single-post` is a post, `archive` an archive). Any
+  status other than 200 is `other`. A `file` is a media file (a PDF) a page links to.
+- `template`: the cluster name from `capture/templates.json`, or `other`.
+- `noindex`: the captured robots meta contains `noindex`.
+- `snapshot`: the captured file under `capture/` (`pages/<slug>.html`, `feeds/<name>.xml`), or
+  `null` for a file.
+- `foundBy`: `sitemap`, `rest`, `crawl`, `shortlink`, `seed`, in that order.
+
+## baseline/seo.json
+
+Keyed by path, for every page answering 200 with a snapshot:
+
+    { "/about/": { "title": "About Us | Example", "description": "...", "canonical": "https://www.example.com/about/",
+                   "robots": "index, follow", "lang": "en-US", "h1": ["About Us"], "h2": ["Our crew"],
+                   "og": { "title": "...", "url": "...", "image": "..." }, "twitter": { },
+                   "jsonLd": [ { "@type": "Organization" } ] } }
+
+A missing scalar is `null`. The seo gate compares `jsonLd` by its `@type` values only, and
+`twitter` is recorded but not gated.
+
+## baseline/redirects.json
+
+    [{ "from": "/old-services", "to": "/services/", "status": 301, "source": "seed" },
+     { "from": "/?p=6", "to": "/contact/", "status": 301, "source": "shortlink", "verified": false }]
+
+From the capture's redirects (chains collapsed to their final target) and shortlinks. Only
+shortlinks carry `verified`: `true` when the capture requested it. A redirect with no target is
+left out and named on stderr.
+
+## baseline/media.json
+
+    [{ "path": "/wp-content/uploads/2026/01/brochure.pdf", "bytes": 48213, "contentType": "application/pdf" }]
+
+Every media file that answered 200.
+
+## baseline/forms.json
+
+    { "/contact/": [{ "action": "https://www.example.com/wp-admin/admin-post.php", "method": "post",
+                      "fields": [{ "name": "name", "type": "text", "required": true }, ...] }] }
+
+Fields are named `input`, `select` and `textarea` elements in document order, without submit,
+button, reset and image inputs.
+
+## baseline/scripts.json
+
+    { "ga4": { "id": "G-XXXXXXX", "ids": ["G-XXXXXXX"], "pages": ["/", "/contact/"], "keep": true } }
+
+One entry per third-party vendor, recognised by the same rules the capture uses. `keep` is
+written `true`; set it to `false` to drop the vendor from the build. It is the only field that
+may be edited.
+
+## baseline/text/
+
+`<slug>.txt` per page, the capture's visible text copied as is (`pages/contact.html` pairs with
+`text/contact.txt`). The text gate compares it, trimmed, with the built page's visible text.
+
+## baseline/counts.json
+
+    { "routes": 16, "byStatus": { "200": 15, "404": 1 },
+      "byTemplate": { "home": 1, "page": 6, "single-post": 3, "archive": 2, "other": 3, "page-2": 1 },
+      "redirects": { "seed": 2, "shortlink": 12 }, "media": 19, "forms": 1, "scripts": 2 }
+
+`redirects` is counted by `source`, `forms` is the total number of forms, `scripts` the number of
+vendors.
+
+## baseline/meta.json
+
+    { "origin": "https://www.example.com", "canonicalOrigin": "https://www.example.com",
+      "capturedAt": "2026-10-22T10:00:00.000Z", "builtAt": "2026-10-22T11:00:00.000Z", "platform": "wordpress" }
+
+`canonicalOrigin` is the default origin for the seo and sitemaps gates.
+
+## redirects.csv (site root)
+
+    from,to,status,source,note
+    /old-services,/services/,301,seed,
+    /?p=6,/contact/,301,shortlink,unverified shortlink
+    /old-blog/*,/blog/:splat,301,decision,D7
+
+- `from`: a root-relative path, optionally with a query (`/?p=7`), or a catch-all: a trailing
+  `/*` (the target may use `:splat`) or a `:name*` parameter (the target may use `:name`).
+  Matching is case-sensitive. No spaces: encode them as `%20`.
+- `to`: a root-relative path or an absolute URL.
+- `status`: 301, 302, 303, 307 or 308.
+- `source`: `crawl`, `sitemap`, `shortlink` or `seed` from the capture; `decision` for a row you
+  add. Kept as written.
+- `note`: free text; `unverified shortlink` from the capture, the decision id on a `decision` row.
+
+The file is RFC 4180 CSV (quote a field holding a comma). A malformed file makes
+`build-redirects.mjs` exit 2 naming the line.
+
+## cloudflare-query-redirects.csv
+
+Written beside `redirects.csv` by `build-redirects.mjs --host cloudflare`:
+
+    from,to,status
+    /?p=6,/contact/,301
+
+Each row is created by hand as a Cloudflare Single Redirect; the redirects gate lists them as
+skipped.
+
+## Other inputs the gates read
+
+- `docs/media-plan.json`: `{ "mode": "repo" | "store" | "live-temporary", ... }`; missing means
+  `repo`.
+- `media-manifest.json` (store mode): `[{ "path", "bytes", "url" }]`.
+- `exceptions.json`, `proposals.json`: see `exceptions.md`.
+
+## Gate output
+
+Text mode prints one line per failure, `  <path> <field>: expected <json>, got <json>` (the text
+gate prints a word diff with `[-removed-]` and `{+added+}`), one line per skipped item
+(`  <from> skipped: <reason>`), then the summary:
+
+    seo: 13 checked, 0 failed
+    redirects: 14 checked, 0 failed, 12 skipped (noop)
+
+`--json` prints `{ "gate", "checked", "failed", "skipped"?, "skipReason"?, "skips"?, "failures":
+[{ "path", "field", "expected", "actual" }] }`. A failure with `field: "exception"` is an
+exception the gate could not use; its `actual` says why.
+
+`verify-live.mjs --json` prints `{ "checked", "failed", "failures": [{ "check", "path", "field",
+"expected", "actual", "unverified"? }], "skipped": [{ "check", "path", "reason" }], "stopped"? }`,
+`check` being `route` (a noindex problem is a `route` failure with `field: "x-robots-tag"`),
+`redirect`, `sitemap` or `media`. `skipped` lists the routes
+and media files that were sampled out (`not sampled`): they were not checked. `stopped` is set
+when three blocked responses in a row ended the run (exit 3).
