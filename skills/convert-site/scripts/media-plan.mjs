@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node media-plan.mjs --media capture/media.json --host vercel|cloudflare
                           [--max-total 300MB] [--max-file 25MB] [--max-count 10000]

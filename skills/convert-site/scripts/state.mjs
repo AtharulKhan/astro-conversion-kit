@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Run state for a conversion: reads and writes <site>/.conversion/state.json.
-// This file is copied into every scaffolded site as scripts/state.mjs, so it
-// imports nothing from the kit and carries its own Node version check.
+// This file is copied into every scaffolded site as scripts/state.mjs, next to
+// scripts/lib/node-version.mjs, so it imports only from its own skill.
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node state.mjs --dir <site> <command>
 
@@ -22,20 +23,10 @@ Each write command reads, changes and rewrites the file without a lock, so
 run state.mjs calls one after another, never in parallel.
 Exit codes: 0 success, 2 usage error or unreadable or unwritable state file.`;
 
-const NODE_VERSION_MESSAGE = 'Node 22.23.4 or newer is required (Node 20 is end of life and unpatched)';
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const DECISION_FIELDS = ['topic', 'choice', 'default', 'reason', 'costIfWrong'];
 
 class UsageError extends Error {}
-
-function assertNodeVersion(version = process.versions.node) {
-  const [major, minor, patch] = version.split('.').map(Number);
-  const atLeast = (min) => minor > min[0] || (minor === min[0] && patch >= min[1]);
-  const ok = (major === 22 && atLeast([23, 4])) || (major === 24 && atLeast([22, 1])) || major > 24;
-  if (ok) return;
-  console.error(`${NODE_VERSION_MESSAGE}; this is Node ${version}.`);
-  process.exit(2);
-}
 
 function freshState(now) {
   return {

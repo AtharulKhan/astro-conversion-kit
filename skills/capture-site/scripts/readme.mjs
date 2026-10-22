@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const USAGE = `Usage: node readme.mjs --capture <dir>
 

@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node diff.mjs --a <dir> --b <dir> --out <dir> [--threshold 0.5] [--per-route overrides.json]
 

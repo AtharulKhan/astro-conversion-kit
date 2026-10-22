@@ -5,7 +5,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 import { readRoutes, RoutesError } from './lib/routes.mjs';
 import { LENGTH_TOLERANCE_PX, PROPERTIES, SELECTORS } from './lib/selectors.mjs';
 

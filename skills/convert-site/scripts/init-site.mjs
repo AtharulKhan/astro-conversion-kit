@@ -8,7 +8,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node init-site.mjs --dir <path> --origin <url> --name "<site name>"
                          --host vercel|cloudflare [options]
@@ -199,10 +199,8 @@ function copyScripts(kit, dir) {
   for (const name of CONVERT_SCRIPTS) {
     copyIfPresent(join(kit, 'skills', 'convert-site', 'scripts', `${name}.mjs`), join(scripts, `${name}.mjs`));
   }
-  // The copied scripts call assertNodeVersion(); bring the kit's copy when the gates did not.
-  if (!existsSync(join(scripts, 'lib', 'node-version.mjs'))) {
-    copyIfPresent(join(kit, 'scripts', 'lib', 'node-version.mjs'), join(scripts, 'lib', 'node-version.mjs'));
-  }
+  // The convert-site scripts import ./lib/ (node-version, media stores); merge it beside the gates' lib.
+  copyIfPresent(join(kit, 'skills', 'convert-site', 'scripts', 'lib'), join(scripts, 'lib'));
 }
 
 function git(dir, args) {

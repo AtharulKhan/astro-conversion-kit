@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 import { createBlobStore, BLOB_ENV, BLOB_ENDPOINT } from './lib/stores/blob.mjs';
 import { createR2Store, R2_ENV } from './lib/stores/r2.mjs';
 

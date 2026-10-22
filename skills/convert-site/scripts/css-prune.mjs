@@ -7,7 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import * as csstree from 'css-tree';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node css-prune.mjs --css <capture/css dir> --coverage coverage.json
                          --out <site.css> --report prune-report.json

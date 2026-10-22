@@ -5,7 +5,7 @@
 // as a fallback when that found nothing.
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 import { fetchPaced, DEFAULT_DELAY_MS } from './lib/http.mjs';
 import { parseSitemap } from './lib/sitemaps.mjs';
 

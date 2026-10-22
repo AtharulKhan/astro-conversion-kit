@@ -7,7 +7,7 @@ import { accessSync, constants, existsSync, readdirSync, realpathSync, statSync 
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertNodeVersion, isSupportedNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion, isSupportedNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node preflight.mjs [--json] [--home <dir>] [--path-env <PATH>]
 

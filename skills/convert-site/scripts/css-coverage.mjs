@@ -8,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node css-coverage.mjs --base <origin> --routes <list|inventory.json> --out coverage.json
                            [--widths 390,768,1440] [--delay 2500]

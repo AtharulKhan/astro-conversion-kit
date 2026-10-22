@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, cpSync, existsSync, statSync,
+  mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, cpSync, existsSync, statSync, symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
@@ -54,7 +54,8 @@ function bareKit(t) {
 // A copy of the kit with one dummy file planted in each script tree init-site copies from.
 function fakeKit(t) {
   const kit = bareKit(t);
-  cpSync(join(ROOT, 'scripts', 'lib'), join(kit, 'scripts', 'lib'), { recursive: true });
+  cpSync(join(ROOT, 'skills', 'convert-site', 'scripts', 'lib'), join(kit, 'skills', 'convert-site', 'scripts', 'lib'),
+    { recursive: true });
   plant(join(kit, 'skills', 'parity-gates', 'scripts', 'verify', 'run-all.mjs'), RUN_ALL);
   plant(join(kit, 'skills', 'parity-gates', 'scripts', 'build-baseline.mjs'));
   plant(join(kit, 'skills', 'parity-gates', 'scripts', 'lib', 'html.mjs'));
@@ -62,6 +63,15 @@ function fakeKit(t) {
   plant(join(kit, 'skills', 'convert-site', 'scripts', 'state.mjs'));
   plant(join(kit, 'skills', 'convert-site', 'scripts', 'media-plan.mjs'));
   plant(join(kit, 'skills', 'convert-site', 'scripts', 'unrelated.mjs'));
+  return kit;
+}
+
+// A copy of the kit with the real script trees and no kit-root scripts/: what a site gets must stand alone.
+function realKit(t) {
+  const kit = bareKit(t);
+  for (const skill of ['parity-gates', 'visual-review', 'convert-site']) {
+    cpSync(join(ROOT, 'skills', skill, 'scripts'), join(kit, 'skills', skill, 'scripts'), { recursive: true });
+  }
   return kit;
 }
 
@@ -111,7 +121,7 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
 
   // Copied script trees, committed (not swallowed by .gitignore) and copied verbatim.
   for (const path of ['verify/run-all.mjs', 'build-baseline.mjs', 'lib/html.mjs', 'lib/node-version.mjs',
-    'review/shoot.mjs', 'state.mjs', 'media-plan.mjs']) {
+    'lib/stores/r2.mjs', 'review/shoot.mjs', 'state.mjs', 'media-plan.mjs']) {
     assert.ok(existsSync(join(dir, 'scripts', path)), `scripts/${path} copied`);
     assert.notEqual(git(dir, 'ls-files', `scripts/${path}`), '', `scripts/${path} committed`);
   }
@@ -182,6 +192,21 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.equal(again.status, 2);
   assert.match(again.stderr, /not empty/);
   assert.match(again.stderr, /astro\.config\.mjs/);
+});
+
+test('the real copied scripts answer --help from inside the scaffolded site', (t) => {
+  const dir = join(tempDir(t, 'site-'), 'site');
+  const result = run(baseArgs(dir, realKit(t)));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  // Stands in for npm install: the site resolves the pinned packages from its own node_modules.
+  symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'), 'dir');
+  const scripts = ['scripts/review/shoot.mjs', 'scripts/state.mjs', 'scripts/media-upload.mjs', 'scripts/verify-live.mjs']
+    .filter((script) => script !== 'scripts/verify-live.mjs' || existsSync(join(dir, script)));
+  for (const script of scripts) {
+    const help = spawnSync(process.execPath, [script, '--help'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(help.status, 0, `${script} --help: ${help.stderr}`);
+    assert.match(help.stdout, /Usage/, script);
+  }
 });
 
 test('cloudflare host and --trailing-slash never shape the scaffold', (t) => {
