@@ -71,3 +71,15 @@ test('wordDiff reports equal, delete and insert runs', () => {
   assert.deepEqual(wordDiff('same words', 'same words'), [{ op: 'equal', text: 'same words' }]);
   assert.deepEqual(wordDiff('', ''), []);
 });
+
+test('wordDiff falls back to one delete/insert pair above 5,000 differing words', () => {
+  const many = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}${i}`).join(' ');
+  const a = `start ${many('a', 5001)} end`;
+  const b = `start ${many('b', 10)} end`;
+  assert.deepEqual(wordDiff(a, b), [
+    { op: 'equal', text: 'start' },
+    { op: 'delete', text: many('a', 5001) },
+    { op: 'insert', text: many('b', 10) },
+    { op: 'equal', text: 'end' },
+  ]);
+});

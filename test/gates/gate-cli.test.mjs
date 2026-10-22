@@ -1,9 +1,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gateArgs, builtPages, report } from '../../skills/parity-gates/scripts/lib/gate-cli.mjs';
+
+const LIB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills', 'parity-gates', 'scripts', 'lib', 'gate-cli.mjs');
+
+const EXTRA = {
+  options: {
+    endpoint: { type: 'string', description: 'form endpoint' },
+    'allow-extra': { type: 'boolean' },
+    host: { type: 'string', default: 'vercel' },
+  },
+};
+
+function runArgs(argv, extra = {}) {
+  const code = `import { gateArgs } from ${JSON.stringify(pathToFileURL(LIB).href)};
+const args = gateArgs(${JSON.stringify(argv)}, 'demo-gate', ${JSON.stringify(extra)});
+process.stdout.write(JSON.stringify(args));`;
+  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
+}
 
 test('gateArgs has defaults', () => {
   const args = gateArgs([], 'seo');
@@ -26,11 +45,50 @@ test('gateArgs applies --paths /a/,/blog/*', () => {
   assert.equal(args.paths('/about/'), false);
 });
 
+test('gateArgs --paths ignores trailing slashes', () => {
+  const args = gateArgs(['--paths', '/about,/blog/*,/'], 'seo');
+  assert.equal(args.paths('/about/'), true);
+  assert.equal(args.paths('/about'), true);
+  assert.equal(args.paths('/blog'), true);
+  assert.equal(args.paths('/blog/post'), true);
+  assert.equal(args.paths('/'), true);
+  assert.equal(args.paths('/blogroll/'), false);
+  assert.equal(args.paths('/contact/'), false);
+});
+
 test('gateArgs accepts --flag=value', () => {
   const args = gateArgs(['--baseline=capture', '--exceptions=ex.json', '--proposals=p.json'], 'seo');
   assert.equal(args.baseline, 'capture');
   assert.equal(args.exceptions, 'ex.json');
   assert.equal(args.proposals, 'p.json');
+});
+
+test('gateArgs takes gate-specific options, camelCased, with defaults', () => {
+  const none = gateArgs([], 'forms', EXTRA);
+  assert.equal(none.endpoint, undefined);
+  assert.equal(none.allowExtra, undefined);
+  assert.equal(none.host, 'vercel');
+  assert.equal(none.dist, 'dist');
+
+  const set = gateArgs(['--endpoint', 'https://forms.example.com/f', '--allow-extra', '--host=netlify'], 'forms', EXTRA);
+  assert.equal(set.endpoint, 'https://forms.example.com/f');
+  assert.equal(set.allowExtra, true);
+  assert.equal(set.host, 'netlify');
+});
+
+test('gateArgs exits 2 on an unknown flag or a missing value, and lists custom options in --help', () => {
+  const unknown = runArgs(['--nope'], EXTRA);
+  assert.equal(unknown.status, 2);
+  assert.match(unknown.stderr, /--nope/);
+
+  const missing = runArgs(['--dist'], EXTRA);
+  assert.equal(missing.status, 2);
+
+  const help = runArgs(['--help'], EXTRA);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /Usage: demo-gate/);
+  assert.match(help.stdout, /--allow-extra/);
+  assert.match(help.stdout, /--endpoint <value>\s+form endpoint/);
 });
 
 test('builtPages maps HTML files to URL paths', (t) => {
@@ -67,21 +125,46 @@ function capture() {
 
 test('report prints the summary and exits 0 when nothing failed', () => {
   const c = capture();
-  report('seo', { checked: 3, failures: [] }, { json: false, out: c.out, exit: c.exit });
-  assert.match(c.text(), /^seo: 3 checked, 0 failed$/m);
+  report('seo', { checked: 3, failures: [] }, { out: c.out, exit: c.exit });
+  assert.equal(c.text(), 'seo: 3 checked, 0 failed\n');
   assert.equal(c.code(), 0);
 });
 
 test('report lists failures and exits 1', () => {
   const c = capture();
   const failure = { path: '/about/', field: 'title', expected: 'About', actual: 'Aboot' };
-  report('seo', { checked: 2, failures: [failure] }, { json: false, out: c.out, exit: c.exit });
-  assert.match(c.text(), /\/about\/ title/);
+  report('seo', { checked: 2, failures: [failure] }, { out: c.out, exit: c.exit });
+  assert.match(c.text(), /^ {2}\/about\/ title: expected "About", got "Aboot"$/m);
   assert.match(c.text(), /^seo: 2 checked, 1 failed$/m);
   assert.equal(c.code(), 1);
 });
 
-test('report --json prints the machine-readable shape', () => {
+test('report prints a diff with five words of context instead of the full text', () => {
+  const c = capture();
+  const before = 'one two three four five six seven eight';
+  const after = 'nine ten eleven twelve thirteen fourteen fifteen sixteen';
+  const failure = {
+    path: '/',
+    field: 'text',
+    expected: `${before} old ${after}`,
+    actual: `${before} new ${after}`,
+    diff: [
+      { op: 'equal', text: before },
+      { op: 'delete', text: 'old' },
+      { op: 'insert', text: 'new' },
+      { op: 'equal', text: after },
+    ],
+  };
+  report('text', { checked: 1, failures: [failure] }, { out: c.out, exit: c.exit });
+  assert.match(
+    c.text(),
+    /^ {2}\/ text: \.\.\. four five six seven eight \[-old-\] \{\+new\+\} nine ten eleven twelve thirteen \.\.\.$/m,
+  );
+  assert.ok(!c.text().includes('one two'), 'full expected text is not printed');
+  assert.ok(!c.text().includes('sixteen'), 'full actual text is not printed');
+});
+
+test('report json comes from options, not process.argv', () => {
   const c = capture();
   const failure = {
     path: '/',

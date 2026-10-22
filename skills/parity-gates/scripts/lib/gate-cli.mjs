@@ -1,30 +1,34 @@
 // Shared command-line plumbing for the gate scripts. No side effects on import.
 import { readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { parseArgs } from 'node:util';
+import { DEFAULT_EXCEPTIONS, DEFAULT_PROPOSALS } from './exceptions.mjs';
 
-const VALUE_FLAGS = ['dist', 'baseline', 'paths', 'exceptions', 'proposals'];
+const STANDARD_OPTIONS = {
+  dist: { type: 'string', default: 'dist', description: 'built site to check' },
+  baseline: { type: 'string', default: 'baseline', description: 'captured baseline' },
+  paths: { type: 'string', default: '', description: 'comma-separated paths to check, * matches anything (default: all)' },
+  exceptions: { type: 'string', default: DEFAULT_EXCEPTIONS, description: 'approved differences' },
+  proposals: { type: 'string', default: DEFAULT_PROPOSALS, description: 'proposed differences, used when PROPOSALS=on' },
+  json: { type: 'boolean', default: false, description: 'print { gate, checked, failed, failures } as JSON' },
+};
 
-function usage(name) {
-  return `Usage: ${name} [options]
-
-  --dist <dir>          built site to check (default: dist)
-  --baseline <dir>      captured baseline (default: baseline)
-  --paths <list>        comma-separated paths to check, * matches anything (default: all)
-  --exceptions <file>   approved differences (default: exceptions.json)
-  --proposals <file>    proposed differences, used when PROPOSALS=on (default: proposals.json)
-  --json                print { gate, checked, failed, failures } as JSON
-  --help                show this help
-
-Exit codes: 0 pass, 1 failed gate, 2 usage or environment error.
-`;
+function usage(name, options) {
+  const lines = Object.entries(options).map(([flag, spec]) => {
+    const left = spec.type === 'string' ? `--${flag} <value>` : `--${flag}`;
+    const def = spec.default !== undefined && spec.default !== '' && spec.default !== false ? ` (default: ${spec.default})` : '';
+    return `  ${left.padEnd(24)}${spec.description ?? ''}${def}`;
+  });
+  lines.push(`  ${'--help'.padEnd(24)}show this help`);
+  return `Usage: ${name} [options]\n\n${lines.join('\n')}\n\nExit codes: 0 pass, 1 failed gate, 2 usage or environment error.\n`;
 }
 
-function usageError(name, message) {
-  process.stderr.write(`${name}: ${message}\n\n${usage(name)}`);
-  process.exit(2);
-}
+const camel = (flag) => flag.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase());
+const trimSlash = (p) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
+const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
 
-// "/a/,/blog/*" -> path => boolean. `*` matches any run of characters, including "/".
+// "/a/,/blog/*" -> path => boolean. Trailing slashes are ignored on both sides,
+// `*` matches any run of characters including "/", and "/x/*" also matches "/x".
 export function pathMatcher(list) {
   const patterns = String(list ?? '')
     .split(',')
@@ -35,44 +39,46 @@ export function pathMatcher(list) {
     all.patterns = [];
     return all;
   }
-  const regexes = patterns.map(
-    (p) => new RegExp(`^${p.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`),
-  );
-  const match = (path) => regexes.some((re) => re.test(path));
+  const regexes = patterns.map((pattern) => {
+    const p = trimSlash(pattern);
+    if (p.endsWith('/*')) {
+      const base = p.slice(0, -2).split('*').map(escape).join('.*');
+      return new RegExp(`^${base}(?:/.*)?$`);
+    }
+    return new RegExp(`^${p.split('*').map(escape).join('.*')}$`);
+  });
+  const match = (path) => {
+    const p = trimSlash(String(path));
+    return regexes.some((re) => re.test(p));
+  };
   match.patterns = patterns;
   return match;
 }
 
-export function gateArgs(argv, name) {
-  const values = {
-    dist: 'dist',
-    baseline: 'baseline',
-    paths: '',
-    exceptions: 'exceptions.json',
-    proposals: 'proposals.json',
-  };
-  let json = false;
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      process.stdout.write(usage(name));
-      process.exit(0);
-    }
-    if (arg === '--json') {
-      json = true;
-      continue;
-    }
-    const m = /^--([a-z]+)(?:=(.*))?$/.exec(arg);
-    if (!m || !VALUE_FLAGS.includes(m[1])) usageError(name, `unknown option ${arg}`);
-    let value = m[2];
-    if (value === undefined) {
-      value = argv[i + 1];
-      i += 1;
-    }
-    if (value === undefined || value === '' || value.startsWith('--')) usageError(name, `--${m[1]} needs a value`);
-    values[m[1]] = value;
+// gateArgs(argv, name, { options: { 'allow-extra': { type: 'boolean' }, host: { type: 'string', default: 'vercel' } } })
+// Standard keys plus each extra option, camelCased. --help exits 0, usage errors exit 2.
+export function gateArgs(argv, name, { options: extra = {} } = {}) {
+  const options = { ...STANDARD_OPTIONS, ...extra };
+  if (argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write(usage(name, options));
+    process.exit(0);
   }
-  return { ...values, paths: pathMatcher(values.paths), json };
+  const parserOptions = {};
+  for (const [flag, spec] of Object.entries(options)) {
+    parserOptions[flag] = { type: spec.type ?? 'string' };
+    if (spec.default !== undefined) parserOptions[flag].default = spec.default;
+  }
+  let values;
+  try {
+    ({ values } = parseArgs({ args: argv, options: parserOptions, strict: true, allowPositionals: false }));
+  } catch (error) {
+    process.stderr.write(`${name}: ${error.message}\n\n${usage(name, options)}`);
+    process.exit(2);
+  }
+  const result = {};
+  for (const [flag, value] of Object.entries(values)) result[camel(flag)] = value;
+  result.paths = pathMatcher(values.paths);
+  return result;
 }
 
 function htmlFiles(dir) {
@@ -96,27 +102,35 @@ export function builtPages(dist) {
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
-const show = (value) => (typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value ?? null));
+const show = (value) => JSON.stringify(value ?? null);
+const CONTEXT = 5;
 
-function renderDiff(diff) {
+// Equal runs are cut to CONTEXT words either side of a change.
+export function renderDiff(diff) {
   return diff
-    .map(({ op, text }) => (op === 'delete' ? `[-${text}-]` : op === 'insert' ? `{+${text}+}` : text))
+    .map(({ op, text }, index) => {
+      if (op === 'delete') return `[-${text}-]`;
+      if (op === 'insert') return `{+${text}+}`;
+      const w = text.split(' ');
+      const first = index === 0;
+      const last = index === diff.length - 1;
+      if (first && last) return text;
+      if (first) return w.length > CONTEXT ? `... ${w.slice(-CONTEXT).join(' ')}` : text;
+      if (last) return w.length > CONTEXT ? `${w.slice(0, CONTEXT).join(' ')} ...` : text;
+      return w.length > CONTEXT * 2 ? `${w.slice(0, CONTEXT).join(' ')} ... ${w.slice(-CONTEXT).join(' ')}` : text;
+    })
     .join(' ');
 }
 
 // results: { checked, failures: [{ path, field, expected, actual, diff? }] }
-export function report(
-  name,
-  { checked = 0, failures = [] } = {},
-  { json = process.argv.includes('--json'), out = process.stdout, exit = process.exit } = {},
-) {
+export function report(name, { checked = 0, failures = [] } = {}, { json = false, out = process.stdout, exit = process.exit } = {}) {
   const failed = failures.length;
   if (json) {
     out.write(`${JSON.stringify({ gate: name, checked, failed, failures }, null, 2)}\n`);
   } else {
     for (const f of failures) {
-      out.write(`  ${f.path} ${f.field}: expected ${show(f.expected)}, got ${show(f.actual)}\n`);
-      if (Array.isArray(f.diff) && f.diff.length) out.write(`    diff: ${renderDiff(f.diff)}\n`);
+      if (Array.isArray(f.diff) && f.diff.length) out.write(`  ${f.path} ${f.field}: ${renderDiff(f.diff)}\n`);
+      else out.write(`  ${f.path} ${f.field}: expected ${show(f.expected)}, got ${show(f.actual)}\n`);
     }
     out.write(`${name}: ${checked} checked, ${failed} failed\n`);
   }

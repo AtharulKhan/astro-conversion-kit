@@ -58,6 +58,10 @@ function push(ops, op, word) {
   else ops.push({ op, words: [word] });
 }
 
+// Above this many differing words on either side the diff is one delete/insert pair,
+// which keeps the n x m table bounded.
+export const MAX_DIFF_WORDS = 5000;
+
 // Longest-common-subsequence diff over words. Common prefix and suffix are trimmed first
 // so typical page diffs stay small.
 export function wordDiff(a, b) {
@@ -78,6 +82,12 @@ export function wordDiff(a, b) {
   const ys = y.slice(start, endY);
   const n = xs.length;
   const m = ys.length;
+  if (n > MAX_DIFF_WORDS || m > MAX_DIFF_WORDS) {
+    for (const word of xs) push(ops, 'delete', word);
+    for (const word of ys) push(ops, 'insert', word);
+    for (let k = endX; k < x.length; k += 1) push(ops, 'equal', x[k]);
+    return ops.map(({ op, words: w }) => ({ op, text: w.join(' ') }));
+  }
   const width = m + 1;
   const lcs = new Uint32Array((n + 1) * width);
   for (let i = n - 1; i >= 0; i -= 1) {

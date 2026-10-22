@@ -1,16 +1,25 @@
 // Approved differences between the baseline and the build. No side effects on import.
 // exceptions.json is an array of { path, field, from, to, reason, approvedBy, date }.
+// `from: ""` records a field the build adds, `to: ""` a field the build removes.
 // With PROPOSALS=on, proposals.json (same record shape) is loaded after it.
 import { existsSync, readFileSync } from 'node:fs';
 
+export const DEFAULT_EXCEPTIONS = 'exceptions.json';
+export const DEFAULT_PROPOSALS = 'proposals.json';
 export const EXCEPTION_KEYS = ['path', 'field', 'from', 'to', 'reason', 'approvedBy', 'date'];
 export const EXCEPTION_FIELDS = [
   'title', 'description', 'canonical', 'robots', 'h1', 'h2', 'text',
   'og', 'jsonLd', 'link', 'redirect', 'media',
 ];
+const MAY_BE_EMPTY = new Set(['from', 'to']);
 
-function readRecords(file) {
-  if (!file || !existsSync(file)) return [];
+// Only the default file name may be missing; a path somebody chose must exist (exit 2).
+function readRecords(file, defaultName) {
+  if (!existsSync(file)) {
+    if (file === defaultName) return [];
+    process.stderr.write(`${file}: exceptions file not found\n`);
+    process.exit(2);
+  }
   let records;
   try {
     records = JSON.parse(readFileSync(file, 'utf8'));
@@ -22,9 +31,9 @@ function readRecords(file) {
     const where = `${file}[${index}]`;
     if (!record || typeof record !== 'object') throw new Error(`${where}: expected an object`);
     for (const key of EXCEPTION_KEYS) {
-      if (record[key] === undefined || record[key] === null || record[key] === '') {
-        throw new Error(`${where}: missing "${key}"`);
-      }
+      const value = record[key];
+      const missing = MAY_BE_EMPTY.has(key) ? value === undefined : value === undefined || value === null || value === '';
+      if (missing) throw new Error(`${where}: missing "${key}"`);
     }
     if (!EXCEPTION_FIELDS.includes(record.field)) {
       throw new Error(`${where}: field "${record.field}" is not one of ${EXCEPTION_FIELDS.join('|')}`);
@@ -33,16 +42,16 @@ function readRecords(file) {
   return records;
 }
 
-export function loadExceptions(file, { proposals = 'proposals.json', env = process.env } = {}) {
-  const records = readRecords(file);
-  if (env.PROPOSALS === 'on') records.push(...readRecords(proposals));
+export function loadExceptions(file = DEFAULT_EXCEPTIONS, { proposals = DEFAULT_PROPOSALS, env = process.env } = {}) {
+  const records = readRecords(file, DEFAULT_EXCEPTIONS);
+  if (env.PROPOSALS === 'on') records.push(...readRecords(proposals, DEFAULT_PROPOSALS));
   return records;
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // Replace every occurrence of `from` inside value: a whole value that equals `from`, an array
-// item or object value that equals it, or (for visible text) a phrase inside a string.
+// item or object value that equals it, or (for visible text) a non-empty phrase inside a string.
 function substitute(value, from, to, phrase) {
   if (same(value, from)) return { value: to, hit: true };
   if (Array.isArray(value)) {
@@ -64,27 +73,24 @@ function substitute(value, from, to, phrase) {
     }
     return { value: next, hit };
   }
-  if (phrase && typeof value === 'string' && typeof from === 'string' && value.includes(from)) {
+  if (phrase && typeof value === 'string' && typeof from === 'string' && from !== '' && value.includes(from)) {
     return { value: value.split(from).join(String(to)), hit: true };
   }
   return { value, hit: false };
 }
 
-// Returns a copy of `expected` with matching exceptions applied, plus
-// `stale` (true when an exception for this path no longer matches) and `staleExceptions`.
+// Returns { expected, stale, staleExceptions }: a copy of `expected` with matching exceptions
+// applied; `stale` is true when an exception for this path no longer matches anything.
 export function applyExceptions(expected, path, exceptions = []) {
   const record = structuredClone(expected ?? {});
   const staleExceptions = [];
   for (const exception of exceptions) {
     if (exception.path !== path) continue;
     const { field, from, to } = exception;
-    const result = field in record
-      ? substitute(record[field], from, to, field === 'text')
-      : { hit: false };
+    const current = field in record ? record[field] : '';
+    const result = substitute(current, from, to, field === 'text');
     if (result.hit) record[field] = result.value;
     else staleExceptions.push(exception);
   }
-  record.stale = staleExceptions.length > 0;
-  record.staleExceptions = staleExceptions;
-  return record;
+  return { expected: record, stale: staleExceptions.length > 0, staleExceptions };
 }
