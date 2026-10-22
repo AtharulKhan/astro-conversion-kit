@@ -11,6 +11,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\"",
+    "test:e2e": "node --test test/e2e/*.test.mjs",
     "hygiene": "node scripts/hygiene.mjs --dir ."
   },
   "dependencies": {
