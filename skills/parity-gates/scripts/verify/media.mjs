@@ -30,7 +30,12 @@ from the live site. In every mode a file outside the prefix (theme fonts, a plan
 prefix covers everything) is checked in dist like repo mode. A media exception names the media
 path in path, the baseline byte count in from and the built one in to (to "" for a file the
 build drops).
+--paths selects a media file when its own path matches or a page that references it does
+(baseline media.json referencedBy), so --paths "/,/about/" checks the media of those pages.
 `;
+
+// Whether --paths selects a media file: by its own path, or by a page that references it.
+const selected = (m, paths) => paths(m.path) || (m.referencedBy ?? []).some((page) => paths(page));
 const FROM_LIVE = 'release build may not serve media from the live site';
 
 const decode = (value) => {
@@ -84,7 +89,7 @@ export function underPrefix(prefix) {
 
 export function checkMedia({ media, sizeOf, exceptions, paths = () => true }) {
   const relevant = exceptions.filter((e) => e.field === 'media');
-  const items = media.filter((m) => paths(m.path));
+  const items = media.filter((m) => selected(m, paths));
   const known = new Set(media.map((m) => m.path));
   const failures = relevant.filter((e) => paths(e.path) && !known.has(e.path)).map((e) => exceptionFailure(e, 'path not checked'));
   for (const item of items) {
@@ -105,7 +110,7 @@ function main() {
   if (!MODES.has(mode)) fail(`${args.mediaPlan}: mode "${mode}" is not one of ${[...MODES].join('|')}`);
   if (!existsSync(join(args.baseline, 'media.json'))) fail(`not found: ${join(args.baseline, 'media.json')}`);
   const media = readJson(join(args.baseline, 'media.json'));
-  const items = media.filter((m) => args.paths(m.path));
+  const items = media.filter((m) => selected(m, args.paths));
   if (mode === 'live-temporary' && process.env.PUBLIC_INDEXABLE === 'true') {
     const failures = items.map((m) => ({ path: m.path, field: 'media', expected: 'served by the build', actual: FROM_LIVE }));
     return report(NAME, { checked: items.length, failures }, { json: args.json });
@@ -114,7 +119,7 @@ function main() {
   const inside = mode === 'repo' ? () => false : underPrefix(plan?.prefix);
   const fromDist = media.filter((m) => !inside(m.path));
   let distSize = () => null;
-  if (fromDist.some((m) => args.paths(m.path))) {
+  if (fromDist.some((m) => selected(m, args.paths))) {
     // dist is what is deployed; public is read only when there is no build yet.
     const dir = [args.dist, args.public].find(isDir);
     if (!dir) fail(`not found: ${args.dist} (the built site) or ${args.public}`);

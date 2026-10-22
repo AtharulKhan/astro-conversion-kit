@@ -168,6 +168,18 @@ test('--paths limits the check', async () => {
   assert.match(result.stdout, /^media: 2 checked, 0 failed$/m);
 });
 
+test('--paths with page paths checks the media those pages reference', async () => {
+  const onHome = media.filter((m) => (m.referencedBy ?? []).includes('/'));
+  assert.ok(onHome.some((m) => m.path === HERO), 'the home page references the hero image');
+  const ok = await gate(good, ['--paths', '/']);
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.match(ok.stdout, new RegExp(`^media: ${onHome.length} checked, 0 failed$`, 'm'));
+  const bad = makeDist(join(root, 'dist-drift-pages'), { bad: ['media-drift'] });
+  const result = await gate(bad, ['--paths', '/,/about/']);
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stdout, /hero\.jpg media: expected 13713, got 13714/);
+});
+
 test('usage and missing inputs exit 2; --help exits 0', async () => {
   assert.equal((await gate(good, ['--bogus'])).code, 2);
   assert.equal((await gate(good, ['--media-plan', 'missing-plan.json'])).code, 2);

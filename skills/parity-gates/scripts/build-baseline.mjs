@@ -20,7 +20,8 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
                   shortlinks; shortlinks keep verified (true when it was requested). Each
                   intermediate hop of a chain (A -> B -> C) gets its own row to the final target
                   (B -> C, note "hop of A" in redirects.csv) unless it is a built route
-  media.json      [{ path, bytes, contentType }] for every media file answering 200
+  media.json      [{ path, bytes, contentType, referencedBy }] for every media file answering 200
+                  (referencedBy: the pages that use it, from capture/media.json)
   forms.json      { "<path>": [{ action, method, fields[] }] }
   scripts.json    { "<vendor>": { id, ids[], pages[], keep } }; keep is true, set it to false
                   to drop a vendor from the build
@@ -320,7 +321,7 @@ function build(capture, out, csvFile) {
   const baseline = {
     routes,
     redirects,
-    media: media.filter((m) => m.status === 200).map((m) => ({ path: m.path, bytes: m.bytes, contentType: m.contentType })),
+    media: media.filter((m) => m.status === 200).map((m) => ({ path: m.path, bytes: m.bytes, contentType: m.contentType, referencedBy: m.referencedBy ?? [] })),
     forms: buildForms(inventory),
     scripts: buildScripts(readJson(join(capture, 'scripts.json'), {})),
   };

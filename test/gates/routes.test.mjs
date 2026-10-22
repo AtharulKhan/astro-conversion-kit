@@ -86,6 +86,20 @@ test("sitemaps at the live site's root names (sitemap_index.xml, page-sitemap.xm
   assert.match(failed.stdout, /^routes: \d+ checked, 2 failed$/m);
 });
 
+test("a live site with no sitemap: Astro's sitemap-index.xml and sitemap-0.xml are not extras, a robots-named wp-sitemap.xml live never served is", async () => {
+  const bare = join(root, 'baseline-no-sitemap');
+  cpSync(baseline, bare, { recursive: true });
+  writeFileSync(join(bare, 'sitemaps.json'), '[]\n');
+  const dist = makeDist(join(root, 'dist-astro-sitemap'));
+  for (const file of ['sitemap-index.xml', 'sitemap-0.xml']) writeFileSync(join(dist, file), '<x/>');
+  const passed = await runGate('routes', ['--dist', dist, '--baseline', bare], { cwd: root });
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  writeFileSync(join(dist, 'wp-sitemap.xml'), '<x/>');
+  const failed = await runGate('routes', ['--dist', dist, '--baseline', bare], { cwd: root });
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /\/wp-sitemap\.xml extra/);
+});
+
 test('a noindex route that lost its robots meta fails', async () => {
   const dist = makeDist(join(root, 'dist-noindex'), { bad: ['lost-noindex'] });
   const result = await routes(dist);

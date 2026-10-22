@@ -172,12 +172,15 @@ test('redirects: a shortlink with no target is left out and named on stderr', as
 test('media, forms, scripts and text', () => {
   const media = readJson(baseline, 'media.json');
   assert.equal(media.length, 20);
-  assert.deepEqual(media.find((m) => m.path.endsWith('/brochure.pdf')), {
+  const brochure = media.find((m) => m.path.endsWith('/brochure.pdf'));
+  assert.deepEqual(brochure, {
     path: '/wp-content/uploads/2026/01/brochure.pdf',
-    bytes: media.find((m) => m.path.endsWith('/brochure.pdf')).bytes,
+    bytes: brochure.bytes,
     contentType: 'application/pdf',
+    referencedBy: brochure.referencedBy,
   });
-  for (const m of media) assert.deepEqual(Object.keys(m), ['path', 'bytes', 'contentType']);
+  assert.ok(brochure.referencedBy.length > 0 && brochure.referencedBy.every((p) => p.startsWith('/')), 'the pages that link it');
+  for (const m of media) assert.deepEqual(Object.keys(m), ['path', 'bytes', 'contentType', 'referencedBy']);
 
   const forms = readJson(baseline, 'forms.json');
   assert.deepEqual(Object.keys(forms), ['/blog/', '/contact/']);
