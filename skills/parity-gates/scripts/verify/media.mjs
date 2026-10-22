@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Media gate: every file in baseline/media.json is served by the build with the same byte size.
-// Where it lives follows docs/media-plan.json: "repo" (or no plan) -> dist/ (public/ before a build),
-// "store" -> media-manifest.json, "live-temporary" -> still on the live site, not checked.
+// Where it lives follows docs/media-plan.json: "repo" (or no plan) -> dist/ (public/ before a build);
+// under the plan's prefix, "store" -> media-manifest.json and "live-temporary" -> still on the live
+// site, not checked (and a failure on a release build). Files outside the prefix are always in dist/.
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,12 +22,16 @@ const OPTIONS = {
 };
 const NOTES = `
 Plan modes: repo (or no plan file): each file is in dist with the same bytes; public is read
-only when there is no dist yet, since once built dist is what deploys. store: each file is in
-the manifest with the same bytes. live-temporary: nothing is checked and the summary counts
-every file as skipped (served from live); a skip is not a pass. A media exception names the
-media path in path, the baseline byte count in from and the built one in to (to "" for a file
-the build drops).
+only when there is no dist yet, since once built dist is what deploys. store: each file under
+the plan's prefix is in the manifest with the same bytes. live-temporary: files under the prefix
+are not checked and the summary counts them as skipped (served from live); a skip is not a pass.
+With PUBLIC_INDEXABLE=true, live-temporary fails every file: a release build may not serve media
+from the live site. In every mode a file outside the prefix (theme fonts, a plan without a
+prefix covers everything) is checked in dist like repo mode. A media exception names the media
+path in path, the baseline byte count in from and the built one in to (to "" for a file the
+build drops).
 `;
+const FROM_LIVE = 'release build may not serve media from the live site';
 
 const decode = (value) => {
   try {
@@ -72,6 +77,11 @@ export function manifestSizes(manifest) {
   return (path) => sizes.get(decode(path)) ?? null;
 }
 
+// Whether a media path is under the plan's prefix; a plan without one covers every path.
+export function underPrefix(prefix) {
+  return (path) => !prefix || decode(path).startsWith(prefix);
+}
+
 export function checkMedia({ media, sizeOf, exceptions, paths = () => true }) {
   const relevant = exceptions.filter((e) => e.field === 'media');
   const items = media.filter((m) => paths(m.path));
@@ -95,23 +105,32 @@ function main() {
   if (!MODES.has(mode)) fail(`${args.mediaPlan}: mode "${mode}" is not one of ${[...MODES].join('|')}`);
   if (!existsSync(join(args.baseline, 'media.json'))) fail(`not found: ${join(args.baseline, 'media.json')}`);
   const media = readJson(join(args.baseline, 'media.json'));
-  if (mode === 'live-temporary') {
-    const count = media.filter((m) => args.paths(m.path)).length;
-    return report(NAME, { checked: 0, failures: [], skipped: count, skipReason: 'served from live' }, { json: args.json });
+  const items = media.filter((m) => args.paths(m.path));
+  if (mode === 'live-temporary' && process.env.PUBLIC_INDEXABLE === 'true') {
+    const failures = items.map((m) => ({ path: m.path, field: 'media', expected: 'served by the build', actual: FROM_LIVE }));
+    return report(NAME, { checked: items.length, failures }, { json: args.json });
   }
-  let sizeOf;
+  // repo mode serves everything from dist; the other modes only what lies outside the prefix.
+  const inside = mode === 'repo' ? () => false : underPrefix(plan?.prefix);
+  const fromDist = media.filter((m) => !inside(m.path));
+  let distSize = () => null;
+  if (fromDist.some((m) => args.paths(m.path))) {
+    // dist is what is deployed; public is read only when there is no build yet.
+    const dir = [args.dist, args.public].find(isDir);
+    if (!dir) fail(`not found: ${args.dist} (the built site) or ${args.public}`);
+    distSize = repoSizes([dir]);
+  }
+  let storeSize = () => null;
   if (mode === 'store') {
     if (!existsSync(args.mediaManifest)) fail(`${args.mediaManifest}: media manifest not found (the plan mode is store)`);
     const manifest = optionalJson(args.mediaManifest, null, 'media manifest');
     if (!Array.isArray(manifest)) fail(`${args.mediaManifest}: expected an array of { path, bytes }`);
-    sizeOf = manifestSizes(manifest);
-  } else {
-    // dist is what is deployed; public is read only when there is no build yet.
-    const dir = [args.dist, args.public].find(isDir);
-    if (!dir) fail(`not found: ${args.dist} (the built site) or ${args.public}`);
-    sizeOf = repoSizes([dir]);
+    storeSize = manifestSizes(manifest);
   }
-  const results = checkMedia({ media, sizeOf, exceptions: gateExceptions(NAME, args), paths: args.paths });
+  const sizeOf = (path) => (inside(path) ? storeSize(path) : distSize(path));
+  const checked = mode === 'live-temporary' ? fromDist : media;
+  const results = checkMedia({ media: checked, sizeOf, exceptions: gateExceptions(NAME, args), paths: args.paths });
+  if (mode === 'live-temporary') Object.assign(results, { skipped: items.length - results.checked, skipReason: 'served from live' });
   return report(NAME, results, { json: args.json });
 }
 

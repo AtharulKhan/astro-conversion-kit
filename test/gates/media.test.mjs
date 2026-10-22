@@ -21,7 +21,10 @@ before(async () => {
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const gate = (dist, args = [], cwd = root) => runGate('media', ['--dist', dist, '--baseline', baseline, ...args], { cwd });
+const FONT = '/wp-content/themes/fixture/fonts/';
+const UPLOADS = '/wp-content/uploads/';
+const gate = (dist, args = [], cwd = root, indexable = '') =>
+  runGate('media', ['--dist', dist, '--baseline', baseline, ...args], { cwd, env: { PUBLIC_INDEXABLE: indexable } });
 
 const record = (fields) => ({ reason: 'test', approvedBy: 'client', date: '2026-10-22', ...fields });
 function writeJson(file, value) {
@@ -30,10 +33,10 @@ function writeJson(file, value) {
   return file;
 }
 
-// A site root with docs/media-plan.json saying `mode`.
-function siteWithPlan(name, mode) {
+// A site root with docs/media-plan.json saying `mode` (and `prefix` when given).
+function siteWithPlan(name, mode, prefix) {
   const dir = join(root, name);
-  writeJson(join(dir, 'docs', 'media-plan.json'), { mode, totals: { count: media.length } });
+  writeJson(join(dir, 'docs', 'media-plan.json'), { mode, totals: { count: media.length }, ...(prefix ? { prefix } : {}) });
   return dir;
 }
 
@@ -101,6 +104,61 @@ test('live-temporary mode checks nothing, says so, and counts every file as skip
   assert.equal(json.checked, 0);
   assert.equal(json.skipped, media.length);
   assert.equal(json.failed, 0);
+});
+
+test('repo mode checks every file in dist, whatever PUBLIC_INDEXABLE says', async () => {
+  const site = siteWithPlan('site-repo', 'repo', UPLOADS);
+  for (const indexable of ['', 'true']) {
+    const result = await gate(good, [], site, indexable);
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, new RegExp(`^media: ${media.length} checked, 0 failed$`, 'm'));
+  }
+});
+
+test('store mode: the manifest covers the prefix, dist covers the files outside it', async () => {
+  const site = siteWithPlan('site-store-prefix', 'store', UPLOADS);
+  const inside = media.filter((m) => m.path.startsWith(UPLOADS));
+  const outside = media.filter((m) => !m.path.startsWith(UPLOADS));
+  assert.ok(inside.length > 0 && outside.length > 0, 'the fixture has media on both sides of the prefix');
+  writeJson(join(site, 'media-manifest.json'), inside.map(({ path, bytes }) => ({ path, bytes, url: path })));
+  for (const indexable of ['', 'true']) {
+    const passed = await gate(good, [], site, indexable);
+    assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+    assert.match(passed.stdout, new RegExp(`^media: ${media.length} checked, 0 failed$`, 'm'));
+  }
+  const noFonts = makeDist(join(root, 'dist-store-no-font'));
+  rmSync(join(noFonts, outside[0].path.slice(1)));
+  const failed = await gate(noFonts, [], site);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, new RegExp(`^ {2}${outside[0].path} media: expected ${outside[0].bytes}, got null$`, 'm'));
+  assert.match(failed.stdout, /^media: \d+ checked, 1 failed$/m);
+  // The manifest is not read for a path outside the prefix, even when it lists one.
+  writeJson(join(site, 'all-manifest.json'), media.map(({ path, bytes }) => ({ path, bytes, url: path })));
+  assert.equal((await gate(noFonts, ['--media-manifest', 'all-manifest.json'], site)).code, 1);
+});
+
+test('live-temporary mode: the prefix is skipped (served from live), files outside it are checked in dist', async () => {
+  const site = siteWithPlan('site-live-prefix', 'live-temporary', UPLOADS);
+  const outside = media.filter((m) => !m.path.startsWith(UPLOADS));
+  const passed = await gate(good, [], site);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, new RegExp(`^media: ${outside.length} checked, 0 failed, ${media.length - outside.length} skipped \\(served from live\\)$`, 'm'));
+  const noFonts = makeDist(join(root, 'dist-live-no-font'));
+  rmSync(join(noFonts, outside[0].path.slice(1)));
+  const failed = await gate(noFonts, [], site);
+  assert.equal(failed.code, 1);
+  assert.ok(outside[0].path.startsWith(FONT));
+  assert.match(failed.stdout, new RegExp(`^ {2}${outside[0].path} media: expected ${outside[0].bytes}, got null$`, 'm'));
+});
+
+test('live-temporary mode fails every file on a release build (PUBLIC_INDEXABLE=true)', async () => {
+  for (const [name, prefix] of [['site-live-release', UPLOADS], ['site-live-release-all', undefined]]) {
+    const site = siteWithPlan(name, 'live-temporary', prefix);
+    const result = await gate(good, [], site, 'true');
+    assert.equal(result.code, 1, result.stdout);
+    assert.match(result.stdout, new RegExp(`^ {2}${media[0].path} media: expected "served by the build", got "release build may not serve media from the live site"$`, 'm'));
+    assert.match(result.stdout, new RegExp(`^media: ${media.length} checked, ${media.length} failed$`, 'm'));
+  }
 });
 
 test('--paths limits the check', async () => {

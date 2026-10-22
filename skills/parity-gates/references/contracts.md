@@ -140,9 +140,12 @@ skipped.
 
 ## Other inputs the gates read
 
-- `docs/media-plan.json`: `{ "mode": "repo" | "store" | "live-temporary", ... }`; missing means
-  `repo`.
-- `media-manifest.json` (store mode): `[{ "path", "bytes", "url" }]`.
+- `docs/media-plan.json`: `{ "mode": "repo" | "store" | "live-temporary", "prefix": "/wp-content/uploads/", ... }`;
+  missing means `repo`. `prefix` is the folder the store or the live site serves; media outside
+  it (theme fonts) is copied into the build and the media gate checks it in `dist/` in every
+  mode. A plan without `prefix` covers every media path.
+- `media-manifest.json` (store mode): `[{ "path", "bytes", "url" }]`, one entry per file under
+  the prefix.
 - `exceptions.json`, and `proposals.json` only when `PROPOSALS=on`: see `exceptions.md`.
 
 ## Gate output

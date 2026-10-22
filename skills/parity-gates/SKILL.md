@@ -80,7 +80,7 @@ rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 | `forms` | Each live form is on its page with the same field names in order, method, and action set to `--endpoint`; `--honeypot` on every form | No `--thank-you`: the thank-you page was not checked |
 | `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors on every path, and, when not indexable, `X-Robots-Tag: noindex` on every path or (Vercel) the meta robots noindex on every built page; a preview-host rule (`https://*.pages.dev/*`) counts only for the preview host; with `PUBLIC_INDEXABLE=true` noindex on every path is forbidden | |
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media; `/about` where the build serves `/about/` fails | |
-| `media` | Every baseline media file is in `dist/` (or the store manifest) with the same bytes | Plan mode `live-temporary`: served from live, nothing checked |
+| `media` | Every baseline media file is served by the build with the same bytes: in `dist/` in plan mode `repo`; under the plan's `prefix`, in the store manifest (`store`) or still on live (`live-temporary`); outside the prefix, in `dist/` in every mode. With `PUBLIC_INDEXABLE=true`, `live-temporary` fails every file (a release build may not serve media from the live site) | Plan mode `live-temporary` on a staging build: files under the prefix are served from live, not checked |
 | `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file | A no-op query row, or any query row on Cloudflare |
 | `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built (the capture's own scripts in `baseline/js.json` at their live paths, the live sitemap names in `baseline/sitemaps.json`, and the launch icon set are not extras); a route captured at any status other than 200, 3xx, 404 or 410 fails as `not captured: <status>` unless a `routes` exception skips it or names its built replacement | A `routes` exception with `to: "skip"`: that route was never captured |
 | `scripts` | Each kept vendor is on exactly its live pages with the same ids; a dropped one on none; no new vendor | |
@@ -135,7 +135,8 @@ Repeat this list to the person verbatim. No gate checks any of it:
 - Content rendered by JavaScript after load: the gates read the built HTML only.
 - Hover, focus and open states (menus, sliders, accordions).
 - Headers on a route served by a Function (a media store route): the headers gate reads config.
-- Media served from the live site in staging (`live-temporary`): skipped, not compared.
+- Media served from the live site in staging (`live-temporary`): skipped, not compared (files
+  outside the media prefix are still checked in `dist/`).
 - Shortlinks the capture did not request: their targets are unverified until `verify-live` passes.
 - Whether a form submission is delivered: the forms gate checks markup only.
 - `feed/index.xml` is checked in `dist/`; on Vercel, `/feed/` may need a rewrite to serve it.
