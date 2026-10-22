@@ -18,7 +18,9 @@ const ALWAYS_ALLOWED = [
   /^404\.html$/,
   /^_astro\//,
   /^robots\.txt$/,
-  /^sitemap(?:-index|-\d+)?\.xml$/,
+  // Astro's sitemap-index.xml and sitemap-0.xml, and the live site's own names at the root
+  // (WordPress's sitemap_index.xml, page-sitemap.xml, ...), which the build keeps at their URLs.
+  /^[\w-]*sitemap[\w-]*\.xml$/,
   /^_(?:redirects|headers|routes\.json)$/,
   // The icon set and web app manifest a launch needs (pre-launch checks for them at the root).
   /^favicon(?:-[\w.-]+)?\.(?:ico|svg|png)$/,
