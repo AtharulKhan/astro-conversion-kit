@@ -4,6 +4,14 @@
   "description": "Agent Skills that convert a live website into a static Astro site, with parity gates.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ethanplusai/astro-conversion-kit.git"
+  },
+  "homepage": "https://github.com/ethanplusai/astro-conversion-kit#readme",
+  "bugs": {
+    "url": "https://github.com/ethanplusai/astro-conversion-kit/issues"
+  },
   "author": "Ethan Rogers",
   "private": true,
   "engines": {
