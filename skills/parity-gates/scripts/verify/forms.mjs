@@ -3,7 +3,7 @@
 // the same field names in the same order, the same method, and its action set to the endpoint
 // the build submits to (--endpoint). --honeypot names a spam-trap field every form must carry;
 // --thank-you names the page every form leads to.
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
@@ -16,14 +16,16 @@ const NAME = 'forms';
 const OPTIONS = {
   endpoint: { type: 'string', default: '', description: 'the URL every form posts to; required when the baseline has a form' },
   honeypot: { type: 'string', default: '', description: 'a field name every form must have; allowed even where the live form had none' },
-  'thank-you': { type: 'string', default: '', description: 'the page every form leads to: a hidden _next or redirect field equal to it, and a built page' },
+  'thank-you': { type: 'string', default: '', description: 'the page every form leads to: a hidden _next or redirect field set to it (the path, or an absolute URL on the canonical host), and a built page' },
 };
 const NOTES = `
 Fields are named input, select and textarea elements, without submit, button, reset and image
 inputs, read the way the capture reads them. A _next or redirect field the live form did not
 have is the endpoint's thank-you setting and is not compared with the live fields.
---thank-you <path>: every form must carry a hidden _next or redirect field equal to it, and the
-path must be a page in dist. Without it the thank-you page is not checked, and the summary
+--thank-you <path>: every form must carry a hidden _next or redirect field set to it, and the
+path must be a page in dist. The field may hold the path itself, or an absolute URL (as some
+endpoints require) whose host is the baseline's canonicalOrigin (origin when meta.json has none)
+and whose path is --thank-you. Without it the thank-you page is not checked, and the summary
 counts each form as skipped.
 `;
 const THANK_YOU_FIELDS = ['_next', 'redirect'];
@@ -42,7 +44,31 @@ export function formsOf(html) {
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-export function compareForm(path, label, expected, actual, { endpoint, honeypot, thankYou }) {
+// The host of the site the baseline captured: canonicalOrigin, or origin when it has none.
+export function siteHostOf(meta = {}) {
+  for (const value of [meta.canonicalOrigin, meta.origin]) {
+    try {
+      return new URL(value).host;
+    } catch {
+      // not a URL; try the next one
+    }
+  }
+  return null;
+}
+
+// A thank-you field value leads to thankYou: the path itself, or an absolute URL on siteHost.
+export function leadsTo(value, thankYou, siteHost) {
+  if (value === thankYou) return true;
+  if (!siteHost || !/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.host === siteHost && url.pathname === thankYou;
+  } catch {
+    return false;
+  }
+}
+
+export function compareForm(path, label, expected, actual, { endpoint, honeypot, thankYou, siteHost = null }) {
   const failures = [];
   const field = (name) => (label ? `${label} ${name}` : name);
   const want = expected.fields.map((f) => (typeof f === 'string' ? f : f.name));
@@ -54,7 +80,7 @@ export function compareForm(path, label, expected, actual, { endpoint, honeypot,
   got = got.filter((name) => !THANK_YOU_FIELDS.includes(name) || want.includes(name));
   if (thankYou) {
     const values = THANK_YOU_FIELDS.filter((name) => name in actual.hidden).map((name) => actual.hidden[name]);
-    if (!values.includes(thankYou)) failures.push({ path, field: field('thank-you'), expected: thankYou, actual: values[0] ?? null });
+    if (!values.some((value) => leadsTo(value, thankYou, siteHost))) failures.push({ path, field: field('thank-you'), expected: thankYou, actual: values[0] ?? null });
   }
   if (!same(want, got)) failures.push({ path, field: field('fields'), expected: want, actual: got });
   const method = (expected.method || 'get').toLowerCase();
@@ -63,7 +89,8 @@ export function compareForm(path, label, expected, actual, { endpoint, honeypot,
   return failures;
 }
 
-export function checkForms({ dist, forms, endpoint, honeypot = '', thankYou = '', paths = () => true }) {
+export function checkForms({ dist, forms, endpoint, honeypot = '', thankYou = '', meta = {}, paths = () => true }) {
+  const siteHost = siteHostOf(meta);
   const files = distFiles(dist);
   const format = pageFormat(files);
   const failures = [];
@@ -86,7 +113,7 @@ export function checkForms({ dist, forms, endpoint, honeypot = '', thankYou = ''
     formCount += expected.length;
     expected.forEach((form, i) => {
       const label = expected.length > 1 ? `form ${i + 1}` : '';
-      failures.push(...compareForm(path, label, form, actual[i], { endpoint, honeypot, thankYou }));
+      failures.push(...compareForm(path, label, form, actual[i], { endpoint, honeypot, thankYou, siteHost }));
     });
   }
   if (thankYou && checked > 0) {
@@ -107,12 +134,15 @@ function main() {
     process.stderr.write(`${NAME}: --endpoint <url> is required: the baseline has forms on ${withForms.map(([p]) => p).join(', ')}\n`);
     process.exit(2);
   }
+  const metaFile = join(args.baseline, 'meta.json');
+  const meta = existsSync(metaFile) ? readJson(metaFile) : {};
   const results = checkForms({
     dist: args.dist,
     forms,
     endpoint: args.endpoint,
     honeypot: args.honeypot,
     thankYou: args.thankYou,
+    meta,
     paths: args.paths,
   });
   report(NAME, results, { json: args.json });

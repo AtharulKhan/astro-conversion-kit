@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -48,6 +48,31 @@ test('--thank-you: a hidden _next equal to it passes; a form without it fails; a
   const notBuilt = await forms(dist, ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
   assert.equal(notBuilt.code, 1);
   assert.match(notBuilt.stdout, /^ {2}\/thank-you\/ thank-you: expected "thank-you\/index\.html", got null$/m);
+});
+
+test('--thank-you: an absolute _next on the canonical host passes; on another host it fails with the raw value', async () => {
+  const { canonicalOrigin } = JSON.parse(readFileSync(join(baseline, 'meta.json'), 'utf8'));
+  const withNext = (name, value) => {
+    const dist = makeDist(join(root, name));
+    edit(dist, 'contact/index.html', '<button type="submit">', `<input type="hidden" name="_next" value="${value}"><button type="submit">`);
+    mkdirSync(join(dist, 'thank-you'));
+    writeFileSync(join(dist, 'thank-you', 'index.html'), '<!doctype html><title>Thanks</title>');
+    return dist;
+  };
+  const canonical = await forms(withNext('dist-next-canonical', `${canonicalOrigin}/thank-you/`), ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(canonical.code, 0, canonical.stdout + canonical.stderr);
+  assert.match(canonical.stdout, /^forms: 1 checked, 0 failed$/m);
+
+  const path = await forms(withNext('dist-next-path', '/thank-you/'), ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(path.code, 0, path.stdout + path.stderr);
+
+  const foreign = await forms(withNext('dist-next-foreign', 'https://elsewhere.example.com/thank-you/'), ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(foreign.code, 1);
+  assert.match(foreign.stdout, /^ {2}\/contact\/ thank-you: expected "\/thank-you\/", got "https:\/\/elsewhere\.example\.com\/thank-you\/"$/m);
+
+  const otherPath = await forms(withNext('dist-next-other-path', `${canonicalOrigin}/thanks/`), ['--endpoint', ENDPOINT, '--thank-you', '/thank-you/']);
+  assert.equal(otherPath.code, 1);
+  assert.match(otherPath.stdout, /thank-you: expected "\/thank-you\/", got "https?:\/\/[^"]+\/thanks\/"$/m);
 });
 
 test('a reordered field fails with both field lists', async () => {
