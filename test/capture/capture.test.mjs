@@ -526,6 +526,27 @@ test('@import is followed into css/, on the site and on other hosts, cycle-safe,
   }
 });
 
+test('a redirected stylesheet records its final URL, and its @import resolves against it', async () => {
+  const css = (body) => ({ headers: { 'Content-Type': 'text/css' }, body });
+  const stub = await startStub({
+    '/': { body: '<html><head><link rel="stylesheet" href="/old.css"></head><body>moved</body></html>' },
+    '/old.css': { status: 301, headers: { Location: '/new/main.css' } },
+    '/new/main.css': css('@import "part.css";\n.main { margin: 0; }'),
+    '/new/part.css': css('.part { margin: 0; }'),
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'css/manifest.json'), [
+      { file: '1.css', href: `${stub.origin}/old.css`, finalUrl: `${stub.origin}/new/main.css`, pages: ['/'] },
+      { file: '2.css', href: `${stub.origin}/new/part.css`, pages: ['/'], importedBy: [`${stub.origin}/old.css`] },
+    ]);
+  } finally {
+    await stub.close();
+  }
+});
+
 test('@import is followed 5 levels deep; a deeper sheet is listed "too-deep" and not requested', async () => {
   const routes = { '/': { body: '<html><head><link rel="stylesheet" href="/d0.css"></head><body>deep</body></html>' } };
   for (let n = 0; n <= 7; n += 1) {

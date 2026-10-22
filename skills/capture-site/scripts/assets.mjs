@@ -102,9 +102,10 @@ function fontUrls(dir, origin) {
   if (!existsSync(manifestFile)) return null;
   const urls = [];
   for (const entry of JSON.parse(readFileSync(manifestFile, 'utf8'))) {
+    if (!entry?.file) continue; // not saved: an HTTP status, too-deep or a refused address
     const file = [join(cssDir, entry.file), join(dir, entry.file)].find((f) => existsSync(f));
     if (!file) continue;
-    const base = entry.href ?? new URL(entry.pages?.[0] ?? '/', origin).href;
+    const base = entry.finalUrl ?? entry.href ?? new URL(entry.pages?.[0] ?? '/', origin).href;
     const ast = csstree.parse(readFileSync(file, 'utf8'), { parseValue: true, onParseError: () => {} });
     csstree.walk(ast, {
       visit: 'Atrule',

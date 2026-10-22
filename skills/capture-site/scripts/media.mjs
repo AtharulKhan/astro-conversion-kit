@@ -202,7 +202,7 @@ export function collectMedia(captureDir) {
   const manifestFile = join(captureDir, 'css', 'manifest.json');
   for (const entry of existsSync(manifestFile) ? readJson(manifestFile) : []) {
     if (!entry?.file || !existsSync(join(captureDir, 'css', entry.file))) continue;
-    const base = entry.href ?? new URL(entry.pages?.[0] ?? '/', origin).href;
+    const base = entry.finalUrl ?? entry.href ?? new URL(entry.pages?.[0] ?? '/', origin).href;
     for (const url of cssUrls(readFileSync(join(captureDir, 'css', entry.file), 'utf8'), base)) {
       for (const page of entry.pages?.length ? entry.pages : [null]) add(url, base, 'css', page);
     }

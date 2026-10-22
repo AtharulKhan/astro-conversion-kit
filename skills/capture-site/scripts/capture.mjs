@@ -455,7 +455,9 @@ class Crawler {
     if (res.status === 200) {
       const text = Buffer.isBuffer(res.body) ? res.body.toString('utf8') : String(res.body ?? '');
       writeText(join(this.out, 'css', entry.file), text);
-      this.followImports(entry, text, res.finalUrl || item.url);
+      // A redirected sheet's relative url()s and @imports resolve against where it ended up.
+      if (res.finalUrl && res.finalUrl !== item.url) entry.finalUrl = res.finalUrl;
+      this.followImports(entry, text, entry.finalUrl ?? item.url);
     }
     return {};
   }
@@ -576,7 +578,8 @@ class Crawler {
       if (e.inline) return { file: e.file, inline: true, pages: [...e.pages].sort() };
       const pages = [...this.cssPages(e, entries)].sort();
       const importedBy = e.importedBy?.length ? { importedBy: e.importedBy } : {};
-      if (e.status === 200) return { file: e.file, href: e.href, pages, ...importedBy };
+      const finalUrl = e.finalUrl ? { finalUrl: e.finalUrl } : {};
+      if (e.status === 200) return { file: e.file, href: e.href, ...finalUrl, pages, ...importedBy };
       return { file: null, href: e.href, pages, status: e.status, ...importedBy };
     });
   }

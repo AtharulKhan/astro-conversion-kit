@@ -127,7 +127,9 @@ Never retry in a tight loop. After two stops in a row, tell the person and carry
     css/                  every stylesheet, inline <style> blocks, manifest.json; the sheets a
                           stylesheet @imports (any host, 5 levels deep) too, their manifest
                           entries with importedBy: [importer hrefs] and the importer's pages;
-                          one deeper still is listed with status "too-deep", not fetched
+                          one deeper still is listed with status "too-deep", not fetched;
+                          a redirected sheet records finalUrl (its url()s and @imports
+                          resolve against it)
     js/                   the site's own <script src> files (theme JavaScript) and manifest.json:
                           [{ file, src, pages }], or { file: null, src, pages, status } for a file
                           not saved (an HTTP status, "off-site" for a redirect off the host,

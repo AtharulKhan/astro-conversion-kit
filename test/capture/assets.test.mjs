@@ -82,3 +82,23 @@ test('assets.mjs does not request a logo on another port of 127.0.0.1', async ()
     await site.close();
   }
 });
+
+test('assets.mjs skips css manifest entries that were not saved (file: null) and reads a sheet against its final URL', async () => {
+  const site = await startStub({
+    '/logo.svg': { headers: { 'Content-Type': 'image/svg+xml' }, body: '<svg/>' },
+    '/new/fonts/moved.woff2': { headers: { 'Content-Type': 'font/woff2' }, body: Buffer.alloc(10, 4) },
+  });
+  const dir = tinyCapture(site.origin, '<html><body><header><img src="/logo.svg"></header></body></html>', '@font-face{font-family:M;src:url(fonts/moved.woff2)}');
+  writeFileSync(join(dir, 'css/manifest.json'), JSON.stringify([
+    { file: null, href: `${site.origin}/gone.css`, pages: ['/'], status: 404 },
+    { file: '1.css', href: `${site.origin}/old.css`, finalUrl: `${site.origin}/new/main.css`, pages: ['/'] },
+  ]));
+  try {
+    const result = await run(['--capture', dir, '--delay', '0']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(readFileSync(join(dir, 'assets/fonts/moved.woff2')), Buffer.alloc(10, 4));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await site.close();
+  }
+});
