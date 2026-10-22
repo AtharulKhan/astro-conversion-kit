@@ -18,19 +18,47 @@ Checks the files git tracks in <repo> and every commit message for:
 
 Exit codes: 0 clean, 1 problems found (listed on stdout), 2 usage error.`;
 
-// Assembled from parts so this file does not trip its own check.
-const BANNED_NAMES = [['pers', 'ist'], ['plas', 'tix'], ['ever', 'green'], ['higher', 'pay']].map(
-  (parts) => parts.join(''),
-);
-// A banned name at the start of a word, except ordinary English words built on it.
-const BANNED_NAME_RE = new RegExp(
-  `\\b(?:${BANNED_NAMES.join('|')})(?!(?:ent|ently|ence|ences)\\b)`,
-  'gi',
-);
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+// Banned names are assembled from parts so this file does not trip its own check.
+const j = (...parts) => parts.join('');
+const PERS = j('pers', 'ist');
+const EVER = j('ever', 'green');
+const BANNED_NAME_RES = [
+  // Unambiguous names: anywhere, any case.
+  new RegExp(`${j('plas', 'tix')}|${j('higher', 'pay')}`, 'gi'),
+  // Ordinary English words: only as capitalised whole words ...
+  new RegExp(`\\b(?:${j('P', 'ersist')}|${j('E', 'vergreen')})\\b`, 'g'),
+  // ... or in their domain, handle and compound forms.
+  new RegExp(
+    [
+      `${PERS}-?marketing`,
+      `${PERS}\\.(?:com|io|ai|net|org)\\b`,
+      `@${PERS}(?![a-z])`,
+      `${EVER}-?private-?care`,
+    ].join('|'),
+    'gi',
+  ),
+];
+// The first domain label must start with a letter, so version pins like pkg@1.2.3 are not emails.
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 const ALLOWED_EMAIL_DOMAIN = 'example.com';
-const BANNED_TRAILERS = [['Co', 'Authored', 'By'].join('-'), 'Claude-Session', 'Signed-off-by'];
-const TRAILER_RE = new RegExp(BANNED_TRAILERS.join('|'), 'i');
+const ALLOWED_EMAILS = new Set(['git@github.com']);
+// Retina image names such as logo@2x.png look like emails; the final label gives them away.
+const FILE_EXTENSION_TLDS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'avif']);
+const TRAILER_RE = new RegExp(`^(${[j('Co', '-Authored-By'), 'Claude-Session', 'Signed-off-by'].join('|')}):`, 'im');
+const ALLOWED_ENV_FILES = new Set(['.env.example', '.env.sample']);
+
+class GitError extends Error {}
+
+function bannedNames(line) {
+  return BANNED_NAME_RES.flatMap((re) => [...line.matchAll(re)].map((match) => match[0]));
+}
+
+function isForbiddenEmail(email) {
+  if (ALLOWED_EMAILS.has(email.toLowerCase())) return false;
+  const domain = email.split('@')[1].toLowerCase();
+  if (domain === ALLOWED_EMAIL_DOMAIN) return false;
+  return !FILE_EXTENSION_TLDS.has(domain.split('.').pop());
+}
 
 export function pathProblem(path) {
   const segments = path.split('/');
@@ -39,7 +67,7 @@ export function pathProblem(path) {
   if (path.startsWith('.agents/')) return 'session folder .agents/';
   if (path.startsWith('docs/superpowers/')) return 'planning folder docs/superpowers/';
   if (segments.includes('node_modules')) return 'node_modules';
-  if (base.startsWith('.env')) return 'environment file';
+  if (base.startsWith('.env') && !ALLOWED_ENV_FILES.has(base)) return 'environment file';
   if (/\.png$/i.test(base) && !path.startsWith('docs/examples/')) return '*.png outside docs/examples/';
   return null;
 }
@@ -48,14 +76,11 @@ export function contentProblems(text) {
   const problems = [];
   const lines = text.split('\n');
   lines.forEach((line, index) => {
-    for (const match of line.matchAll(EMAIL_RE)) {
-      const domain = match[0].split('@')[1].toLowerCase();
-      if (domain !== ALLOWED_EMAIL_DOMAIN) {
-        problems.push(`line ${index + 1}: email ${match[0]}`);
-      }
+    for (const [email] of line.matchAll(EMAIL_RE)) {
+      if (isForbiddenEmail(email)) problems.push(`line ${index + 1}: email ${email}`);
     }
-    for (const match of line.matchAll(BANNED_NAME_RE)) {
-      problems.push(`line ${index + 1}: banned name "${match[0]}"`);
+    for (const name of bannedNames(line)) {
+      problems.push(`line ${index + 1}: banned name "${name}"`);
     }
   });
   return problems;
@@ -66,21 +91,29 @@ function isBinary(buffer) {
 }
 
 function git(dir, args) {
-  return execFileSync('git', ['-C', dir, ...args], {
-    encoding: 'utf8',
-    maxBuffer: 256 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  try {
+    return execFileSync('git', ['-C', dir, ...args], {
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    throw new GitError(`git ${args.join(' ')} failed: ${String(err.stderr || err.message).trim()}`);
+  }
+}
+
+function hasCommits(dir) {
+  try {
+    git(dir, ['rev-parse', '--verify', '-q', 'HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function commitMessages(dir) {
-  let log;
-  try {
-    log = git(dir, ['log', '--format=%H%x00%B%x1e']);
-  } catch {
-    return []; // no commits yet
-  }
-  return log
+  if (!hasCommits(dir)) return [];
+  return git(dir, ['log', '--format=%H%x00%B%x1e'])
     .split('\x1e')
     .map((record) => record.replace(/^\n/, ''))
     .filter((record) => record.includes('\0'))
@@ -106,8 +139,11 @@ export function checkRepo(dir) {
   }
   const commits = commitMessages(dir);
   for (const { hash, body } of commits) {
-    const match = body.match(TRAILER_RE);
-    if (match) problems.push(`commit ${hash}: message contains ${match[0]}`);
+    const trailer = body.match(TRAILER_RE);
+    if (trailer) problems.push(`commit ${hash}: message has a ${trailer[1]} trailer`);
+    for (const name of new Set(bannedNames(body))) {
+      problems.push(`commit ${hash}: message contains banned name "${name}"`);
+    }
   }
   return { problems, fileCount: files.length, commitCount: commits.length };
 }
@@ -141,14 +177,23 @@ function main() {
     console.error(`--dir is required\n\n${HELP}`);
     process.exit(2);
   }
-  const dir = resolve(args.dir);
+  let dir;
   try {
-    git(dir, ['rev-parse', '--is-inside-work-tree']);
+    // Anchor at the repo root so path rules like docs/superpowers/ apply to a subdirectory --dir.
+    dir = git(resolve(args.dir), ['rev-parse', '--show-toplevel']).trim();
   } catch {
-    console.error(`Not a git repository: ${dir}`);
+    console.error(`Not a git repository: ${resolve(args.dir)}`);
     process.exit(2);
   }
-  const { problems, fileCount, commitCount } = checkRepo(dir);
+  let result;
+  try {
+    result = checkRepo(dir);
+  } catch (err) {
+    if (!(err instanceof GitError)) throw err;
+    console.error(err.message);
+    process.exit(2);
+  }
+  const { problems, fileCount, commitCount } = result;
   if (problems.length > 0) {
     console.log(`Hygiene failed: ${problems.length} problem(s)`);
     for (const problem of problems) console.log(`  ${problem}`);

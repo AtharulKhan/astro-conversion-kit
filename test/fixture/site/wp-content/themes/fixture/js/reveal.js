@@ -1,22 +1,26 @@
 (function () {
-  var sections = document.querySelectorAll('.reveal');
+  function loadImage(img) {
+    img.src = img.getAttribute('data-src');
+    if (img.getAttribute('data-srcset')) img.srcset = img.getAttribute('data-srcset');
+    img.classList.remove('lazyload');
+  }
+  function show(el) {
+    if (el.matches('img.lazyload[data-src]')) loadImage(el);
+    else el.classList.add('in');
+  }
+
+  var targets = document.querySelectorAll('.reveal, img.lazyload[data-src]');
   if (!('IntersectionObserver' in window)) {
-    sections.forEach(function (el) { el.classList.add('in'); });
+    targets.forEach(show);
     return;
   }
   var observer = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
       if (entry.isIntersecting) {
-        entry.target.classList.add('in');
+        show(entry.target);
         observer.unobserve(entry.target);
       }
     });
   }, { threshold: 0.1 });
-  sections.forEach(function (el) { observer.observe(el); });
-
-  document.querySelectorAll('img.lazyload[data-src]').forEach(function (img) {
-    img.src = img.getAttribute('data-src');
-    if (img.getAttribute('data-srcset')) img.srcset = img.getAttribute('data-srcset');
-    img.classList.remove('lazyload');
-  });
+  targets.forEach(function (el) { observer.observe(el); });
 })();

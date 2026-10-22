@@ -40,13 +40,42 @@ test('an unslashed URL 301s to its slashed form', async () => {
 });
 
 test('a ?p= shortlink 301s to its page', async () => {
-  const res = await get('/?p=7');
-  await res.arrayBuffer();
-  assert.equal(res.status, 301);
-  const location = new URL(res.headers.get('location'), fixture.origin);
-  const page = await get(location.pathname);
+  await expectRedirect('/?p=7', 301, '/services/');
+  const page = await get('/services/');
   assert.equal(page.status, 200);
   assert.match(await page.text(), /<body class="[^"]*page/);
+});
+
+test('an unknown ?p= id is 404, not the home page', async () => {
+  const res = await get('/?p=999');
+  assert.equal(res.status, 404);
+  assert.match(await res.text(), /error404/);
+});
+
+test('redirects keep the query string', async () => {
+  const res = await get('/old-services/?utm_source=mail&x=1');
+  await res.arrayBuffer();
+  assert.equal(res.status, 301);
+  const location = new URL(res.headers.get('location'));
+  assert.equal(location.pathname, '/services/');
+  assert.equal(location.search, '?utm_source=mail&x=1');
+});
+
+test('archive pages carry no shortlink', async () => {
+  const res = await get('/category/news/');
+  assert.equal(res.status, 200);
+  assert.doesNotMatch(await res.text(), /rel="shortlink"/);
+});
+
+test('/wp-json/ serves a root index', async () => {
+  const res = await get('/wp-json/');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/json/);
+  const index = await res.json();
+  assert.equal(typeof index.name, 'string');
+  assert.equal(typeof index.description, 'string');
+  assert.equal(index.url, fixture.origin);
+  assert.deepEqual(index.namespaces, ['wp/v2']);
 });
 
 test('an unknown URL is 404 with the 404 page body', async () => {

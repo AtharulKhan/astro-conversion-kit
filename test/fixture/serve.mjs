@@ -10,6 +10,8 @@ const SITE = join(HERE, 'site');
 const REDIRECTS = JSON.parse(readFileSync(join(HERE, 'redirects.json'), 'utf8'));
 const WP_JSON_TYPES = ['pages', 'posts', 'media', 'categories', 'tags'];
 const ORIGIN_PLACEHOLDER = /\{\{ORIGIN\}\}/g;
+const SITE_NAME = 'Fixture Roofing & Siding';
+const SITE_DESCRIPTION = 'Roofing and siding contractors';
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=UTF-8',
@@ -97,12 +99,20 @@ function route(req, origin) {
 
   const redirect = REDIRECTS.find((rule) => rule.from === pathname);
   if (redirect) {
-    return { status: redirect.status, headers: { Location: new URL(redirect.to, origin).href }, body: '' };
+    const location = new URL(redirect.to, origin);
+    location.search = url.search;
+    return { status: redirect.status, headers: { Location: location.href }, body: '' };
   }
 
   if (pathname === '/' && searchParams.has('p')) {
     const link = SHORTLINKS.get(searchParams.get('p'));
-    if (link) return { status: 301, headers: { Location: link.replace(ORIGIN_PLACEHOLDER, origin) }, body: '' };
+    if (!link) return notFound(origin);
+    return { status: 301, headers: { Location: link.replace(ORIGIN_PLACEHOLDER, origin) }, body: '' };
+  }
+
+  if (pathname === '/wp-json/' || pathname === '/wp-json') {
+    const index = { name: SITE_NAME, description: SITE_DESCRIPTION, url: origin, home: origin, namespaces: ['wp/v2'] };
+    return { status: 200, headers: { 'Content-Type': CONTENT_TYPES['.json'] }, body: JSON.stringify(index) };
   }
 
   const wpMatch = pathname.match(/^\/wp-json\/wp\/v2\/([a-z]+)\/?$/);
@@ -120,8 +130,20 @@ function route(req, origin) {
     return { status: 200, headers: { 'Content-Type': contentTypeFor(file) }, body: body(file, origin) };
   }
 
-  const notFound = join(SITE, '404.html');
-  return { status: 404, headers: { 'Content-Type': contentTypeFor(notFound) }, body: body(notFound, origin) };
+  return notFound(origin);
+}
+
+function notFound(origin) {
+  const file = join(SITE, '404.html');
+  return { status: 404, headers: { 'Content-Type': contentTypeFor(file) }, body: body(file, origin) };
+}
+
+function respond(req, origin) {
+  try {
+    return route(req, origin);
+  } catch (err) {
+    return { status: 500, headers: { 'Content-Type': 'text/plain' }, body: `Internal Server Error: ${err.message}` };
+  }
 }
 
 export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0 } = {}) {
@@ -133,7 +155,7 @@ export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0 } = 
       const origin = `http://${req.headers.host ?? `127.0.0.1:${server.address().port}`}`;
       const response = blocked
         ? { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain' }, body: 'Too Many Requests' }
-        : route(req, origin);
+        : respond(req, origin);
       const payload = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body);
       res.writeHead(response.status, { ...response.headers, 'Content-Length': payload.length });
       res.end(req.method === 'HEAD' ? undefined : payload);

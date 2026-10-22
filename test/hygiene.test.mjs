@@ -11,6 +11,9 @@ const HYGIENE = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', '
 // Forbidden strings are assembled at runtime so this file passes the check itself.
 const BANNED_WORD = ['pers', 'ist'].join('');
 const BANNED_EMAIL = `someone@${BANNED_WORD}.test`;
+const CAP_NAME = ['Pers', 'ist'].join('');
+const EVER = ['ever', 'green'].join('');
+const CAP_EVER = ['Ever', 'green'].join('');
 const TRAILER = ['Co', 'Authored', 'By'].join('-');
 
 function git(dir, ...args) {
@@ -58,7 +61,7 @@ test('a banned email in a file and a trailer in a commit fail with both listed',
 });
 
 for (const trailer of ['Claude-Session', 'Signed-off-by']) {
-  test(`a commit containing ${trailer} fails`, (t) => {
+  test(`a commit with a ${trailer} trailer line fails`, (t) => {
     const dir = makeRepo(t);
     addFile(dir, 'a.txt');
     git(dir, 'commit', '-q', '-m', `chore: a\n\n${trailer}: someone`);
@@ -69,22 +72,80 @@ for (const trailer of ['Claude-Session', 'Signed-off-by']) {
   });
 }
 
-for (const word of [BANNED_WORD, ['Plas', 'tix'].join(''), ['EVER', 'GREEN'].join(''), ['higher', 'pay'].join('')]) {
-  test(`the word ${word} in a tracked file fails`, (t) => {
+test('a subject that only mentions a trailer name passes', (t) => {
+  const dir = makeRepo(t);
+  addFile(dir, 'a.txt');
+  git(dir, 'commit', '-q', '-m', 'fix: reject Signed-off-by trailers');
+  const result = run('--dir', dir);
+  assert.equal(result.status, 0, result.stdout);
+});
+
+test('a banned name in a commit message fails, an email there does not', (t) => {
+  const dir = makeRepo(t);
+  addFile(dir, 'a.txt');
+  git(dir, 'commit', '-q', '-m', `chore: mail ${['someone', 'elsewhere.test'].join('@')}`);
+  const clean = run('--dir', dir);
+  assert.equal(clean.status, 0, clean.stdout);
+  addFile(dir, 'b.txt');
+  git(dir, 'commit', '-q', '-m', `chore: port the ${CAP_NAME} Marketing footer`);
+  const hash = git(dir, 'rev-parse', 'HEAD');
+  const result = run('--dir', dir);
+  assert.equal(result.status, 1);
+  assert.ok(result.stdout.includes(hash), result.stdout);
+});
+
+const FAILING_TEXT = [
+  `${CAP_NAME} Marketing`,
+  `${BANNED_WORD}-marketing`,
+  `${BANNED_WORD}marketing.com`,
+  `${BANNED_WORD}.io`,
+  `follow @${BANNED_WORD} on social`,
+  `${CAP_EVER} Private Care`,
+  `${EVER}privatecare.com`,
+  `${EVER}-private-care`,
+  ['Plas', 'tix'].join(''),
+  ['PLAS', 'TIX'].join(''),
+  ['plas', 'tixmarketing'].join(''),
+  ['Higher', 'Pay'].join(''),
+];
+for (const text of FAILING_TEXT) {
+  test(`"${text}" in a tracked file fails`, (t) => {
     const dir = makeRepo(t);
-    addFile(dir, 'src/page.html', `<p>Built by ${word} for you.</p>\n`);
+    addFile(dir, 'src/page.html', `<p>Built by ${text} for you.</p>\n`);
     const result = run('--dir', dir);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, 1, result.stdout);
     assert.match(result.stdout, /src\/page\.html/);
   });
 }
 
-test('ordinary words that start with a banned word pass', (t) => {
-  const dir = makeRepo(t);
-  addFile(dir, 'a.txt', `Settings are ${BANNED_WORD}ent; ${BANNED_WORD}ence pays.\n`);
-  const result = run('--dir', dir);
-  assert.equal(result.status, 0, result.stdout);
-});
+const PASSING_TEXT = [
+  `const ${BANNED_WORD}entContext = true;`,
+  `the value ${BANNED_WORD}ed`,
+  `state ${BANNED_WORD}s across runs`,
+  `${BANNED_WORD}ency matters`,
+  `write ${EVER} content`,
+  'logo@2x.png and hero@3x.webp',
+  'git@github.com:owner/repo.git',
+  'version pkg@1.2.3',
+];
+for (const text of PASSING_TEXT) {
+  test(`"${text}" in a tracked file passes`, (t) => {
+    const dir = makeRepo(t);
+    addFile(dir, 'a.txt', `${text}\n`);
+    const result = run('--dir', dir);
+    assert.equal(result.status, 0, result.stdout);
+  });
+}
+
+// Built at runtime so this file passes the check itself.
+for (const text of [['ops', 'team.example.org'].join('@'), ['user', 'mail.test.io'].join('@')]) {
+  test(`the email ${text} fails`, (t) => {
+    const dir = makeRepo(t);
+    addFile(dir, 'a.txt', `${text}\n`);
+    const result = run('--dir', dir);
+    assert.equal(result.status, 1, result.stdout);
+  });
+}
 
 for (const path of [
   'docs/superpowers/x.md',
@@ -94,6 +155,7 @@ for (const path of [
   'packages/a/node_modules/b.js',
   '.env',
   '.env.local',
+  '.env.production',
   'test/fixture/shot.png',
 ]) {
   test(`tracking ${path} fails`, (t) => {
@@ -104,6 +166,35 @@ for (const path of [
     assert.ok(result.stdout.includes(path), result.stdout);
   });
 }
+
+for (const path of ['.env.example', '.env.sample', 'site/.env.example']) {
+  test(`tracking ${path} passes`, (t) => {
+    const dir = makeRepo(t);
+    addFile(dir, path);
+    const result = run('--dir', dir);
+    assert.equal(result.status, 0, result.stdout);
+  });
+}
+
+test('--dir pointing at a subdirectory checks the whole repo', (t) => {
+  const dir = makeRepo(t);
+  addFile(dir, 'docs/superpowers/x.md');
+  addFile(dir, 'docs/readme.md');
+  const result = run('--dir', join(dir, 'docs'));
+  assert.equal(result.status, 1);
+  assert.ok(result.stdout.includes('docs/superpowers/x.md'), result.stdout);
+});
+
+test('a repo with no commits yet passes', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'hygiene-empty-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  git(dir, 'init', '-q', '-b', 'main');
+  writeFileSync(join(dir, 'a.txt'), 'x\n');
+  git(dir, 'add', 'a.txt');
+  const result = run('--dir', dir);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /0 commits/);
+});
 
 test('a png under docs/examples/ passes', (t) => {
   const dir = makeRepo(t);
