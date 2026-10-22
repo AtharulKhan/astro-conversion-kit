@@ -78,9 +78,12 @@ test("sitemaps at the live site's root names (sitemap_index.xml, page-sitemap.xm
   assert.equal(passed.code, 0, passed.stdout + passed.stderr);
   mkdirSync(join(dist, 'old'), { recursive: true });
   writeFileSync(join(dist, 'old', 'page-sitemap.xml'), '<x/>');
+  writeFileSync(join(dist, 'old-sitemap.xml'), '<x/>');
   const failed = await routes(dist);
   assert.equal(failed.code, 1);
   assert.match(failed.stdout, /\/old\/page-sitemap\.xml extra/);
+  assert.match(failed.stdout, /\/old-sitemap\.xml extra/, 'a sitemap name the live site never had is an extra');
+  assert.match(failed.stdout, /^routes: \d+ checked, 2 failed$/m);
 });
 
 test('a noindex route that lost its robots meta fails', async () => {

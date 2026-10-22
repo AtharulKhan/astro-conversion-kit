@@ -72,6 +72,14 @@ The site's own script files the capture saved (`capture/js/manifest.json`; `file
 the capture), `[]` when there are none. The routes gate lets the build serve each at its live
 path; built or not, none is an extra.
 
+## baseline/sitemaps.json
+
+    ["page-sitemap.xml", "post-sitemap.xml", "sitemap_index.xml"]
+
+The live site's sitemap file names the capture saved (`capture/sitemaps/`), `[]` when none. The
+routes gate lets the build serve each at the root (besides Astro's `sitemap-index.xml` and
+`sitemap-<n>.xml`); any other sitemap file name is an extra.
+
 ## baseline/text/
 
 `<slug>.txt` per page, the capture's visible text copied as is (`pages/contact.html` pairs with

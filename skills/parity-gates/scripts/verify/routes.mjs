@@ -18,9 +18,7 @@ const ALWAYS_ALLOWED = [
   /^404\.html$/,
   /^_astro\//,
   /^robots\.txt$/,
-  // Astro's sitemap-index.xml and sitemap-0.xml, and the live site's own names at the root
-  // (WordPress's sitemap_index.xml, page-sitemap.xml, ...), which the build keeps at their URLs.
-  /^[\w-]*sitemap[\w-]*\.xml$/,
+  /^sitemap(?:-index|-\d+)?\.xml$/,
   /^_(?:redirects|headers|routes\.json)$/,
   // The icon set and web app manifest a launch needs (pre-launch checks for them at the root).
   /^favicon(?:-[\w.-]+)?\.(?:ico|svg|png)$/,
@@ -33,8 +31,9 @@ A page may be built as <path>/index.html or <path>.html; both are accepted for e
 The .html form (build.format "file") is served at /about rather than /about/, so the live site's
 slashed URLs change: the redirects gate checks that they still answer.
 Redirect sources are allowed as pages (Astro writes a meta-refresh page for each redirect).
-The site's own scripts the capture saved (baseline/js.json) may be built at their live paths;
-built or not, they are never extras.
+The site's own scripts the capture saved (baseline/js.json) may be built at their live paths,
+and the live sitemap file names (baseline/sitemaps.json) at the root; built or not, they are
+never extras.
 `;
 
 function robotsOf(html) {
@@ -50,7 +49,7 @@ const decode = (path) => {
   }
 };
 
-export function checkRoutes({ dist, routes, media, redirects = [], scripts = [], paths = () => true, allowExtra = () => false }) {
+export function checkRoutes({ dist, routes, media, redirects = [], scripts = [], sitemaps = [], paths = () => true, allowExtra = () => false }) {
   const files = distFiles(dist);
   const present = new Set(files);
   const format = pageFormat(files);
@@ -79,6 +78,7 @@ export function checkRoutes({ dist, routes, media, redirects = [], scripts = [],
 
   for (const item of media) expected.add(decode(item.path).replace(/^\/+/, ''));
   for (const script of scripts) expected.add(decode(new URL(script.src).pathname).replace(/^\/+/, ''));
+  for (const name of sitemaps) expected.add(name);
   for (const redirect of redirects) pageFiles(redirect.from, format).forEach((c) => expected.add(c));
   for (const file of files) {
     if (expected.has(file) || ALWAYS_ALLOWED.some((re) => re.test(file))) continue;
@@ -99,6 +99,7 @@ function main() {
     media: readJson(join(args.baseline, 'media.json')),
     redirects: readJson(join(args.baseline, 'redirects.json')),
     scripts: existsSync(join(args.baseline, 'js.json')) ? readJson(join(args.baseline, 'js.json')) : [],
+    sitemaps: existsSync(join(args.baseline, 'sitemaps.json')) ? readJson(join(args.baseline, 'sitemaps.json')) : [],
     paths: args.paths,
     allowExtra: args.allowExtra ? pathMatcher(args.allowExtra) : () => false,
   });

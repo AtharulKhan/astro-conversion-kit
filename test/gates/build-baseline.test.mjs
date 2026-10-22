@@ -193,6 +193,10 @@ test('js.json lists the saved same-origin scripts from capture/js/, [] when the 
   assert.deepEqual(readJson(out, 'js.json'), []);
 });
 
+test("sitemaps.json lists the live site's sitemap file names the capture saved", () => {
+  assert.deepEqual(readJson(baseline, 'sitemaps.json'), ['category-sitemap.xml', 'page-sitemap.xml', 'post-sitemap.xml', 'sitemap_index.xml']);
+});
+
 test('counts.json sums the baseline', () => {
   assert.deepEqual(readJson(baseline, 'counts.json'), {
     routes: 16,

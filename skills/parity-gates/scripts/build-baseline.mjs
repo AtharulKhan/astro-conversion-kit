@@ -2,7 +2,7 @@
 // Baseline builder: freezes a capture folder into baseline/, the fixed record every parity gate
 // checks a build against. Pure: it reads the capture from disk and never makes a request.
 // --check recounts an existing baseline and compares it with its own counts.json.
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,8 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
   js.json         [{ src, file, pages[] }]: the site's own script files the capture saved
                   (capture/js/manifest.json; file is relative to the capture), [] when none.
                   The routes gate lets the build serve each at its live path
+  sitemaps.json   [name]: the live site's sitemap file names the capture saved (capture/sitemaps/),
+                  which the routes gate lets the build serve at the root
   text/           the visible text of each page, copied from the capture
   counts.json     routes, byStatus, byTemplate, redirects (by source), media, forms, scripts
   meta.json       { origin, canonicalOrigin, capturedAt, builtAt, platform } of the capture
@@ -310,6 +312,8 @@ function build(capture, out, csvFile) {
   writeJson(join(out, 'forms.json'), baseline.forms);
   writeJson(join(out, 'scripts.json'), baseline.scripts);
   writeJson(join(out, 'js.json'), buildJs(readJson(join(capture, 'js', 'manifest.json'), [])));
+  const sitemapDir = join(capture, 'sitemaps');
+  writeJson(join(out, 'sitemaps.json'), existsSync(sitemapDir) ? readdirSync(sitemapDir).filter((f) => /\.xml$/i.test(f)).sort() : []);
   writeJson(join(out, 'counts.json'), counts);
   writeJson(join(out, 'meta.json'), buildMeta(readJson(join(capture, 'meta.json'), {}), state));
   rmSync(join(out, 'text'), { recursive: true, force: true });
