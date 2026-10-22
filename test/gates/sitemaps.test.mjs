@@ -115,6 +115,10 @@ test('a robots.txt Sitemap: line must point at a file in dist', async () => {
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^ {2}\/robots\.txt sitemap line: expected "a file in dist", got "https:\/\/www\.example\.com\/sitemap_index\.xml"$/m);
   assert.match(result.stdout, /^sitemaps: 15 checked, 1 failed$/m);
+  writeFileSync(join(dist, 'robots.txt'), 'User-agent: *\nSitemap: https://other.example.org/sitemap-index.xml\n');
+  const foreign = await sitemaps(dist);
+  assert.equal(foreign.code, 1);
+  assert.match(foreign.stdout, /^ {2}\/robots\.txt sitemap line: expected "https:\/\/www\.example\.com\/sitemap-index\.xml", got "https:\/\/other\.example\.org\/sitemap-index\.xml"$/m);
 });
 
 test('a sitemap index pointing at a missing child sitemap fails', async () => {

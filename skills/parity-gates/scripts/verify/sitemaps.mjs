@@ -23,7 +23,8 @@ baseline/sitemaps.json (wp-sitemap.xml, sitemap_index.xml, page-sitemap.xml, ...
 exists in dist. A sitemap index is followed to its child sitemaps in dist. Each file that no
 other index lists as a child is a top sitemap, and each top sitemap (with its children) must list
 exactly the expected pages; with more than one, a failure names it ("sitemap wp-sitemap.xml").
-Every "Sitemap:" line of dist/robots.txt must point at a file in dist.
+Every "Sitemap:" line of dist/robots.txt must be a URL on the origin (--origin, else
+canonicalOrigin) naming a file in dist.
 Feed items are <item> (RSS) or <entry> (Atom).
 `;
 const TOP = ['sitemap-index.xml', 'sitemap_index.xml', 'sitemap.xml'];
@@ -79,17 +80,21 @@ export function readSitemaps(dist, names = []) {
   return { roots, failures };
 }
 
-// Every "Sitemap:" line of dist/robots.txt names a file in dist: [failure].
-export function robotsSitemapFailures(dist) {
+// Every "Sitemap:" line of dist/robots.txt is a URL on compareOrigin naming a file in dist.
+export function robotsSitemapFailures(dist, compareOrigin) {
   const file = join(dist, 'robots.txt');
   if (!existsSync(file)) return { checked: 0, failures: [] };
   const lines = [...readFileSync(file, 'utf8').matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
-  const failures = lines
-    .filter((url) => {
-      const rel = pathOf(url).replace(/^\/+/, '');
-      return !rel || !existsSync(join(dist, rel)) || !statSync(join(dist, rel)).isFile();
-    })
-    .map((url) => ({ path: '/robots.txt', field: 'sitemap line', expected: 'a file in dist', actual: url }));
+  const failures = [];
+  for (const url of lines) {
+    const origin = originOf(url);
+    const path = pathOf(url);
+    const rel = path.replace(/^\/+/, '');
+    if (origin !== compareOrigin) failures.push({ path: '/robots.txt', field: 'sitemap line', expected: `${compareOrigin}${origin ? new URL(url).pathname : ''}`, actual: url });
+    else if (!rel || !existsSync(join(dist, rel)) || !statSync(join(dist, rel)).isFile()) {
+      failures.push({ path: '/robots.txt', field: 'sitemap line', expected: 'a file in dist', actual: url });
+    }
+  }
   return { checked: lines.length, failures };
 }
 
@@ -111,7 +116,7 @@ export function checkSitemaps({ dist, capture, routes, compareOrigin, sitemaps =
       if (!expected.has(path) && paths(path)) failures.push({ path, field, expected: null, actual: url });
     }
   }
-  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist) : { checked: 0, failures: [] };
+  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist, compareOrigin) : { checked: 0, failures: [] };
   failures.push(...robots.failures);
   for (const feed of feeds) {
     const candidates = feedFiles(feed.path);
