@@ -1,8 +1,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
 import { DIST_ORIGIN, makeDist } from './fixtures/make-dist.mjs';
 import { gateScript, runGate } from './fixtures/run-gate.mjs';
@@ -18,6 +20,13 @@ before(async () => {
   root = mkdtempSync(join(tmpdir(), 'run-all-'));
   baseline = await buildFixtureBaseline(root);
   good = makeDist(join(root, 'dist-good'));
+  // The redirects gate reads the host config compiled from the redirects.csv beside the baseline. A
+  // vercel.json is what the headers gate reads too, so it carries the staging headers of dist/_headers.
+  const all = ['X-Content-Type-Options: nosniff', 'Referrer-Policy: strict-origin-when-cross-origin', 'X-Frame-Options: SAMEORIGIN', 'X-Robots-Tag: noindex'];
+  const headers = all.map((line) => ({ key: line.split(': ')[0], value: line.split(': ')[1] }));
+  writeFileSync(join(root, 'vercel.json'), JSON.stringify({ headers: [{ source: '/(.*)', headers }] }));
+  const compiler = fileURLToPath(new URL('../../skills/parity-gates/scripts/build-redirects.mjs', import.meta.url));
+  execFileSync(process.execPath, [compiler, '--host', 'vercel'], { cwd: root, stdio: 'ignore' });
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 

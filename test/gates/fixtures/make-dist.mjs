@@ -93,6 +93,15 @@ export const MUTATIONS = {
     edit(dist, 'about/index.html', '<meta name="description" content="A family-run roofing and siding company serving the area since 1998.">\n', ''),
   // /private-page/ loses its robots noindex.
   'lost-noindex': (dist) => edit(dist, 'private-page/index.html', '<meta name="robots" content="noindex, nofollow">\n', ''),
+  // /services/, the target of /old-services and /?p=7, is not built.
+  'redirect-target-missing': (dist) => {
+    if (!existsSync(join(dist, 'services', 'index.html'))) throw new Error('make-dist: no services page to remove');
+    rmSync(join(dist, 'services', 'index.html'));
+  },
+  // A page left at the redirect source /old-services (served there as old-services.html).
+  'redirect-source-page': (dist) => {
+    cpSync(join(dist, 'services', 'index.html'), join(dist, 'old-services.html'));
+  },
   // Not a defect: the build.format "file" layout, every <dir>/index.html moved to <dir>.html.
   'file-format': (dist) => {
     for (const full of filesUnder(dist)) {
