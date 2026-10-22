@@ -34,7 +34,7 @@ Follow the `capture-site` skill exactly, from `SITE`, with `KIT` paths:
     node $KIT/skills/capture-site/scripts/templates.mjs --capture capture
     node $KIT/skills/capture-site/scripts/assets.mjs --capture capture
     node $KIT/skills/visual-review/scripts/shoot.mjs --base $LIVE --routes capture/templates.json --widths 390,768,1440 --out capture/screens/live
-    node $KIT/skills/convert-site/scripts/css-coverage.mjs --base $LIVE --routes capture/inventory.json --out capture/css-coverage.json
+    node $KIT/skills/convert-site/scripts/css-coverage.mjs --base $LIVE --routes "$(node -e "const t=require('./capture/templates.json');console.log(t.flatMap(x=>[x.representative,...x.paths.filter(p=>p!==x.representative)].slice(0,10)).join(','))")" --out capture/css-coverage.json
 
 Then the optional Lighthouse step, exactly as `capture-site` step 7 says: only when
 `npx --no-install lighthouse --version` answers (never install it unasked), one run per
@@ -44,9 +44,12 @@ checks as "Not covered" without it. Last:
 
     node $KIT/skills/capture-site/scripts/readme.mjs --capture capture
 
-`templates.mjs` must run before the baseline (phase 5 reads `templates.json`). The coverage run
-loads every page at three widths at the default pacing: it is a capture step against the live
-site and lands in `capture/`. The media download goes under `.conversion/media-cache/`, which the
+`templates.mjs` must run before the baseline (phase 5 reads `templates.json`) and before the
+coverage run, which loads up to 10 pages per template (the representative first) at three widths
+at the default pacing: a capture step against the live site, landing in `capture/`. Pages of one
+template share their CSS, so ten of them find the rules in use; a rule only some other page needs
+is pruned, and the full-page diff of every page in phase 8 catches that over-pruning (restore the
+rule from `capture/css/`, `build-rules.md`). The media download goes under `.conversion/media-cache/`, which the
 scaffold's `.gitignore` keeps out of git. On exit 3 from any script, follow the skill's "On exit
 3"; after two stops in a row, tell the person in one line and carry on with what was captured.
 

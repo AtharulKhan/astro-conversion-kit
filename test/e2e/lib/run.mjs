@@ -134,10 +134,13 @@ export async function capture({ site, live }) {
     [kit('capture-site', 'assets.mjs'), ['--capture', 'capture', '--delay', '0']],
   ];
   for (const [script, args] of steps) expectCode(await node(site, script, args));
+  // The coverage pages, as phases.md lists them: up to 10 per template, the representative first.
+  const coverageRoutes = readJson(join(site, 'capture', 'templates.json'))
+    .flatMap((t) => [t.representative, ...t.paths.filter((p) => p !== t.representative)].slice(0, 10)).join(',');
   // The live screenshots and the coverage run read the same capture and write apart: run together.
   await Promise.all([
     node(site, kit('visual-review', 'shoot.mjs'), ['--base', live, '--routes', 'capture/templates.json', '--widths', WIDTHS.join(','), '--out', 'capture/screens/live', '--delay', '0', '--wait', '200']),
-    node(site, kit('convert-site', 'css-coverage.mjs'), ['--base', live, '--routes', 'capture/inventory.json', '--out', 'capture/css-coverage.json', '--delay', '0']),
+    node(site, kit('convert-site', 'css-coverage.mjs'), ['--base', live, '--routes', coverageRoutes, '--out', 'capture/css-coverage.json', '--delay', '0']),
   ]).then((results) => results.forEach((r) => expectCode(r)));
   const lighthouse = await sh('npx', ['--no-install', 'lighthouse', '--version'], { cwd: site, timeout: 60_000 });
   expectCode(await node(site, kit('capture-site', 'readme.mjs'), ['--capture', 'capture']));

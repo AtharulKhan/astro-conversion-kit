@@ -2,7 +2,11 @@
 
 Send this once, after preflight and the fingerprint, and never send a second question message.
 If your environment cannot wait for a reply (a non-interactive run), apply every default and
-go. Estimate the crawl at 2.5 s per page plus 2.5 s per media file.
+go. Estimate the time the live site is read at 2.5 s per request: per page, 1 for the capture
+and 2 for the full-set live shots (390 and 1440); per coverage page (up to 10 per template), 3
+coverage loads (one per width); per template, 3 live shots and 3 style loads per review round;
+plus 1 per media file. 200 pages in 4 templates with 1,000 media files:
+(200 × 3 + 40 × 3 + 4 × 6 + 1,000) × 2.5 s, about 73 minutes.
 Fill every `<...>` from what you found; delete a question only when you already know the answer,
 and say what you found instead. Keep each default exactly as stated, so a person who answers
 "go" gets a predictable run. For an `experience: new` person, add one plain sentence under the
@@ -48,8 +52,9 @@ opening explaining what a repository, a staging deploy and a pull request are.
     What is missing and what happens:
     <one line per gap, from the list below>
 
-    Reply with any changes, or just "go". The crawl takes about <estimate> for <n> pages, and
-    after it I'll send one status message and keep going; I won't ask anything else.
+    Reply with any changes, or just "go". Reading the live site takes about <estimate> for <n>
+    pages and <m> media files, and after the capture I'll send one status message and keep
+    going; I won't ask anything else.
 
 ## What is missing and what happens
 
