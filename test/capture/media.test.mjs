@@ -90,10 +90,11 @@ test('the capture saves the theme stylesheet and a CSS manifest', () => {
 test('media.json lists every media file with its sources, pages, type and size', () => {
   assert.equal(mediaRun.code, 0, mediaRun.stderr);
   const media = readJson(join(cap, 'media.json'));
-  // 19 = 15 images (5 originals x 3 sizes, all in the REST media list) + brochure.pdf + logo.svg
-  // (the header logo, which is also the favicon) + the two WOFF2 fonts the theme CSS loads.
-  // The fixture has no separate favicon file and no CSS background image.
-  assert.equal(media.length, 19, media.map((m) => m.path).join('\n'));
+  // 20 = 15 images (5 originals x 3 sizes, all in the REST media list) + brochure.pdf + logo.svg
+  // (the header logo, which is also the favicon) + the two WOFF2 fonts the theme CSS loads +
+  // og-card.jpg (the 1200x630 og:image). The fixture has no separate favicon file and no CSS
+  // background image.
+  assert.equal(media.length, 20, media.map((m) => m.path).join('\n'));
   for (const m of media) {
     assert.equal(m.status, 200, m.path);
     assert.ok(m.bytes > 0, m.path);
@@ -104,7 +105,8 @@ test('media.json lists every media file with its sources, pages, type and size',
   const sorted = media.map((m) => m.path);
   assert.deepEqual(sorted, [...sorted].sort(), 'sorted by path');
 
-  assert.deepEqual(by(`${UPLOADS}hero.jpg`).source, ['srcset', 'rest', 'og']);
+  assert.deepEqual(by(`${UPLOADS}hero.jpg`).source, ['srcset', 'rest']);
+  assert.deepEqual(by(`${UPLOADS}og-card.jpg`).source, ['og']);
   assert.deepEqual(by(`${UPLOADS}brochure.pdf`).source, ['html', 'rest']);
   assert.deepEqual(by(`${UPLOADS}logo.svg`).source, ['html']);
   assert.equal(by(`${UPLOADS}logo.svg`).contentType, 'image/svg+xml');
@@ -114,7 +116,7 @@ test('media.json lists every media file with its sources, pages, type and size',
   assert.ok(by(`${UPLOADS}hero.jpg`).referencedBy.includes('/'));
   assert.ok(by('/wp-content/themes/fixture/fonts/fixture-serif.woff2').referencedBy.includes('/contact/'));
 
-  const images = media.filter((m) => m.path.startsWith(UPLOADS) && /\.(jpg|webp)$/.test(m.path));
+  const images = media.filter((m) => m.path.startsWith(UPLOADS) && /\.(jpg|webp)$/.test(m.path) && !m.path.endsWith('/og-card.jpg'));
   assert.equal(images.length, 15);
   assert.ok(images.every((m) => m.source.includes('rest')), 'the REST media list names every size');
 });

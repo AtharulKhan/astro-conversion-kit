@@ -103,12 +103,12 @@ after(async () => {
 const live = (base, args = []) => verifyLive(['--base', base, '--baseline', baseline, '--delay', '0', ...args]);
 
 // 15 routes at 200 (13 pages, the feed, the brochure PDF), 13 redirects (/?p=2 -> / is a no-op,
-// skipped), the sitemap, 19 media.
+// skipped), the sitemap, 20 media.
 test('a dist-good build served live passes every check', async () => {
   const host = await serve(good);
   const result = await live(host.origin);
   assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /^verify-live: 48 checked, 0 failed$/m);
+  assert.match(result.stdout, /^verify-live: 49 checked, 0 failed$/m);
   assert.match(result.stdout, /^ {2}ok route \/hidden-page\/$/m);
   assert.match(result.stdout, /^ {2}ok redirect \/old-services -> \/services\/$/m);
 });
@@ -118,14 +118,14 @@ test('a route missing from the deploy fails, naming it', async () => {
   const result = await live(host.origin);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^ {2}FAIL route \/hidden-page\/ status: expected 200, got 404$/m);
-  assert.match(result.stdout, /^verify-live: 48 checked, 1 failed$/m);
+  assert.match(result.stdout, /^verify-live: 49 checked, 1 failed$/m);
 });
 
 test('--bypass is sent as x-vercel-protection-bypass on every request', async () => {
   const host = await serve(good);
   const result = await live(host.origin, ['--bypass', 'secret-value']);
   assert.equal(result.code, 0, result.stdout);
-  assert.equal(host.headers.length, 48);
+  assert.equal(host.headers.length, 49);
   assert.ok(host.headers.every((h) => h['x-vercel-protection-bypass'] === 'secret-value'));
 });
 
@@ -222,7 +222,7 @@ test('--sample N checks N routes, always / and one route per template', async ()
   const checked = routes.filter((r) => !skipped.includes(r.path));
   assert.ok(checked.some((r) => r.path === '/'));
   assert.deepEqual(new Set(checked.map((r) => r.template)), templates);
-  assert.equal(json.checked, 8 + 13 + 1 + 19, '13 redirects: the /?p=2 no-op is skipped');
+  assert.equal(json.checked, 8 + 13 + 1 + 20, '13 redirects: the /?p=2 no-op is skipped');
 });
 
 test('three consecutive 429s stop the run with exit 3', async () => {

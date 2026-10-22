@@ -148,7 +148,7 @@ test('redirects: a shortlink with no target is left out and named on stderr', as
 
 test('media, forms, scripts and text', () => {
   const media = readJson(baseline, 'media.json');
-  assert.equal(media.length, 19);
+  assert.equal(media.length, 20);
   assert.deepEqual(media.find((m) => m.path.endsWith('/brochure.pdf')), {
     path: '/wp-content/uploads/2026/01/brochure.pdf',
     bytes: media.find((m) => m.path.endsWith('/brochure.pdf')).bytes,
@@ -179,7 +179,7 @@ test('counts.json sums the baseline', () => {
     byStatus: { 200: 15, 404: 1 },
     byTemplate: { archive: 2, home: 1, other: 3, page: 6, 'page-2': 1, 'single-post': 3 },
     redirects: { seed: 2, shortlink: 12 },
-    media: 19,
+    media: 20,
     forms: 1,
     scripts: 2,
   });

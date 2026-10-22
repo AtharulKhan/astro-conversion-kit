@@ -142,7 +142,7 @@ test('verify-live passes against the staging build served the way Vercel serves 
 test('pre-launch passes the release build but for the live og:image size and the rewritten feed', () => {
   const gate = R.readJson(join(`${SITE}-pre-launch`, 'gate.json'));
   const failing = gate.checks.filter((c) => c.status === 'fail');
-  assert.deepEqual(failing.map((c) => c.id).sort(), ['output.internal-refs', 'output.og-image'], passed(results.preLaunch));
+  assert.deepEqual(failing.map((c) => c.id).sort(), ['output.internal-refs'], passed(results.preLaunch));
   const refs = failing.find((c) => c.id === 'output.internal-refs');
   assert.ok(refs.evidence.every((e) => / -> \/feed$/.test(e.value ?? e.text ?? JSON.stringify(e))), JSON.stringify(refs.evidence));
   assert.equal(results.preLaunch.code, 1);
