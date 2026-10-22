@@ -4,43 +4,63 @@
 // decision that kept it, plus the two narrow rules (the kit's form-id placeholder, and the
 // predecessor checks that misread the trailing-slash rules). Everything else blocks.
 // Pure: reads files only. Exit codes: 0 nothing blocks, 1 something blocks, 2 usage or input error.
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node prelaunch-reconcile.mjs --findings <pre-launch bundle>/gate.json
-                                  --baseline baseline --plan docs/plan.md [--json]
+                                  --baseline baseline --plan docs/plan.md
+                                  [--capture capture] [--dir .] [--state .conversion/state.json] [--json]
 
 Reads the pre-launch bundle (gate.json, or findings.json with gate.json beside it) and sorts
 every failing check into accepted or blocking.
 
 A check is accepted only when every row it names (path and field: title, description, h1,
 canonical, og:image, favicon, placeholder text) equals what baseline/seo.json, baseline/text/,
-baseline/routes.json or baseline/media.json recorded for live, and a row of the Decisions table
-in --plan names that path or the check id. Two narrow rules need no decision:
+baseline/routes.json, baseline/media.json or capture/assets/index.json recorded for live, and a
+row of the Decisions table in --plan names that path or the check id (the home page "/" only
+when written \`/\`). A missing icon counts as live's only when the capture asked for it and live
+answered something other than 200; an icon's size only when live's file has the same size.
+Narrow rules that need no decision:
   placeholders.form-id            every hit is the kit's placeholder formspree.io/f/REPLACE
                                   (the form id is still on the needs-you list)
   predecessor.wildcard-redirects  every row is one of the kit's trailing-slash rules
   predecessor.redirect-chains     every row is a slash-only loop (/about -> /about)
+  hygiene.pushed                  --dir has no git remote and a needs-you item in --state says
+                                  to push (no PR can be opened until the person pushes)
 Any other failing check blocks, a crashed one included, and so does a check whose evidence was
 cut at pre-launch's listing cap (the unlisted rows cannot be compared).
 
   --findings <file>  gate.json or findings.json from pre-launch's --out bundle (required)
   --baseline <dir>   the baseline folder (required)
   --plan <file>      docs/plan.md with its Decisions table (required)
+  --capture <dir>    the capture folder, for capture/assets/index.json (default: capture)
+  --dir <dir>        the site repository, for hygiene.pushed (default: .)
+  --state <file>     the run state with needsYou (default: .conversion/state.json)
   --json             print { failing, accepted[], blocking[] } instead of lines
   --help             show this help
 
 Exit codes: 0 nothing blocks, 1 a failing check blocks, 2 usage or input error.`;
 
-// parity-gates' SLASH_RULES (build-redirects.mjs), as pre-launch prints them: "<source> -> <destination>".
-// Copied, not imported, because this skill is copied on its own; a test keeps the two equal.
-export const SLASH_RULE_PAIRS = new Set([
-  '/:path((?!\\.well-known(?:/|$))(?:[^/]+/)*[^/.]+) -> /:path/',
-  '/:path((?:[^/]+/)*[^/]+\\.\\w+)/ -> /:path',
-  '/:path(.+)/ -> /:path',
-]);
+// The shapes of parity-gates' slashRules() (build-redirects.mjs), with @@ where the extension
+// alternation goes: each extension in any letter case ([Jj][Pp][Gg], digits as written). Copied,
+// not imported, because this skill is copied on its own; a test checks every rule it writes.
+const SLASH_SHAPES = [
+  ['/:path((?!\\.well-known(?:/|$))(?!(?:[^/]+/)*[^/]+\\.(?:@@)$)(?:[^/]+/)*[^/]+)', '/:path/'],
+  ['/:path((?:[^/]+/)*[^/]+\\.(?:@@))/', '/:path'],
+  ['/:path(.+)/', '/:path'],
+];
+const EXTENSION = '(?:\\[[A-Z][a-z]\\]|[0-9])+';
+const SLASH_PATTERNS = SLASH_SHAPES.map(([source, destination]) => ({
+  source: new RegExp(`^${source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace('@@', `${EXTENSION}(?:\\|${EXTENSION})*`)}$`),
+  destination,
+}));
+
+export function isSlashRule(source, destination) {
+  return SLASH_PATTERNS.some((p) => p.destination === destination && p.source.test(source));
+}
 
 const FORM_PLACEHOLDER = /^formspree\.io\/f\/REPLACE$/i;
 
@@ -73,14 +93,34 @@ function pathnameOf(value) {
     return null;
   }
 }
-const sameUrl = (a, b) => typeof a === 'string' && typeof b === 'string' && (a === b || (pathnameOf(a) !== null && pathnameOf(a) === pathnameOf(b)));
+function hostOf(value) {
+  try {
+    return new URL(value).host;
+  } catch {
+    return null;
+  }
+}
+// The same url: equal, or the same path where both name a host and the hosts agree.
+const sameUrl = (a, b) => typeof a === 'string' && typeof b === 'string' && (a === b
+  || (pathnameOf(a) !== null && pathnameOf(a) === pathnameOf(b) && (hostOf(a) === null || hostOf(b) === null || hostOf(a) === hostOf(b))));
 const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
 const empty = (v) => v === null || v === undefined || String(v).trim() === '';
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ------------------------------------------------------------------------------- the inputs
 
-export function loadBaseline(dir) {
+// The size a PNG's IHDR records, or null.
+function pngSize(file) {
+  try {
+    const b = readFileSync(file);
+    if (b.length < 24 || b.readUInt32BE(0) !== 0x89504e47 || b.toString('latin1', 12, 16) !== 'IHDR') return null;
+    return `${b.readUInt32BE(16)}x${b.readUInt32BE(20)}`;
+  } catch {
+    return null;
+  }
+}
+
+export function loadBaseline(dir, captureDir = null) {
   const read = (name, fallback) => (existsSync(join(dir, name)) ? JSON.parse(readFileSync(join(dir, name), 'utf8')) : fallback);
   if (!existsSync(join(dir, 'seo.json'))) throw new Error(`${join(dir, 'seo.json')} not found`);
   const seo = read('seo.json');
@@ -90,6 +130,9 @@ export function loadBaseline(dir) {
   const snapshots = new Map(routes.filter((r) => r.snapshot).map((r) => [r.path, r.snapshot]));
   const files = new Set([...routes.map((r) => r.path), ...media.map((m) => m.path)]);
   const mediaPaths = new Set(media.map((m) => m.path));
+  const assetsFile = captureDir ? join(captureDir, 'assets', 'index.json') : null;
+  const assets = assetsFile && existsSync(assetsFile) ? JSON.parse(readFileSync(assetsFile, 'utf8')) : [];
+  const assetAt = (path) => assets.find((a) => a.url && pathnameOf(a.url) === path) ?? null;
   return {
     // The baseline's own spelling of a build path, or null when live had no such page.
     page(path) {
@@ -103,23 +146,43 @@ export function loadBaseline(dir) {
       return existsSync(file) ? readFileSync(file, 'utf8') : '';
     },
     has: (path) => files.has(path),
+    // What live answered for a site file: 200, another status, or null when nothing asked.
+    liveStatus(path) {
+      const route = routes.find((r) => r.path === path);
+      if (route) return route.status;
+      if (mediaPaths.has(path)) return 200;
+      return assetAt(path)?.status ?? null;
+    },
+    // The size of live's PNG at path, from the capture's saved asset.
+    livePngSize(path) {
+      const asset = assetAt(path);
+      return asset?.status === 200 && asset.file ? pngSize(join(captureDir, asset.file)) : null;
+    },
+    servedIcon: (pattern) => [...files].some((p) => pattern.test(p)) || assets.some((a) => a.status === 200 && a.url && pattern.test(pathnameOf(a.url) ?? '')),
     anyFile: (pattern) => [...files].some((p) => pattern.test(p)),
     isMedia: (path) => mediaPaths.has(path),
     pagesWithOgImage: (image) => Object.keys(seo).filter((p) => sameUrl(seo[p].og?.image, image)),
   };
 }
 
-// [{ id, topic }] from the Decisions table rows (| dN | … |).
+// [{ id, text, topic }] from the Decisions table rows (| dN | date | topic | … |).
 export function loadDecisions(planFile) {
   return readFileSync(planFile, 'utf8').split('\n')
     .map((line) => /^\|\s*(d\d+)\s*\|(.*)$/.exec(line.trim()))
     .filter(Boolean)
-    .map((m) => ({ id: m[1], text: m[2] }));
+    .map((m) => ({ id: m[1], text: m[2], topic: (m[2].split('|')[1] ?? '').trim() }));
 }
 
-function decisionNaming(decisions, names) {
-  const tokens = names.filter(Boolean).map((name) => new RegExp(`(^|[\\s(\`'"])${escape(name)}(?=$|[\\s)\`'",;:.])`));
-  return decisions.find((d) => tokens.some((t) => t.test(d.text)))?.id ?? null;
+// A row names a path or a check id as a whole token. The home page "/" is a token only when it is
+// written `/`, or opens the Topic column (`/ …`): a spaced slash ("keep / drop") is prose.
+function names(decision, name) {
+  if (name === '/') return decision.text.includes('`/`') || /^\/(\s|$)/.test(decision.topic);
+  return new RegExp(`(^|[\\s(\`'"])${escape(name)}(?=$|[\\s)\`'",;:.])`).test(decision.text);
+}
+
+function decisionNaming(decisions, wanted) {
+  const tokens = [...new Set(wanted.filter(Boolean))];
+  return decisions.find((d) => tokens.some((t) => names(d, t)))?.id ?? null;
 }
 
 // The failing checks, as { id, detail, evidence[] }: gate.json's fail checks, or findings.json's
@@ -201,10 +264,18 @@ const ROWS = {
   'output.favicon-set': (base, value) => {
     const row = (paths, ok, reason) => [{ text: value, field: 'favicon', paths, ok, reason: ok ? null : reason }];
     let m = /^(\S+) is missing$/.exec(value);
-    if (m) return row([`/${m[1]}`], !base.has(`/${m[1]}`), `live served /${m[1]}`);
-    if (value.startsWith('neither favicon.svg nor')) return row(['/favicon.svg'], !base.anyFile(/^\/(favicon\.svg|(favicon|icon)-[\w.]*\.png)$/i), 'live served a scalable or sized icon');
-    m = /^apple-touch-icon\.png is \d+x\d+/.exec(value);
-    if (m) return row(['/apple-touch-icon.png'], base.has('/apple-touch-icon.png'), 'live had no apple-touch-icon.png');
+    if (m) {
+      const path = `/${m[1]}`;
+      const status = base.liveStatus(path);
+      if (status === null) return row([path], false, `the capture never asked for ${path}, so it cannot say live lacked it`);
+      return row([path], status !== 200, `live served ${path}`);
+    }
+    if (value.startsWith('neither favicon.svg nor')) return row(['/favicon.svg'], !base.servedIcon(/^\/(?:.*\/)?(favicon\.svg|(favicon|icon)-[\w.]*\.png)$/i), 'live served a scalable or sized icon');
+    m = /^apple-touch-icon\.png is (\d+x\d+)/.exec(value);
+    if (m) {
+      const live = base.livePngSize('/apple-touch-icon.png');
+      return row(['/apple-touch-icon.png'], live === m[1], live ? `live's is ${live}` : 'the capture holds no apple-touch-icon.png to compare');
+    }
     if (value === 'no page links to a web app manifest') return row([], !base.anyFile(/(\.webmanifest|manifest\.json)$/), 'live served a manifest');
     return null;
   },
@@ -240,8 +311,36 @@ function placeholderRows(base, evidence) {
 
 const listedCount = (detail) => Number((/^(\d+)\b/.exec(detail) ?? /^none of the (\d+)\b/.exec(detail) ?? [])[1] ?? 0);
 
-function narrow(check) {
+// No remote: `git remote` in dir prints nothing (a folder git does not know counts as no remote).
+function hasRemote(dir) {
+  try {
+    return execFileSync('git', ['remote'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() !== '';
+  } catch {
+    return false;
+  }
+}
+
+function needsYou(stateFile) {
+  try {
+    return (JSON.parse(readFileSync(stateFile, 'utf8')).needsYou ?? []).map((n) => (typeof n === 'string' ? n : `${n.item ?? ''} ${n.command ?? ''}`));
+  } catch {
+    return [];
+  }
+}
+
+function narrow(check, env) {
   const values = check.evidence.map((e) => String(e.value));
+  if (check.id === 'hygiene.pushed') {
+    const text = values[0] ?? check.detail;
+    if (hasRemote(env.dir)) return { ok: false, rows: [{ text, ok: false, reason: `${env.dir} has a remote: push the branch` }] };
+    const listed = needsYou(env.state).some((n) => /\bpush/i.test(n));
+    return {
+      ok: listed,
+      rule: 'no-remote',
+      decision: 'push (needs you)',
+      rows: [{ text, ok: listed, reason: listed ? null : `no needs-you item in ${env.state} says to push` }],
+    };
+  }
   if (values.length === 0) return null;
   if (check.id === 'placeholders.form-id') {
     const ok = values.every((v) => FORM_PLACEHOLDER.test(/ — (.+)$/.exec(v)?.[1] ?? ''));
@@ -249,7 +348,8 @@ function narrow(check) {
   }
   if (check.id === 'predecessor.wildcard-redirects') {
     const rows = values.map((text) => {
-      const ok = SLASH_RULE_PAIRS.has(/^"(.+)" covers /.exec(text)?.[1]);
+      const pair = /^"(.+) -> (\S+)" covers /.exec(text);
+      const ok = Boolean(pair) && isSlashRule(pair[1], pair[2]);
       return { text, ok, reason: ok ? null : 'not one of the kit trailing-slash rules' };
     });
     return { ok: rows.every((r) => r.ok), rule: 'slash', decision: null, rows };
@@ -265,11 +365,11 @@ function narrow(check) {
   return undefined;
 }
 
-export function reconcile(failing, base, decisions) {
+export function reconcile(failing, base, decisions, env = { dir: '.', state: join('.conversion', 'state.json') }) {
   const accepted = [];
   const blocking = [];
   for (const check of failing) {
-    const special = narrow(check);
+    const special = narrow(check, env);
     if (special !== undefined) {
       if (special?.ok) accepted.push({ id: check.id, rule: special.rule, decision: special.decision, rows: special.rows });
       else blocking.push({ id: check.id, detail: check.detail, rows: special?.rows ?? [] });
@@ -310,6 +410,7 @@ function lines(result) {
     for (const r of a.rows) {
       if (a.rule === 'slash') out.push(`accepted  ${a.id}: ${r.text} — trailing-slash rule (known launch-skills limitation)`);
       else if (a.rule === 'form-id') out.push(`accepted  ${a.id}: ${r.text} — form id pending (needs you)`);
+      else if (a.rule === 'no-remote') out.push(`accepted  ${a.id}: ${r.text} — no remote yet; the push is on the needs-you list`);
       else out.push(`accepted  ${a.id}: ${r.paths.join(', ') || r.text} ${r.field} — reproduced from live (${r.decision})`);
     }
   }
@@ -326,7 +427,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '--json') opts[arg.slice(2)] = true;
-    else if (['--findings', '--baseline', '--plan'].includes(arg)) {
+    else if (['--findings', '--baseline', '--plan', '--capture', '--dir', '--state'].includes(arg)) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
       opts[arg.slice(2)] = value;
@@ -348,7 +449,11 @@ function main() {
     }
     for (const name of ['findings', 'baseline', 'plan']) if (!opts[name]) throw new Error(`--${name} is required`);
     for (const name of ['findings', 'plan']) if (!existsSync(opts[name])) throw new Error(`${opts[name]} not found`);
-    result = reconcile(loadFailing(opts.findings), loadBaseline(opts.baseline), loadDecisions(opts.plan));
+    const dir = opts.dir ?? '.';
+    result = reconcile(loadFailing(opts.findings), loadBaseline(opts.baseline, opts.capture ?? 'capture'), loadDecisions(opts.plan), {
+      dir,
+      state: opts.state ?? join(dir, '.conversion', 'state.json'),
+    });
   } catch (err) {
     console.error(`prelaunch-reconcile: ${err.message}`);
     console.error('Run with --help for usage.');

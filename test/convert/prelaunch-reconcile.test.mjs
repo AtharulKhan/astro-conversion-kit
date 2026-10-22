@@ -5,21 +5,37 @@ import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, w
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { buildFixtureBaseline } from '../gates/fixtures/baseline.mjs';
-import { SLASH_RULES } from '../../skills/parity-gates/scripts/build-redirects.mjs';
-import { SLASH_RULE_PAIRS } from '../../skills/convert-site/scripts/prelaunch-reconcile.mjs';
+import { slashRules } from '../../skills/parity-gates/scripts/build-redirects.mjs';
+import { isSlashRule } from '../../skills/convert-site/scripts/prelaunch-reconcile.mjs';
 
 const SCRIPT = resolve(import.meta.dirname, '../../skills/convert-site/scripts/prelaunch-reconcile.mjs');
 
-function run(args) {
+function run(args, cwd) {
   return new Promise((done) => {
-    execFile(process.execPath, [SCRIPT, ...args], (err, stdout, stderr) => done({ code: err ? err.code : 0, stdout, stderr }));
+    execFile(process.execPath, [SCRIPT, ...args], { cwd }, (err, stdout, stderr) => done({ code: err ? err.code : 0, stdout, stderr }));
   });
+}
+
+function git(cwd, ...args) {
+  return new Promise((done, fail) => {
+    execFile('git', args, { cwd, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }, (err) => (err ? fail(err) : done()));
+  });
+}
+
+// A PNG header carrying only its size: enough for the IHDR width and height to be read.
+function pngOf(width, height) {
+  const b = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(b);
+  b.writeUInt32BE(width, 16);
+  b.writeUInt32BE(height, 20);
+  return b;
 }
 
 let root;
 let baseline;
 let plan;
 let bare;
+let capture;
 let n = 0;
 
 // The live fixture with three oddities planted the way a real capture records them: /services/
@@ -35,6 +51,16 @@ before(async () => {
   seo['/services/siding/'].title = seo['/services/roofing/'].title;
   writeFileSync(seoFile, JSON.stringify(seo));
   appendFileSync(join(baseline, 'text', 'about.txt'), '\nComing soon\n');
+  // The capture's assets: the favicon the home page links (an SVG), a live 404 for /favicon.ico,
+  // and a 152x152 apple-touch-icon.png.
+  capture = join(root, 'capture');
+  mkdirSync(join(capture, 'assets'), { recursive: true });
+  writeFileSync(join(capture, 'assets', 'apple-touch-icon.png'), pngOf(152, 152));
+  writeFileSync(join(capture, 'assets', 'index.json'), JSON.stringify([
+    { kind: 'favicon', url: 'https://live.example.com/wp-content/uploads/2026/01/favicon.svg', file: 'assets/favicon.svg', status: 200, note: null },
+    { kind: 'favicon.ico', url: 'https://live.example.com/favicon.ico', file: null, status: 404, note: 'missing' },
+    { kind: 'apple-touch-icon', url: 'https://live.example.com/apple-touch-icon.png', file: 'assets/apple-touch-icon.png', status: 200, note: null },
+  ]));
   plan = join(root, 'plan.md');
   writeFileSync(plan, [
     '# Conversion plan', '', '## Decisions', '',
@@ -62,20 +88,25 @@ function gateFile(checks) {
   return file;
 }
 
-const reconcile = (checks, { planFile = plan, json = true } = {}) =>
-  run(['--findings', gateFile(checks), '--baseline', baseline, '--plan', planFile, ...(json ? ['--json'] : [])]);
+const reconcile = (checks, { planFile = plan, json = true, captureDir = capture, extra = [], cwd } = {}) =>
+  run(['--findings', gateFile(checks), '--baseline', baseline, '--plan', planFile, '--capture', captureDir, ...extra, ...(json ? ['--json'] : [])], cwd);
 const parsed = (result) => JSON.parse(result.stdout);
 
 const SLASH_ROWS = {
   wildcards: failing('predecessor.wildcard-redirects', '1 wildcard rule stand in for urls that need their own destinations', [
-    '"/:path((?!\\.well-known(?:/|$))(?:[^/]+/)*[^/.]+) -> /:path/" covers 13 old content urls: /about, /blog, …',
+    `"${slashRules('always')[0].source} -> /:path/" covers 13 old content urls: /about, /blog, …`,
   ], 'text'),
   chains: failing('predecessor.redirect-chains', '1 rule do not reach their destination in one hop', ['/about -> /about is a loop and serves nothing'], 'text'),
 };
 
-test('the copied slash rules are the ones build-redirects writes', () => {
-  const pairs = [...SLASH_RULES.always, ...SLASH_RULES.never].map((r) => `${r.source} -> ${r.destination}`);
-  assert.deepEqual([...SLASH_RULE_PAIRS].sort(), pairs.sort());
+test('every slash rule build-redirects writes is recognised, whatever extensions the site adds; a doctored one is not', () => {
+  for (const rules of [slashRules('always'), slashRules('always', ['foo', 'Mp3', 'x3d']), slashRules('never')]) {
+    for (const r of rules) assert.ok(isSlashRule(r.source, r.destination), r.source);
+  }
+  const [first, second] = slashRules('always');
+  assert.ok(!isSlashRule(first.source, '/elsewhere/'));
+  assert.ok(!isSlashRule(second.source.replace('[Jj][Pp][Gg]', '.*'), second.destination));
+  assert.ok(!isSlashRule('/blog/:path*', '/news/'));
 });
 
 test('a passing gate: nothing to reconcile, exit 0', async () => {
@@ -169,12 +200,55 @@ test('canonical, og:image and favicon rows block when live had them', async () =
   assert.deepEqual(parsed(result).blocking.map((b) => b.id), ['output.canonical', 'output.og-image']);
 });
 
-test('a missing favicon.ico live never had is accepted with a decision naming it', async () => {
+test('favicon rows: accepted only on the capture evidence that live lacked the file or had the same size', async () => {
   const planFile = join(root, 'favicon-plan.md');
-  writeFileSync(planFile, `${readFileSync(bare, 'utf8')}| d2 | 2026-10-22 | no /favicon.ico on live | reproduce live | reproduce live | parity | none |\n`);
-  const result = await reconcile([failing('output.favicon-set', 'favicon.ico is missing', ['favicon.ico is missing'], 'file')], { planFile });
-  assert.equal(result.code, 0, result.stdout);
-  assert.equal(parsed(result).accepted[0].decision, 'd2');
+  writeFileSync(planFile, `${readFileSync(bare, 'utf8')}| d2 | 2026-10-22 | output.favicon-set: icons as live had them | reproduce live | reproduce live | parity | none |\n`);
+  const favicon = (value) => reconcile([failing('output.favicon-set', value, [value], 'file')], { planFile });
+  const ico = await favicon('favicon.ico is missing');
+  assert.equal(ico.code, 0, ico.stdout);
+  assert.equal(parsed(ico).accepted[0].decision, 'd2');
+  // Live linked an SVG favicon, so a missing scalable icon is not what live had.
+  assert.equal((await favicon('neither favicon.svg nor a favicon-<size>.png / icon-<size>.png exists')).code, 1);
+  assert.equal((await favicon('apple-touch-icon.png is 152x152, not 180x180')).code, 0);
+  const smaller = await favicon('apple-touch-icon.png is 120x120, not 180x180');
+  assert.equal(smaller.code, 1);
+  assert.match(parsed(smaller).blocking[0].rows[0].reason, /live's is 152x152/);
+  // A file the capture never asked for is not evidence that live lacked it.
+  const unasked = await reconcile([failing('output.favicon-set', 'favicon.ico is missing', ['favicon.ico is missing'], 'file')], { planFile, captureDir: join(root, 'no-capture') });
+  assert.equal(unasked.code, 1);
+  assert.match(parsed(unasked).blocking[0].rows[0].reason, /the capture never asked for \/favicon\.ico/);
+});
+
+test('a bare / in a decision row is not the home page; a backticked one is', async () => {
+  const row = (topic, reason) => `| d2 | 2026-10-22 | ${topic} | reproduce live | reproduce live | ${reason} | none |\n`;
+  const loose = join(root, 'slash-loose.md');
+  writeFileSync(loose, `${readFileSync(bare, 'utf8')}${row('keep / drop the hero', 'keep / drop')}`);
+  const home = [failing('output.h1', '1 of 14 pages affected', ['index.html has 1 h1 elements'])];
+  assert.equal((await reconcile(home, { planFile: loose })).code, 1);
+  const ticked = join(root, 'slash-ticked.md');
+  writeFileSync(ticked, `${readFileSync(bare, 'utf8')}${row('the h1 on `/`', 'parity')}`);
+  const ok = await reconcile(home, { planFile: ticked });
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.equal(parsed(ok).accepted[0].decision, 'd2');
+});
+
+test('hygiene.pushed is accepted only with no remote and the push on the needs-you list', async () => {
+  const site = join(root, 'site-no-remote');
+  mkdirSync(join(site, '.conversion'), { recursive: true });
+  await git(site, 'init', '-q');
+  const state = join(site, '.conversion', 'state.json');
+  const pushed = [failing('hygiene.pushed', 'this branch has no upstream, so the commit being deployed exists on this machine only', ['git rev-parse --abbrev-ref --symbolic-full-name @{u} reported no upstream'], 'text')];
+  writeFileSync(state, JSON.stringify({ needsYou: ['gh is not logged in: create the repo, push main and astro-rebuild, open the PR from .conversion/pr-body.md'] }));
+  const ok = await reconcile(pushed, { cwd: site });
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.equal(parsed(ok).accepted[0].rule, 'no-remote');
+  writeFileSync(state, JSON.stringify({ needsYou: [] }));
+  assert.equal((await reconcile(pushed, { cwd: site })).code, 1, 'not on the needs-you list');
+  writeFileSync(state, JSON.stringify({ needsYou: ['push main and astro-rebuild'] }));
+  await git(site, 'remote', 'add', 'origin', 'https://github.com/example/site.git');
+  const remote = await reconcile(pushed, { cwd: site });
+  assert.equal(remote.code, 1);
+  assert.match(parsed(remote).blocking[0].rows[0].reason, /has a remote/);
 });
 
 test('any other failing check blocks, a crashed one included', async () => {
