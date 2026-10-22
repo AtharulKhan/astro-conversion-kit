@@ -1,5 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { startFixture } from './fixture/serve.mjs';
 
 let fixture;
@@ -191,5 +194,25 @@ test('delayMs delays every response', async () => {
     assert.ok(Date.now() - started >= 140);
   } finally {
     await slow.close();
+  }
+});
+
+test('root serves pages from another copy of the site, with the origin filled in', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'fixture-root-'));
+  cpSync(new URL('./fixture/site/', import.meta.url), root, { recursive: true });
+  writeFileSync(join(root, 'wp-content/themes/fixture/style.css'), 'body { color: red; }\n');
+  rmSync(join(root, 'about'), { recursive: true });
+  const copy = await startFixture({ root });
+  try {
+    const css = await fetch(`${copy.origin}/wp-content/themes/fixture/style.css`);
+    assert.equal(await css.text(), 'body { color: red; }\n');
+    const home = await fetch(`${copy.origin}/`);
+    assert.ok((await home.text()).includes(`${copy.origin}/hidden-page/`));
+    const about = await fetch(`${copy.origin}/about/`);
+    assert.equal(about.status, 404);
+    assert.match(await about.text(), /error404/);
+  } finally {
+    await copy.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });

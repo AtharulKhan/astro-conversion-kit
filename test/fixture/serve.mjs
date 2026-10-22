@@ -1,5 +1,6 @@
 // Fixture server: a static imitation of a WordPress site for tests.
-// startFixture({ port, blockAfter, delayMs }) -> { origin, close() }
+// startFixture({ port, blockAfter, delayMs, root }) -> { origin, close() }
+// root serves pages and assets from another copy of site/ (wp-json and redirects stay the fixture's).
 import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, resolve, sep } from 'node:path';
@@ -38,15 +39,15 @@ const SHORTLINKS = new Map(
   ['pages', 'posts'].flatMap((type) => readWpJson(type).map((item) => [String(item.id), item.link])),
 );
 
-function resolveFile(pathname) {
+function resolveFile(pathname, site) {
   let decoded;
   try {
     decoded = decodeURIComponent(pathname);
   } catch {
     return null;
   }
-  const target = resolve(SITE, `.${decoded}`);
-  if (target !== SITE && !target.startsWith(SITE + sep)) return null;
+  const target = resolve(site, `.${decoded}`);
+  if (target !== site && !target.startsWith(site + sep)) return null;
   const candidates = decoded.endsWith('/')
     ? [join(target, 'index.html'), join(target, 'index.xml')]
     : [target];
@@ -89,7 +90,7 @@ function wpJson(type, searchParams, origin) {
   };
 }
 
-function route(req, origin) {
+function route(req, origin, site) {
   const url = new URL(req.url, origin);
   const { pathname, searchParams } = url;
 
@@ -106,7 +107,7 @@ function route(req, origin) {
 
   if (pathname === '/' && searchParams.has('p')) {
     const link = SHORTLINKS.get(searchParams.get('p'));
-    if (!link) return notFound(origin);
+    if (!link) return notFound(origin, site);
     return { status: 301, headers: { Location: link.replace(ORIGIN_PLACEHOLDER, origin) }, body: '' };
   }
 
@@ -125,28 +126,29 @@ function route(req, origin) {
     };
   }
 
-  const file = resolveFile(pathname);
-  if (file && !file.startsWith(join(SITE, 'wp-json') + sep)) {
+  const file = resolveFile(pathname, site);
+  if (file && !file.startsWith(join(site, 'wp-json') + sep)) {
     return { status: 200, headers: { 'Content-Type': contentTypeFor(file) }, body: body(file, origin) };
   }
 
-  return notFound(origin);
+  return notFound(origin, site);
 }
 
-function notFound(origin) {
-  const file = join(SITE, '404.html');
+function notFound(origin, site) {
+  const file = join(site, '404.html');
   return { status: 404, headers: { 'Content-Type': contentTypeFor(file) }, body: body(file, origin) };
 }
 
-function respond(req, origin) {
+function respond(req, origin, site) {
   try {
-    return route(req, origin);
+    return route(req, origin, site);
   } catch (err) {
     return { status: 500, headers: { 'Content-Type': 'text/plain' }, body: `Internal Server Error: ${err.message}` };
   }
 }
 
-export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0 } = {}) {
+export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, root = SITE } = {}) {
+  const site = resolve(root);
   let requests = 0;
   const server = createServer((req, res) => {
     requests += 1;
@@ -155,7 +157,7 @@ export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0 } = 
       const origin = `http://${req.headers.host ?? `127.0.0.1:${server.address().port}`}`;
       const response = blocked
         ? { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain' }, body: 'Too Many Requests' }
-        : respond(req, origin);
+        : respond(req, origin, site);
       const payload = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body);
       res.writeHead(response.status, { ...response.headers, 'Content-Length': payload.length });
       res.end(req.method === 'HEAD' ? undefined : payload);
