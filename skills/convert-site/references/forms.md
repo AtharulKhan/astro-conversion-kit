@@ -4,6 +4,14 @@ A static site cannot receive a form, so every form posts to a third-party endpoi
 the default; any endpoint that accepts a plain HTML `POST` works the same way. The live site's
 form is never submitted.
 
+## Which forms this covers
+
+Only forms that send something (`method="post"`: contact, quote, sign-up). A `GET` form, such
+as a search box, is not a contact form: it is reproduced as captured and compared with live,
+and needs no endpoint, honeypot or thank-you page. The endpoint question (and the form id, the
+test submission and `placeholders.form-id`) applies to POST forms only; a site whose only form
+is a GET search box has none of them.
+
 ## What stays the same
 
 The forms gate compares each built form with `baseline/forms.json`: the same field names in

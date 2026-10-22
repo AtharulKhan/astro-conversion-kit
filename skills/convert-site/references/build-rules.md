@@ -105,7 +105,15 @@ parity and this file is wrong: say so and fix this file.
   hand-typed. The sitemaps gate decides what they must list.
 - `src/pages/robots.txt.js` stays as scaffolded; replace its indexable body with the captured
   `capture/robots.txt` (sitemap URLs adjusted only if their file names changed).
-- `src/pages/404.astro` holds the captured 404 page's markup in its layout.
+- `capture/sitemaps/` holds every sitemap robots.txt names (`state.json` fingerprint
+  `robotsSitemaps`), including WordPress core's `/wp-sitemap.xml`, and their children; the
+  build serves each at its live URL.
+- `src/pages/404.astro` holds the site's own 404 page in its layout: the markup is in
+  `capture/pages/404.html` (visible text in `capture/text/404.txt`), named by `capture/meta.json`
+  `notFound.snapshot`. The capture fetched it once from a path that cannot exist; it is not a
+  route and is not in `inventory.json`. When `notFound.snapshot` is null the live site has no
+  404 page (`notFound.status` is 200 for a soft 404, or a 3xx with `notFound.location`): keep
+  the scaffold's 404 page and say so in the PR.
 
 ## What is never fixed in the build
 

@@ -61,12 +61,34 @@ test('hosting-vercel.md: link with the scope, connect Git, deploy, and the needs
 
 test('a protected site ends the run with the resume command; SKILL.md has the nvm line and the scaffold exception', () => {
   const capture = read('references/phases.md').split(/^## /m).find((s) => s.startsWith('2. ')).replace(/\s+/g, ' ');
-  assert.match(capture, /\*\*A protected site\.\*\* When `capture\.mjs` exits 3 \("blocked"\)/);
+  assert.match(capture, /\*\*A protected site\.\*\* The host is serving a bot challenge/);
   assert.match(capture, /capture\.mjs \$LIVE --out capture --resume`/);
   assert.match(capture, /Nothing is scaffolded/);
   const skill = read('SKILL.md').replace(/\s+/g, ' ');
   assert.match(skill, /Every Node command in a fresh shell starts with `source ~\/\.nvm\/nvm\.sh && nvm use 22\.23\.4`/);
   assert.match(skill, /init-site makes one commit on `main`, the exception to "never commit to main"/);
+});
+
+test('build-rules.md: the 404 page from capture/meta.json notFound, and every sitemap robots.txt names', () => {
+  const rules = read('references/build-rules.md').replace(/\s+/g, ' ');
+  assert.match(rules, /`src\/pages\/404\.astro` holds the site's own 404 page in its layout: the markup is in `capture\/pages\/404\.html`/);
+  assert.match(rules, /When `notFound\.snapshot` is null the live site has no 404 page/);
+  assert.doesNotMatch(rules, /holds the captured 404 page's markup/);
+  assert.match(rules, /`capture\/sitemaps\/` holds every sitemap robots\.txt names/);
+});
+
+test('phases.md §2: the three meanings of capture exit 3; a bot challenge is the protected site', () => {
+  const capture = read('references/phases.md').split(/^## /m).find((s) => s.startsWith('2. ')).replace(/\s+/g, ' ');
+  assert.match(capture, /\*\*Exit 3 from the capture\*\* means one of three things/);
+  assert.match(capture, /blocked: <host> anti-bot challenge \(<cause>\)/);
+  assert.match(capture, /Allowlist the capture machine's public IP on the host or in the WAF/);
+  assert.match(capture, /never continue to templates, media or the baseline/);
+});
+
+test('forms.md: GET forms are compared with live and need no endpoint', () => {
+  const forms = read('references/forms.md').replace(/\s+/g, ' ');
+  assert.match(forms, /A `GET` form, such as a search box, is not a contact form/);
+  assert.match(forms, /applies to POST forms only/);
 });
 
 test('intake.md: the time estimate counts every live read per page, per coverage page, per template and per media file', () => {

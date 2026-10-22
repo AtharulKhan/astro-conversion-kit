@@ -64,17 +64,26 @@ Analytics and Tag Manager, Meta pixel, Hotjar, Clarity, HubSpot tracking, Interc
 LinkedIn, TikTok, Pinterest, Segment, Mixpanel, Plausible, Fathom, Matomo cloud, Crisp, Tawk,
 Zendesk), so the conversion never counts as visits in the live site's reports and late widgets
 never land in a shot; `--allow-analytics` on shoot and styles lets them load. The media download
-goes under `.conversion/media-cache/`, which the scaffold's `.gitignore` keeps out of git. On
-exit 3 from any script, follow the skill's "On exit 3"; after two stops in a row, tell the
-person in one line and carry on with what was captured.
+goes under `.conversion/media-cache/`, which the scaffold's `.gitignore` keeps out of git.
 
-**A protected site.** When `capture.mjs` exits 3 ("blocked") before the home page is saved
-(bot protection, a firewall or a login wall answers 403, 429 or 503 from the first requests),
-there is nothing to convert. End the run cleanly: add the needs-you item "the live site blocks
-the crawler: allow it (or run from a network it allows), then resume with `node
-$KIT/skills/capture-site/scripts/capture.mjs $LIVE --out capture --resume`", `S set
-phases.capture.result '{"stopped":"blocked"}'`, tell the person in one line with that command,
-and stop. Nothing is scaffolded; a later session resumes at phase 2 (SKILL.md, "Resuming").
+**Exit 3 from the capture** means one of three things. Blocks (403, 429, 503 or network errors
+in a row): wait, then `--resume`, as the skill's "On exit 3" says; after two stops in a row with
+pages saved, tell the person in one line and carry on with what was captured. A bot challenge
+(fingerprint or capture prints `blocked: <host> anti-bot challenge (<cause>)`, and the README
+names the cause): a protected site, below. No page answered 200: stop and read
+`capture/inventory.json`; never continue to templates, media or the baseline, which refuse it
+with exit 2.
+
+**A protected site.** The host is serving a bot challenge, not the site, so there is nothing to
+convert. Do not scaffold, build templates or a baseline from it. Add the needs-you item
+"Allowlist the capture machine's public IP on the host or in the WAF for the capture window, or
+send a URL list; then resume with `node $KIT/skills/capture-site/scripts/capture.mjs $LIVE
+--out capture --resume`", `S set phases.capture.result '{"stopped":"blocked"}'`, finish what
+needs no capture (the intake answers in state, the repo when the intake asked for one), tell
+the person in one line with that command, and end the run cleanly. Nothing is scaffolded; when
+the person confirms, a later session resumes at phase 2 (SKILL.md, "Resuming") with the same
+capture command and `--resume`. Never improvise a real-browser capture or change the user agent
+without the site owner's written consent.
 
 Pass `--seed <path>` for every old URL from the intake (`.htaccess`, redirect exports). Write the
 `## Notes` section of `capture/README.md` by hand, as the skill says. List files under `capture/`
