@@ -16,7 +16,10 @@ Only when `preflight.mjs` reports `vercel.loggedIn: true`. From `SITE`:
 
 `vercel link` creates the project in the person's default scope when it does not exist; it writes
 `.vercel/`, which must stay out of git (add `.vercel` to `.gitignore` if it is not there). The
-deploy prints the preview URL: that is the staging URL. Record it:
+deploy prints the preview URL: that is the staging URL. The CLI uploads the repository minus
+`.vercelignore`, which the scaffold writes with `/.conversion/` (run state and the media
+download), `/review/` and the ignored `/capture/screens/` and `/capture/lighthouse-live/`;
+`capture/` itself is uploaded, because the build reads it. Record the URL:
 `S set staging '"<url>"'`. Previews build without `PUBLIC_INDEXABLE`, so they are noindexed.
 
 Not logged in: no deploy. `npm run build` and `npm run preview` locally, the staging audit and

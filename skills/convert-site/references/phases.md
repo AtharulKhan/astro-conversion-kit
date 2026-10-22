@@ -133,8 +133,9 @@ Right after, on `astro-rebuild`:
 
 Never commit to `main` again.
 
-**Proof:** `npm run build` exits 0; `git log main --oneline` shows exactly one commit; you are
-on `astro-rebuild`.
+**Proof:** `npm run build` exits 0; `main` has one commit more than before init-site (`git
+rev-list --count main` before and after; on a new, empty repository that is exactly one); you
+are on `astro-rebuild`.
 
 ## 5. baseline
 

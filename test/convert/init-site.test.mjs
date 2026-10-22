@@ -113,6 +113,11 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   const files = walk(dir);
   for (const file of EXPECTED_FILES) assert.ok(files.includes(file), `missing ${file}`);
   assert.ok(files.includes('vercel.json'));
+  // The CLI upload leaves out run state, review output and the ignored screenshots; capture/ itself
+  // is uploaded because the build reads it.
+  assert.deepEqual(readFileSync(join(dir, '.vercelignore'), 'utf8').split('\n').filter((l) => l && !l.startsWith('#')),
+    ['/.conversion/', '/review/', '/capture/screens/', '/capture/lighthouse-live/']);
+  assert.notEqual(git(dir, 'ls-files', '.vercelignore'), '', '.vercelignore committed');
   assert.ok(!files.includes('public/_headers'), 'vercel sites get vercel.json, not _headers');
 
   for (const file of files.filter((f) => !f.startsWith('scripts/'))) {
@@ -216,6 +221,7 @@ test('cloudflare host and --trailing-slash never shape the scaffold', (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.ok(existsSync(join(dir, 'public', '_headers')), 'Astro copies public/_headers into dist/');
   assert.ok(!existsSync(join(dir, 'vercel.json')));
+  assert.ok(!existsSync(join(dir, '.vercelignore')));
   const config = readFileSync(join(dir, 'astro.config.mjs'), 'utf8');
   assert.match(config, /trailingSlash: 'never'/);
   assert.match(config, /format: 'file'/);

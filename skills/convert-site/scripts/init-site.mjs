@@ -35,7 +35,7 @@ Exit codes: 0 scaffolded, 2 usage or environment error (a non-empty directory is
 const HOSTS = {
   vercel: {
     redirectsOut: 'vercel.json',
-    skip: 'public/_headers',
+    skip: ['public/_headers'],
     deployPreview: 'npx vercel deploy',
     deployProduction: 'npx vercel deploy --prod',
     envCommand: '`npx vercel env add PUBLIC_INDEXABLE production` (value `true`).',
@@ -43,7 +43,7 @@ const HOSTS = {
   },
   cloudflare: {
     redirectsOut: 'public/_redirects',
-    skip: 'vercel.json',
+    skip: ['vercel.json', '.vercelignore'],
     // wrangler uploads the local dist/, so the flag belongs on the local build, never in the dashboard.
     deployPreview: 'npm run build && npx wrangler pages deploy dist --branch astro-rebuild',
     deployProduction: 'PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main',
@@ -151,7 +151,7 @@ function substitute(text, values) {
 function copyTemplates(templateDir, dir, values, skip) {
   for (const source of walk(templateDir)) {
     const rel = relative(templateDir, source);
-    if (rel === skip) continue;
+    if (skip.includes(rel)) continue;
     const target = join(dir, rel);
     const text = substitute(readFileSync(source, 'utf8'), values);
     mkdirSync(dirname(target), { recursive: true });

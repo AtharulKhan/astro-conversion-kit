@@ -1,0 +1,6 @@
+# Left out of a `vercel deploy` upload: run state, review output and the ignored screenshots and
+# reports. capture/ itself is uploaded, because the build reads it (hosting-vercel.md).
+/.conversion/
+/review/
+/capture/screens/
+/capture/lighthouse-live/
