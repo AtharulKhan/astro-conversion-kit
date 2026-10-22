@@ -1,0 +1,22 @@
+---
+// Shared document shell. Head values come from capture/, never retyped.
+import { INDEXABLE } from '../lib/site.mjs';
+
+const { title, description, canonical, robots, lang = 'en' } = Astro.props;
+---
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    {canonical && <link rel="canonical" href={canonical} />}
+    {robots && <meta name="robots" content={robots} />}
+    {!INDEXABLE && <meta name="robots" content="noindex, nofollow" />}
+    <slot name="head" />
+  </head>
+  <body class={Astro.props.bodyClass}>
+    <slot />
+  </body>
+</html>

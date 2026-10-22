@@ -1,0 +1,209 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync, execFileSync } from 'node:child_process';
+import {
+  mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, cpSync, existsSync, statSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const INIT = join(ROOT, 'skills', 'convert-site', 'scripts', 'init-site.mjs');
+const TEMPLATES = join(ROOT, 'skills', 'convert-site', 'templates');
+const KIT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'Test',
+  GIT_AUTHOR_EMAIL: 'test@example.com',
+  GIT_COMMITTER_NAME: 'Test',
+  GIT_COMMITTER_EMAIL: 'test@example.com',
+};
+
+const EXPECTED_FILES = [
+  'package.json', 'astro.config.mjs', '.nvmrc', '.gitignore', 'AGENTS.md', 'CLAUDE.md', 'README.md',
+  'exceptions.json', 'proposals.json', 'src/layouts/Base.astro', 'src/lib/exceptions.mjs',
+  'src/lib/site.mjs', 'src/pages/404.astro', 'src/pages/robots.txt.js', 'docs/LAUNCH.md',
+  'docs/plan.md', 'docs/third-party.md',
+];
+
+function tempDir(t, prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function plant(file, content = '// dummy\n') {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, content);
+}
+
+function bareKit(t) {
+  const kit = tempDir(t, 'kit-');
+  cpSync(join(ROOT, 'package.json'), join(kit, 'package.json'));
+  cpSync(TEMPLATES, join(kit, 'skills', 'convert-site', 'templates'), { recursive: true });
+  return kit;
+}
+
+// A copy of the kit with one dummy file planted in each script tree init-site copies from.
+function fakeKit(t) {
+  const kit = bareKit(t);
+  cpSync(join(ROOT, 'scripts', 'lib'), join(kit, 'scripts', 'lib'), { recursive: true });
+  plant(join(kit, 'skills', 'parity-gates', 'scripts', 'verify', 'run-all.mjs'));
+  plant(join(kit, 'skills', 'parity-gates', 'scripts', 'build-baseline.mjs'));
+  plant(join(kit, 'skills', 'parity-gates', 'scripts', 'lib', 'html.mjs'));
+  plant(join(kit, 'skills', 'visual-review', 'scripts', 'shoot.mjs'));
+  plant(join(kit, 'skills', 'convert-site', 'scripts', 'state.mjs'));
+  plant(join(kit, 'skills', 'convert-site', 'scripts', 'media-plan.mjs'));
+  plant(join(kit, 'skills', 'convert-site', 'scripts', 'unrelated.mjs'));
+  return kit;
+}
+
+function run(args) {
+  return spawnSync(process.execPath, [INIT, ...args], { encoding: 'utf8', env: GIT_ENV });
+}
+
+function baseArgs(dir, kit, { host = 'vercel', extra = [] } = {}) {
+  return [
+    '--dir', dir, '--origin', 'https://www.fixture-roofing.test/', '--name', 'Fixture Roofing Co',
+    '--host', host, '--no-install', '--astro-version', '7.4.2', ...(kit ? ['--kit', kit] : []), ...extra,
+  ];
+}
+
+function git(dir, ...args) {
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: GIT_ENV }).trim();
+}
+
+function walk(dir, base = dir) {
+  return readdirSync(dir).flatMap((name) => {
+    if (name === '.git') return [];
+    const full = join(dir, name);
+    return statSync(full).isDirectory() ? walk(full, base) : [relative(base, full)];
+  });
+}
+
+test('--help prints usage and exits 0', () => {
+  const result = spawnSync(process.execPath, [INIT, '--help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--dir/);
+});
+
+test('init scaffolds templates, copies scripts, commits on main and switches to astro-rebuild', (t) => {
+  const kit = fakeKit(t);
+  const dir = join(tempDir(t, 'site-'), 'site');
+  const result = run(baseArgs(dir, kit));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const files = walk(dir);
+  for (const file of EXPECTED_FILES) assert.ok(files.includes(file), `missing ${file}`);
+  assert.ok(files.includes('vercel.json'));
+  assert.ok(!files.includes('_headers'), 'vercel sites get vercel.json, not _headers');
+
+  for (const file of files) {
+    assert.doesNotMatch(readFileSync(join(dir, file), 'utf8'), /\{\{/, `unsubstituted placeholder in ${file}`);
+  }
+
+  // Copied script trees.
+  for (const path of ['verify/run-all.mjs', 'build-baseline.mjs', 'lib/html.mjs', 'lib/node-version.mjs',
+    'review/shoot.mjs', 'state.mjs', 'media-plan.mjs']) {
+    assert.ok(existsSync(join(dir, 'scripts', path)), `scripts/${path} copied`);
+  }
+  assert.ok(!existsSync(join(dir, 'scripts', 'unrelated.mjs')), 'only the named convert-site scripts are copied');
+
+  // Substitutions.
+  const config = readFileSync(join(dir, 'astro.config.mjs'), 'utf8');
+  assert.match(config, /site: 'https:\/\/www\.fixture-roofing\.test'/);
+  assert.match(config, /trailingSlash: 'always'/);
+  assert.match(config, /format: 'directory'/);
+  assert.match(config, /output: 'static'/);
+  assert.doesNotMatch(config, /adapter\s*:/);
+  const agents = readFileSync(join(dir, 'AGENTS.md'), 'utf8');
+  assert.equal(agents, readFileSync(join(dir, 'CLAUDE.md'), 'utf8'));
+  assert.ok(agents.split('\n').length < 80);
+  assert.match(agents, /astro-rebuild/);
+  assert.match(agents, /PUBLIC_INDEXABLE/);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'exceptions.json'), 'utf8')), []);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'proposals.json'), 'utf8')), []);
+  assert.match(readFileSync(join(dir, 'docs', 'plan.md'), 'utf8'), /Fixture Roofing Co/);
+  assert.match(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8'), /www\.fixture-roofing\.test/);
+  assert.match(readFileSync(join(dir, 'src', 'lib', 'site.mjs'), 'utf8'),
+    /export const INDEXABLE = process\.env\.PUBLIC_INDEXABLE === 'true'/);
+  assert.match(readFileSync(join(dir, 'src', 'layouts', 'Base.astro'), 'utf8'), /noindex, nofollow/);
+  const ignore = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
+  for (const entry of ['capture/screens/', 'capture/lighthouse-live/', 'review/', 'node_modules', 'dist',
+    '.astro', '.env*', '!.env.example', '.conversion/*.tmp', 'media-cache/']) {
+    assert.ok(ignore.includes(entry), `.gitignore lacks ${entry}`);
+  }
+
+  // package.json.
+  const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+  assert.equal(pkg.name, 'fixture-roofing-co');
+  assert.equal(pkg.scripts.verify, 'node scripts/verify/run-all.mjs');
+  assert.equal(pkg.scripts['verify:proposals'], 'PROPOSALS=on node scripts/verify/run-all.mjs');
+  assert.equal(pkg.scripts['verify:release'], 'PUBLIC_INDEXABLE=true node scripts/verify/run-all.mjs');
+  assert.equal(pkg.scripts.baseline, 'node scripts/build-baseline.mjs --capture capture --out baseline');
+  assert.equal(pkg.scripts['redirects:build'],
+    'node scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json');
+  assert.equal(pkg.scripts['verify:live'], 'node scripts/verify-live.mjs');
+  for (const name of ['shoot', 'diff', 'styles', 'sheet']) {
+    assert.equal(pkg.scripts[`review:${name}`], `node scripts/review/${name}.mjs`);
+  }
+  assert.equal(pkg.scripts.dev, 'astro dev');
+  assert.equal(pkg.scripts.build, 'astro build');
+  assert.equal(pkg.scripts.preview, 'astro preview');
+  assert.equal(pkg.scripts.test, 'node --test "test/**/*.test.mjs"');
+  assert.equal(pkg.devDependencies.astro, '7.4.2');
+  for (const dep of ['parse5', 'playwright', 'pixelmatch', 'pngjs', 'css-tree']) {
+    assert.equal(pkg.devDependencies[dep], KIT_PKG.dependencies[dep], dep);
+  }
+
+  // Git state.
+  assert.equal(git(dir, 'rev-list', '--count', 'main'), '1');
+  assert.equal(git(dir, 'log', '-1', '--format=%s', 'main'), 'chore: scaffold from astro-conversion-kit');
+  assert.equal(git(dir, 'branch', '--show-current'), 'astro-rebuild');
+  assert.equal(git(dir, 'status', '--porcelain'), '');
+
+  // A second init into the same directory is refused.
+  const again = run(baseArgs(dir, kit));
+  assert.equal(again.status, 2);
+  assert.match(again.stderr, /not empty/);
+  assert.match(again.stderr, /astro\.config\.mjs/);
+});
+
+test('cloudflare host and --trailing-slash never shape the scaffold', (t) => {
+  const dir = tempDir(t, 'site-');
+  const result = run(baseArgs(dir, fakeKit(t), { host: 'cloudflare', extra: ['--trailing-slash', 'never'] }));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(existsSync(join(dir, '_headers')));
+  assert.ok(!existsSync(join(dir, 'vercel.json')));
+  const config = readFileSync(join(dir, 'astro.config.mjs'), 'utf8');
+  assert.match(config, /trailingSlash: 'never'/);
+  assert.match(config, /format: 'file'/);
+  const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+  assert.match(pkg.scripts['redirects:build'], /--host cloudflare --out _redirects$/);
+  assert.match(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8'), /wrangler/);
+});
+
+test('a README-only directory is accepted and missing kit script trees are skipped', (t) => {
+  const dir = tempDir(t, 'site-');
+  writeFileSync(join(dir, 'README.md'), '# Existing repo\n');
+  const result = run(baseArgs(dir, bareKit(t)));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const readme = readFileSync(join(dir, 'README.md'), 'utf8');
+  assert.match(readme, /^# Existing repo/);
+  assert.match(readme, /astro-conversion-kit/);
+  assert.ok(!existsSync(join(dir, 'scripts')));
+});
+
+test('usage errors exit 2 and write nothing', (t) => {
+  const dir = tempDir(t, 'site-');
+  const badHost = run(baseArgs(dir, null, { host: 'netlify' }));
+  assert.equal(badHost.status, 2);
+  assert.match(badHost.stderr, /--host/);
+  assert.equal(run(['--dir', dir, '--name', 'X', '--host', 'vercel']).status, 2);
+  assert.equal(run(baseArgs(dir, null, { extra: ['--trailing-slash', 'sometimes'] })).status, 2);
+  assert.deepEqual(readdirSync(dir), []);
+});

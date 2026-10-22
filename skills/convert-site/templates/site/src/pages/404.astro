@@ -1,0 +1,11 @@
+---
+// Replace the body with the live site's 404 markup from capture/.
+import Base from '../layouts/Base.astro';
+import { SITE_NAME } from '../lib/site.mjs';
+---
+<Base title={`Page not found | ${SITE_NAME}`} robots="noindex">
+  <main>
+    <h1>Page not found</h1>
+    <p><a href="/">Back to the home page</a></p>
+  </main>
+</Base>

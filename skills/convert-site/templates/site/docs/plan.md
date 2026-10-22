@@ -1,0 +1,42 @@
+# Conversion plan: {{SITE_NAME}}
+
+Live site: {{ORIGIN}}. Host: {{HOSTING}}. Started {{DATE}}.
+
+## Templates found
+
+| Template | Body class or marker | Example URL | Pages |
+| --- | --- | --- | --- |
+
+## Counts
+
+| What | Count |
+| --- | --- |
+| URLs in the inventory | |
+| Indexable pages | |
+| Noindex pages | |
+| Media files (total size) | |
+| Redirects | |
+
+## Media decision
+
+In the repository, or on external storage (and why).
+
+## Redirects source
+
+Where the redirect list comes from (plugin export, server config, sitemap diff) and its row count.
+
+## Forms plan
+
+| Form | Page | Fields | New endpoint | Tested |
+| --- | --- | --- | --- | --- |
+
+## Analytics carry-over
+
+IDs found in capture and how each one is carried over unchanged.
+
+## Out of scope
+
+## Decisions
+
+| Date | Decision | Why | Who |
+| --- | --- | --- | --- |

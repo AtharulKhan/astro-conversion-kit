@@ -1,0 +1,27 @@
+{
+  "name": "{{SLUG}}",
+  "version": "0.0.0",
+  "description": "Static Astro rebuild of {{HOST}}",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.23.4 <23 || >=24.22.1"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "baseline": "node scripts/build-baseline.mjs --capture capture --out baseline",
+    "verify": "node scripts/verify/run-all.mjs",
+    "verify:proposals": "PROPOSALS=on node scripts/verify/run-all.mjs",
+    "verify:release": "PUBLIC_INDEXABLE=true node scripts/verify/run-all.mjs",
+    "redirects:build": "node scripts/build-redirects.mjs --csv redirects.csv --host {{HOSTING}} --out {{REDIRECTS_OUT}}",
+    "verify:live": "node scripts/verify-live.mjs",
+    "review:shoot": "node scripts/review/shoot.mjs",
+    "review:diff": "node scripts/review/diff.mjs",
+    "review:styles": "node scripts/review/styles.mjs",
+    "review:sheet": "node scripts/review/sheet.mjs"
+  },
+  "devDependencies": {}
+}
