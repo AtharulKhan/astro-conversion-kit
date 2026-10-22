@@ -9,12 +9,14 @@ export const exceptions = exceptionList;
 // Empty unless this build runs with PROPOSALS=on.
 export const proposals = PROPOSALS_ON ? proposalList : [];
 
-// The exception recorded for one gate on one path, or undefined.
-export function exceptionFor(path, gate) {
-  return exceptions.find((entry) => entry.path === path && entry.gate === gate);
+// Both files hold the gates' record shape: { path, field, from, to, reason, approvedBy, date }.
+
+// The exception recorded for one field on one path, or undefined.
+export function exceptionFor(path, field) {
+  return exceptions.find((entry) => entry.path === path && entry.field === field);
 }
 
-// True when proposals are on for this build and one with this id exists.
-export function proposalOn(id) {
-  return proposals.some((entry) => entry.id === id);
+// The proposal for one field on one path when this build runs with PROPOSALS=on, or undefined.
+export function proposalOn(path, field) {
+  return proposals.find((entry) => entry.path === path && entry.field === field);
 }

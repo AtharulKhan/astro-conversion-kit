@@ -38,5 +38,8 @@ IDs found in capture and how each one is carried over unchanged.
 
 ## Decisions
 
-| Date | Decision | Why | Who |
-| --- | --- | --- | --- |
+One row per decision, in the order taken; `state.mjs decision` prints the id. The default choice
+is always "reproduce live".
+
+| Id | Date | Topic | Choice | Default | Reason | Cost if wrong |
+| --- | --- | --- | --- | --- | --- | --- |
