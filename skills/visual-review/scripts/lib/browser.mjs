@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { blockAnalytics } from './blocked-hosts.mjs';
 
 export const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
@@ -18,14 +19,17 @@ export class NavigationError extends Error {}
 
 export const launchBrowser = () => chromium.launch();
 
-// One context per width: device scale, reduced motion and the shared user agent.
-export function newShotContext(browser, { width, scale = 1 }) {
-  return browser.newContext({
+// One context per width: device scale, reduced motion and the shared user agent, with
+// analytics, tag and chat hosts blocked unless allowAnalytics.
+export async function newShotContext(browser, { width, scale = 1, allowAnalytics = false }) {
+  const context = await browser.newContext({
     viewport: { width, height: VIEWPORT_HEIGHT },
     deviceScaleFactor: scale,
     reducedMotion: 'reduce',
     userAgent: USER_AGENT,
   });
+  if (!allowAnalytics) await blockAnalytics(context);
+  return context;
 }
 
 // page.evaluate has no timeout of its own; a page stuck in a loop must not hang the run.

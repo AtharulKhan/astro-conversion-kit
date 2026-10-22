@@ -9,6 +9,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { assertNodeVersion } from './lib/node-version.mjs';
+import { blockAnalytics } from './lib/blocked-hosts.mjs';
 
 const HELP = `Usage: node css-coverage.mjs --base <origin> --routes <list|inventory.json> --out coverage.json
                            [--widths 390,768,1440] [--delay 2500]
@@ -21,7 +22,8 @@ then stops coverage. Results are merged per stylesheet and written as
     "inline:<n>": { text, usedRanges, pages: [path, ...] } }
 usedRanges are character offsets into text, sorted with overlaps merged. Inline
 <style> blocks with the same text share one inline:<n> key and list the pages
-they appear on.
+they appear on. Analytics, tag, pixel and chat hosts are blocked, so their
+injected styles are not recorded and the loads do not count as visits.
 
   --base     origin to load, e.g. https://www.example.com
   --routes   a comma list of paths, or capture/inventory.json ([{ path, ... }];
@@ -175,6 +177,7 @@ async function cover({ base, routes, widths, out, delay }) {
   try {
     widths: for (const width of widths) {
       const context = await browser.newContext({ viewport: { width, height: VIEWPORT_HEIGHT }, userAgent: USER_AGENT });
+      await blockAnalytics(context);
       for (const path of routes) {
         const url = new URL(path, base).href;
         for (;;) {

@@ -12,6 +12,7 @@ import { readRoutes, RoutesError } from './lib/routes.mjs';
 
 const HELP = `Usage: node shoot.mjs --base <origin> --routes <templates.json|/,/a/b/> --out <dir>
                       [--widths 390,768,1440] [--delay 2500] [--wait 1500] [--full] [--scale 1]
+                      [--allow-analytics]
 
 Takes a full-page Chromium screenshot of every route at every width and writes
   <out>/<route>/<width>.png and <out>/manifest.json
@@ -30,6 +31,9 @@ Takes a full-page Chromium screenshot of every route at every width and writes
              (folders are path slugs) instead of only the representative
   --scale    device scale factor from 0.1 to 1 (default 1); 0.5 gives
              half-size images for previews
+  --allow-analytics  let analytics, tag, pixel and chat hosts load (blocked
+             by default: they do not draw the page, and a screenshot run
+             must not count as visits in the site's reports)
 
 Motion is frozen (prefers-reduced-motion plus injected CSS), scroll-reveal
 content is forced visible, lazy images are loaded by scrolling to the bottom and
@@ -81,6 +85,7 @@ function parse(argv) {
         wait: { type: 'string', default: '1500' },
         full: { type: 'boolean', default: false },
         scale: { type: 'string', default: '1' },
+        'allow-analytics': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
     }));
@@ -106,6 +111,7 @@ function parse(argv) {
     delay: number(values.delay, 'delay', { min: 0, max: 600000 }),
     wait: number(values.wait, 'wait', { min: 0, max: 600000 }),
     scale: number(values.scale, 'scale', { min: 0.1, max: 1 }),
+    allowAnalytics: values['allow-analytics'],
   };
 }
 
@@ -115,7 +121,7 @@ const failedEntry = (route, width, error) => ({
   route, width, file: null, heightPx: null, bannerClosed: false, scrollHeight: null, heightMismatch: false, error,
 });
 
-async function shoot({ base, routes, widths, out, delay, wait, scale }) {
+async function shoot({ base, routes, widths, out, delay, wait, scale, allowAnalytics }) {
   const manifest = [];
   let stopped = false;
   let pace = delay;
@@ -124,7 +130,7 @@ async function shoot({ base, routes, widths, out, delay, wait, scale }) {
   const browser = await launchBrowser();
   try {
     widths: for (const width of widths) {
-      const context = await newShotContext(browser, { width, scale });
+      const context = await newShotContext(browser, { width, scale, allowAnalytics });
       let page = await context.newPage();
       for (const { route, path } of routes) {
         const url = new URL(path, base).href;
