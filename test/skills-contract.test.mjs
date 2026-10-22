@@ -9,7 +9,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = join(ROOT, 'skills');
 
 // Skill folders whose SKILL.md a later task writes. Remove each entry when its SKILL.md lands.
-const EXPECTED_MISSING = new Set(['convert-site', 'parity-gates', 'suggest-improvements']);
+const EXPECTED_MISSING = new Set(['convert-site', 'parity-gates']);
 
 const folders = readdirSync(SKILLS, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
