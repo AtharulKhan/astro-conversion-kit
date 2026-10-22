@@ -667,7 +667,9 @@ export async function visual({ site, live }) {
     expectCode(newAll);
     const diffAll = await run('diff', ['--a', 'capture/screens/live-all', '--b', 'review/new-all', '--out', 'review/diff-all']);
     const sheetAll = expectCode(await run('sheet', ['--live', 'capture/screens/live-all', '--new', 'review/new-all', '--diff', 'review/diff-all/diff.json', '--out', 'review/all.html']));
-    return { templateSet, liveAll, newAll, diffAll, sheetAll };
+    // The phase's proof: the site's copy of check.mjs re-reads every diff and style row.
+    const check = await node(site, join(site, 'scripts', 'review', 'check.mjs'), ['--review', 'review']);
+    return { templateSet, liveAll, newAll, diffAll, sheetAll, check };
   } finally {
     await preview.close();
   }

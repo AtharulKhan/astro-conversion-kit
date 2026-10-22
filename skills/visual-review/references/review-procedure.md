@@ -52,6 +52,7 @@ Options (all from `--help`):
 | `--wait` | `1500` | Milliseconds to settle before each capture |
 | `--full` | off | With a templates file, shoot every path of every template |
 | `--scale` | `1` | Device scale factor 0.1 to 1; `0.5` for half-size previews (diff only like with like) |
+| `--allow-analytics` | off | Let analytics, tag, pixel and chat hosts load (below) |
 
 Writes `<out>/<route>/<width>.png` and `<out>/manifest.json`, one row per shot:
 `{ route, width, file, heightPx, bannerClosed, scrollHeight, heightMismatch }`, plus `error` on a
@@ -71,6 +72,12 @@ What it does to every page, on both sides alike, so the two are comparable:
 - **Web fonts awaited** before capture.
 - **Cookie banners closed** when a button says accept, agree, got it or ok, and reported as
   `bannerClosed`. A banner with other wording stays in the shot.
+- **Analytics, tag, pixel and chat hosts blocked** (Google Analytics and Tag Manager, Meta pixel,
+  Hotjar, Clarity, HubSpot tracking, Intercom, Drift, LinkedIn insight, TikTok, Pinterest,
+  Segment, Mixpanel, Plausible, Fathom, Matomo cloud, Crisp, Tawk, Zendesk), so a screenshot run
+  never shows up as visits in the live site's reports and a chat bubble that loads late never
+  lands in one shot and not the other. They do not draw the page; `--allow-analytics` lets them
+  load when you need to see a widget. HubSpot's form embed (`js.hsforms.net`) is not blocked.
 - **Tall pages checked.** A screenshot more than 2 px off the page's `scrollHeight` is flagged
   `heightMismatch` with a warning: the image does not cover the page as it measured
   when shot, often because the page changed height while being captured. Treat that pair's diff with suspicion and say so.
@@ -127,6 +134,7 @@ Exit 0 every pair passes, 1 any pair fails (each listed on stdout with its reaso
 | `--widths` | `390,1440` | Viewport widths; the default skips 768, so pass `390,768,1440` for the template set |
 | `--out` | `styles.json` | Output file; always pass `review/styles.json` |
 | `--delay` | `2500` | Milliseconds between page loads, both origins |
+| `--allow-analytics` | off | Let analytics, tag, pixel and chat hosts load on both origins (blocked by default, as in shoot) |
 
 This step loads the live site, once per route per width. Keep the default delay; never pass
 `--delay 0` with a live origin.
@@ -257,8 +265,11 @@ case the page.
 
 ## 8. Done means
 
-- `review:diff` exits 0 for the template set and for the full set;
-- `review:styles` exits 0 for the template set;
+- `npm run review:check` exits 0. It re-reads `review/diff/diff.json`, `review/diff-all/diff.json`
+  (when present) and `review/styles.json` and exits 1 when any row fails, when a required file is
+  missing or empty, or when a diff row's threshold is above 2 % or above 0.5 % without an
+  override's decision id; it prints the worst failing pair. It reads what the last runs wrote, so
+  rerun diff and styles after the last fix, then check;
 - you have looked at every pair in the final sheet and your written list has no open item that is
   not a recorded override or a proposal;
 - every `heightMismatch`, closed banner and override is reported to the person.

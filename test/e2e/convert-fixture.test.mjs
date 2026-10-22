@@ -95,7 +95,7 @@ test('7 gates: npm run verify passes the staging build and verify:release the re
 });
 
 test('8 visual: every template at 390, 768 and 1440, and every page at 390 and 1440, within 0.5 %', () => {
-  const { templateSet, diffAll, sheetAll } = results.visual;
+  const { templateSet, diffAll, sheetAll, check } = results.visual;
   ok(templateSet.diff);
   ok(templateSet.styles);
   ok(diffAll);
@@ -105,6 +105,8 @@ test('8 visual: every template at 390, 768 and 1440, and every page at 390 and 1
   for (const row of [...rows, ...R.readJson(file('review', 'diff-all', 'diff.json'))]) assert.ok(row.pass && row.percent <= 0.5, `${row.route}/${row.width}: ${row.percent} %`);
   assert.equal(R.readJson(file('review', 'diff-all', 'diff.json')).length, templates.reduce((n, t) => n + t.paths.length, 0) * 2);
   ok(sheetAll);
+  ok(check);
+  assert.match(check.stdout, /^review:check passed$/m);
   assert.ok(existsSync(file('review', 'index.html')) && existsSync(file('review', 'all.html')));
 });
 

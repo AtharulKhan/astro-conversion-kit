@@ -37,6 +37,7 @@ run `node <skill-dir>/scripts/<name>.mjs <options>` from the folder that holds `
 | `review:diff` | Pixel diff of two screenshot folders, diff images plus `diff.json` | 0 all pass, 1 any fail, 2 usage |
 | `review:styles` | Computed styles of sampled selectors on both origins, `styles.json` | 0 all match, 1 a row fails, 2 usage or environment |
 | `review:sheet` | One self-contained HTML contact sheet: live, new and diff side by side | 0 written, 2 usage or environment |
+| `review:check` | Re-reads `review/diff/diff.json`, `review/diff-all/diff.json` (when present) and `review/styles.json`; prints the worst failing pair | 0 every row passes, 1 a row fails or a result is missing, 2 usage |
 
 Exit 1 from diff or styles is expected while differences remain: carry on to the sheet, and run
 each step as its own command rather than chaining them with `&&`. Exit 3 from shoot means the
@@ -45,7 +46,12 @@ site is blocking requests: wait, then rerun with a longer `--delay`; never retry
 What makes the screenshots comparable, on both sides alike: animations and transitions are
 frozen and scroll-reveal content is forced visible; lazy images are loaded by scrolling to the
 bottom and back (capped at 60 viewports or 30 s); web fonts are awaited; a cookie banner whose
-button says accept, agree, got it or ok is closed and reported as `bannerClosed`. A screenshot
+button says accept, agree, got it or ok is closed and reported as `bannerClosed`. Requests to
+analytics, tag, pixel and chat hosts (Google Analytics and Tag Manager, Meta pixel, Hotjar,
+Clarity, HubSpot tracking, Intercom, Drift, LinkedIn, TikTok, Pinterest, Segment, Mixpanel,
+Plausible, Fathom, Matomo cloud, Crisp, Tawk, Zendesk) are blocked in `review:shoot` and
+`review:styles`, so a review run never counts as a visit in the site's reports and a late chat
+bubble never lands in a shot; `--allow-analytics` lets them load. A screenshot
 more than 2 px off the page's `scrollHeight` is flagged `heightMismatch`.
 
 What the diff measures: pixelmatch at threshold 0.1 with anti-aliasing ignored. A pair passes at
@@ -110,6 +116,8 @@ Read `references/review-procedure.md` before the first run. In short:
 8. **Roll out** only when every template pair passes at every width: shoot every page
    (`--full`) at 390 and 1440, diff, sheet, look, fix, repeat until every page passes. The
    exact commands are in the reference, step 7.
+9. **Check** before the pull request: `npm run review:check` exits 0 only when every template
+   pair, every page pair and every style row passes.
 
 ## If your agent has a browser of its own
 
