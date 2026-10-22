@@ -1,0 +1,112 @@
+# Hosting
+
+The build is plain static files in `dist/`, so any static host can serve it. Only three things are
+host-specific: redirects, response headers, and how media outside the repository is reached. All
+three are generated from files in the site repository (`redirects.csv`, the headers template and
+`docs/media-plan.json`), so switching host means regenerating config, not rebuilding the site.
+
+The kit supports two hosts directly: Vercel (the default) and Cloudflare Pages. It writes their
+config files and the runbook commands. It never changes DNS, domains or dashboard settings.
+
+## The indexable switch
+
+Every build is `noindex, nofollow`, with a robots.txt that disallows everything, unless the build
+runs with `PUBLIC_INDEXABLE=true`. Only the production build sets it. Previews stay noindexed
+whatever the host's protection settings are, so a leaked staging link does not get indexed.
+`npm run verify:release` runs the gates on an indexable build before launch.
+
+## Vercel
+
+**Project.** A static project with no framework adapter. `npx vercel deploy` makes a preview;
+`npx vercel deploy --prod` deploys production.
+
+**Indexing.** Set `PUBLIC_INDEXABLE` for the Production environment only:
+`npx vercel env add PUBLIC_INDEXABLE production` with the value `true`. Never set it for Preview.
+
+**Redirects.** `npm run redirects:build` writes the `redirects` array in `vercel.json` from
+`redirects.csv`. Vercel's `permanent: true` answers 308; where the live site answered 301, the
+entry needs an explicit `statusCode`, and the redirect gate shows any mismatch. Vercel caps how many routes `vercel.json`
+can hold (2,048 at the time of writing); a larger set needs the project's bulk redirects, and the
+runbook says so when the count is over.
+
+**Headers.** `vercel.json` ships a baseline: `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: SAMEORIGIN`, and a one-year
+immutable cache on `/_astro/*`. Add a Content-Security-Policy yourself once you know which
+third-party scripts stay; a wrong one breaks forms and analytics silently.
+
+**URL modes.** The scaffold matches the live site's majority URL form:
+
+| Live URLs look like | Astro | `vercel.json` |
+|---|---|---|
+| `/about/` | `trailingSlash: 'always'`, `build.format: 'directory'` | `"trailingSlash": true` |
+| `/about` | `trailingSlash: 'never'`, `build.format: 'file'` | `"cleanUrls": true, "trailingSlash": false` |
+
+With `trailingSlash: true`, Vercel redirects `/about` to `/about/` itself. `cleanUrls` serves
+`about.html` at `/about` and redirects `/about.html` there; it is never combined with the directory
+format. URLs in the minority form become rows in `redirects.csv`.
+
+**Media in Blob.** When the media decision is "store", files are uploaded to a public Vercel Blob
+store by `media-upload.mjs` (it reads `BLOB_READ_WRITE_TOKEN` from the environment and checks every
+upload's size), and `vercel.json` gets a rewrite from the media prefix (for example
+`/wp-content/uploads/:path*`) to the store. The public URLs stay the same.
+
+**Deployment protection.** Vercel protects preview deployments by default, so visitors (and
+scripts) get a login page. The staging audit cannot sign in. Either open the preview to the
+public for the audit (it is still noindexed) or keep it protected and accept that the staging
+audit appears under "Not covered" until it can run. Keep previews of sites you do not own the
+content of protected.
+
+## Cloudflare Pages
+
+**Project.** Deploy with wrangler from your machine or CI:
+
+```
+npm run build
+npx wrangler pages deploy dist --branch astro-rebuild
+```
+
+That gives a preview at `astro-rebuild.<project>.pages.dev`. Production is
+`PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main`. Because
+wrangler uploads the local `dist/`, the indexable switch belongs on that local build, not in the
+Pages dashboard.
+
+**Redirects.** `npm run redirects:build` writes `_redirects` from `redirects.csv`. Each line is
+`source destination status`; Pages treats a line with no status as a 302, so every line must carry
+the code the live site used. Pages allows 2,000 static and 100 dynamic redirects (dynamic means a
+splat or a placeholder). Beyond that, the rest belong in Cloudflare Bulk Redirects, an account-level
+list set up in the dashboard; the runbook points you there when the count is over.
+
+**Headers.** `_headers` carries the same baseline as Vercel: `nosniff`, the referrer policy,
+`SAMEORIGIN` framing, and an immutable cache on `/_astro/*`.
+
+**URL modes.** Pages serves `about/index.html` at `/about/` and redirects `/about` to it, and serves
+`about.html` at `/about`. Its automatic redirects are 308s; if the live site used 301 for the same
+pair, the redirect gate shows the difference, and accepting it is an entry in `exceptions.json`.
+
+**Media in R2.** When the media decision is "store", files go to an R2 bucket through its
+S3-compatible API (`media-upload.mjs --store r2`, reading `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY` and `R2_BUCKET` from the environment). Pages cannot rewrite to another
+origin from `_redirects`, so serving them at the original paths takes two dashboard steps the
+runbook spells out:
+
+1. Connect a custom domain in the site's zone to the bucket (for example `media.example.com`).
+2. Add an Origin Rule in the zone: when the path starts with the media prefix, send the request to
+   that custom domain, with the Host header overridden to match.
+
+Then request one file under the prefix on the new site and confirm it is served from R2.
+
+**Preview access.** Pages previews are public by default. Put Cloudflare Access in front of them if
+the content should not be seen; the same "Not covered" note as Vercel applies to the staging audit.
+
+## No media store yet
+
+If media needs a store and there are no store credentials, `media-plan.mjs --mode live-temporary`
+proxies media from the live site, for staging only. The plan carries a warning, and the runbook
+puts "create the store and upload" before the DNS step. Do not launch in this mode: when the old
+host goes, the media goes with it.
+
+## Other static hosts
+
+Netlify, GitHub Pages, S3 with CloudFront and similar serve `dist/` unchanged. Redirects and
+headers have to be written in that host's format from `redirects.csv` by hand, and the redirect
+gate should be run against the deployed preview to prove them.
