@@ -10,4 +10,5 @@ dist
 /capture/lighthouse-live/
 /review/
 /media-cache/
+/.conversion/media-cache/
 .conversion/*.tmp

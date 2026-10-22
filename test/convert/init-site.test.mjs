@@ -273,6 +273,7 @@ test('a folder holding only a capture, run state and .gitignore is scaffolded ar
   plant(join(dir, 'capture', 'inventory.json'), '[]\n');
   plant(join(dir, 'capture', 'screens', 'live', 'home', '390.png'), 'not really a png');
   plant(join(dir, '.conversion', 'state.json'), '{"version":1,"phase":"plan"}\n');
+  plant(join(dir, '.conversion', 'media-cache', 'wp-content', 'uploads', 'a.jpg'), 'not really a jpg');
   writeFileSync(join(dir, '.gitignore'), '/scratch/\n');
   const result = run(baseArgs(dir, bareKit(t)));
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -282,6 +283,7 @@ test('a folder holding only a capture, run state and .gitignore is scaffolded ar
   assert.notEqual(git(dir, 'ls-files', 'capture/inventory.json'), '');
   assert.notEqual(git(dir, 'ls-files', '.conversion/state.json'), '');
   assert.equal(git(dir, 'ls-files', 'capture/screens'), '', 'screenshots stay out of git');
+  assert.equal(git(dir, 'ls-files', '.conversion/media-cache'), '', 'the downloaded media stays out of git');
   assert.equal(git(dir, 'rev-list', '--count', 'main'), '1');
 
   // The existing .gitignore keeps its lines and gains the template's.
