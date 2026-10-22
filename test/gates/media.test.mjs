@@ -1,0 +1,122 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildFixtureBaseline } from './fixtures/baseline.mjs';
+import { makeDist } from './fixtures/make-dist.mjs';
+import { runGate } from './fixtures/run-gate.mjs';
+
+const HERO = '/wp-content/uploads/2026/01/hero.jpg';
+
+let root;
+let baseline;
+let good;
+let media;
+before(async () => {
+  root = mkdtempSync(join(tmpdir(), 'media-gate-'));
+  baseline = await buildFixtureBaseline(root);
+  good = makeDist(join(root, 'dist-good'));
+  media = JSON.parse(readFileSync(join(baseline, 'media.json'), 'utf8'));
+});
+after(() => rmSync(root, { recursive: true, force: true }));
+
+const gate = (dist, args = [], cwd = root) => runGate('media', ['--dist', dist, '--baseline', baseline, ...args], { cwd });
+
+const record = (fields) => ({ reason: 'test', approvedBy: 'client', date: '2026-10-22', ...fields });
+function writeJson(file, value) {
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, JSON.stringify(value));
+  return file;
+}
+
+// A site root with docs/media-plan.json saying `mode`.
+function siteWithPlan(name, mode) {
+  const dir = join(root, name);
+  writeJson(join(dir, 'docs', 'media-plan.json'), { mode, totals: { count: media.length } });
+  return dir;
+}
+
+test('dist-good passes: every baseline media file is built with the same bytes', async () => {
+  const result = await gate(good);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, new RegExp(`^media: ${media.length} checked, 0 failed$`, 'm'));
+});
+
+test('a 1-byte drift fails with both sizes', async () => {
+  const bad = makeDist(join(root, 'dist-drift'), { bad: ['media-drift'] });
+  const result = await gate(bad);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/wp-content\/uploads\/2026\/01\/hero\.jpg media: expected 13713, got 13714$/m);
+  assert.match(result.stdout, /^media: \d+ checked, 1 failed$/m);
+});
+
+test('a missing file fails; the same file in public/ passes', async () => {
+  const dist = makeDist(join(root, 'dist-missing'));
+  const site = join(root, 'site-public');
+  mkdirSync(join(site, 'public', 'wp-content', 'uploads', '2026', '01'), { recursive: true });
+  cpSync(join(dist, HERO), join(site, 'public', HERO));
+  rmSync(join(dist, HERO));
+  const failed = await gate(dist, [], join(root));
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /hero\.jpg media: expected 13713, got null/);
+  const passed = await gate(dist, [], site);
+  assert.equal(passed.code, 0, passed.stdout);
+});
+
+test('a media exception records the new size; a stale one fails', async () => {
+  const bad = makeDist(join(root, 'dist-drift-exception'), { bad: ['media-drift'] });
+  const exceptions = writeJson(join(root, 'media-exceptions.json'), [record({ path: HERO, field: 'media', from: 13713, to: 13714 })]);
+  const passed = await gate(bad, ['--exceptions', exceptions]);
+  assert.equal(passed.code, 0, passed.stdout);
+  const stale = writeJson(join(root, 'media-stale.json'), [record({ path: HERO, field: 'media', from: 999, to: 13714 })]);
+  const failed = await gate(good, ['--exceptions', stale]);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /hero\.jpg exception: .*"no longer matches the baseline"/);
+});
+
+test('store mode reads media-manifest.json instead of dist', async () => {
+  const site = siteWithPlan('site-store', 'store');
+  const manifest = media.map(({ path, bytes }) => ({ path, bytes, url: `https://cdn.example.com${path}`, etag: 'x' }));
+  writeJson(join(site, 'media-manifest.json'), manifest);
+  const empty = join(root, 'dist-empty');
+  mkdirSync(empty, { recursive: true });
+  const passed = await gate(empty, [], site);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+
+  writeJson(join(site, 'short-manifest.json'), manifest.filter((m) => m.path !== HERO).concat({ ...manifest[0], path: HERO, bytes: 1 }));
+  const failed = await gate(empty, ['--media-manifest', 'short-manifest.json'], site);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /hero\.jpg media: expected 13713, got 1/);
+
+  assert.equal((await gate(empty, ['--media-manifest', 'none.json'], site)).code, 2);
+});
+
+test('live-temporary mode is reported as not checked, with the count, and passes', async () => {
+  const site = siteWithPlan('site-live', 'live-temporary');
+  const result = await gate(good, [], site);
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, new RegExp(`not checked: served from live \\(${media.length} files\\)`));
+  const json = JSON.parse((await gate(good, ['--json'], site)).stdout);
+  assert.equal(json.checked, media.length);
+  assert.equal(json.skipped, media.length);
+  assert.equal(json.failed, 0);
+});
+
+test('--paths limits the check', async () => {
+  const bad = makeDist(join(root, 'dist-drift-paths'), { bad: ['media-drift'] });
+  const result = await gate(bad, ['--paths', '/wp-content/themes/*']);
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, /^media: 2 checked, 0 failed$/m);
+});
+
+test('usage and missing inputs exit 2; --help exits 0', async () => {
+  assert.equal((await gate(good, ['--bogus'])).code, 2);
+  assert.equal((await gate(good, ['--media-plan', 'missing-plan.json'])).code, 2);
+  assert.equal((await gate(good, [], siteWithPlan('site-unknown', 'cloud'))).code, 2);
+  assert.equal((await runGate('media', ['--dist', good, '--baseline', join(root, 'nope')], { cwd: root })).code, 2);
+  const help = await runGate('media', ['--help']);
+  assert.equal(help.code, 0);
+  assert.match(help.stdout, /--media-plan/);
+  assert.match(help.stdout, /--media-manifest/);
+});

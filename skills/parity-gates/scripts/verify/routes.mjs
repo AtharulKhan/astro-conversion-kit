@@ -2,12 +2,12 @@
 // Routes gate: every page, post, archive and feed the baseline recorded at 200 is built, every
 // noindex route still says noindex, and the build has nothing the live site did not.
 import { readFileSync, realpathSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
-import { builtPages, gateArgs, pathMatcher, report } from '../lib/gate-cli.mjs';
+import { gateArgs, pathMatcher, report } from '../lib/gate-cli.mjs';
 import { attr, find, parseHtml } from '../lib/html.mjs';
-import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs } from '../lib/dist.mjs';
+import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
 
 const NAME = 'routes';
 const OPTIONS = {
@@ -70,10 +70,9 @@ export function checkRoutes({ dist, routes, media, redirects = [], paths = () =>
 
   for (const item of media) expected.add(decode(item.path).replace(/^\/+/, ''));
   for (const redirect of redirects) pageFiles(redirect.from, format).forEach((c) => expected.add(c));
-  const servedAt = new Map(builtPages(dist).map(({ path, file }) => [relative(dist, file).split(sep).join('/'), path]));
   for (const file of files) {
     if (expected.has(file) || ALWAYS_ALLOWED.some((re) => re.test(file))) continue;
-    const path = servedAt.get(file) ?? `/${file}`;
+    const path = servedPath(file);
     if (!paths(path) || allowExtra(path) || allowExtra(`/${file}`)) continue;
     failures.push({ path, field: 'extra', expected: null, actual: file });
   }

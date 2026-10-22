@@ -3,14 +3,15 @@
 //
 // Layout: `/about/` -> about/index.html, `/` -> index.html, 404.html, feed/index.xml, media at the
 // same paths as on the live site, theme CSS and JS under _astro/, sitemap-index.xml and
-// sitemap-0.xml listing every indexable page, and robots.txt. wp-json/ and the WordPress sitemaps
+// sitemap-0.xml listing every indexable page, robots.txt, and _headers with the security headers
+// and the staging X-Robots-Tag: noindex. wp-json/ and the WordPress sitemaps
 // are left out. Canonical, og:url and og:image are absolute on `origin`; every other site URL is
 // root-relative, as Astro writes them.
 //
 // `bad` names mutations from MUTATIONS, applied in order to the copy. Gate tasks add their own
 // entries; each one throws when the text it changes is missing, so a fixture edit cannot make a
 // mutation silently do nothing.
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,6 +46,25 @@ function html(source, origin) {
     .replace(/(<meta property="og:(?:url|image)" content=")\{\{ORIGIN\}\}/g, `$1${origin}`)
     .replace(ORIGIN, '');
 }
+
+const HEADERS = [
+  '/*',
+  '  X-Content-Type-Options: nosniff',
+  '  Referrer-Policy: strict-origin-when-cross-origin',
+  '  X-Frame-Options: SAMEORIGIN',
+  '  X-Robots-Tag: noindex',
+  '',
+].join('\n');
+
+const GA4 = `<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-FIXTURE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-FIXTURE1');
+</script>
+`;
 
 const pagePath = (rel) => (rel === 'index.html' ? '/' : `/${rel.slice(0, -'index.html'.length)}`);
 
@@ -83,6 +103,44 @@ export const MUTATIONS = {
       rmSync(full);
     }
   },
+  // /about/ links to /contact-us/, which is not built.
+  'broken-link': (dist) => edit(dist, 'about/index.html', '<a href="/contact/">', '<a href="/contact-us/">'),
+  // /contact/ links to /about without its trailing slash.
+  'unslashed-link': (dist) => edit(dist, 'contact/index.html', '<a href="/about/">', '<a href="/about">'),
+  // hero.jpg is one byte longer than the live file.
+  'media-drift': (dist) => {
+    const file = join(dist, 'wp-content', 'uploads', '2026', '01', 'hero.jpg');
+    if (!existsSync(file)) throw new Error('make-dist: no hero.jpg to change');
+    appendFileSync(file, Buffer.from([0]));
+  },
+  // /feed/ is not built.
+  'missing-feed': (dist) => {
+    if (!existsSync(join(dist, 'feed', 'index.xml'))) throw new Error('make-dist: no feed to remove');
+    rmSync(join(dist, 'feed'), { recursive: true });
+  },
+  // /feed/ has one item fewer than the live feed.
+  'dropped-feed-item': (dist) => {
+    const file = join(dist, 'feed', 'index.xml');
+    const source = readFileSync(file, 'utf8');
+    const item = /<item>[\s\S]*?<\/item>\n?/.exec(source);
+    if (!item) throw new Error('make-dist: feed/index.xml has no <item>');
+    writeFileSync(file, source.replace(item[0], ''));
+  },
+  // The sitemap leaves out /about/.
+  'sitemap-missing-page': (dist) => edit(dist, 'sitemap-0.xml', `<url><loc>${DIST_ORIGIN}/about/</loc></url>`, ''),
+  // The contact form asks for email before name.
+  'reordered-field': (dist) => {
+    const name = '<p><label for="cf-name">Name</label><input id="cf-name" type="text" name="name" required></p>';
+    const email = '<p><label for="cf-email">Email</label><input id="cf-email" type="email" name="email" required></p>';
+    edit(dist, 'contact/index.html', `${name}\n    ${email}`, `${email}\n    ${name}`);
+  },
+  // /about/ lost the GA4 tag.
+  'dropped-ga4': (dist) => edit(dist, 'about/index.html', GA4, ''),
+  // /about/ gained a vendor the live site never had.
+  'added-vendor': (dist) =>
+    edit(dist, 'about/index.html', '</head>', '<script async src="https://static.hotjar.com/c/hotjar-1234567.js?sv=6"></script>\n</head>'),
+  // _headers lost X-Content-Type-Options.
+  'missing-header': (dist) => edit(dist, '_headers', '  X-Content-Type-Options: nosniff\n', ''),
 };
 
 export function makeDist(outDir, { bad = [], origin = DIST_ORIGIN } = {}) {
@@ -117,6 +175,7 @@ export function makeDist(outDir, { bad = [], origin = DIST_ORIGIN } = {}) {
     `<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>${origin}/sitemap-0.xml</loc></sitemap></sitemapindex>\n`,
   );
   write(join(outDir, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${origin}/sitemap-index.xml\n`);
+  write(join(outDir, '_headers'), HEADERS);
   for (const name of bad) {
     const mutate = MUTATIONS[name];
     if (!mutate) throw new Error(`make-dist: unknown mutation "${name}" (known: ${Object.keys(MUTATIONS).join(', ')})`);

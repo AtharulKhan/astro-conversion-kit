@@ -60,6 +60,20 @@ test('a build.format "file" build is read as <path>.html', async () => {
   assert.match(failed.stdout, /\/about\/ file: expected "about\.html", got null/);
 });
 
+test('in a file layout, extras are named by their served path for --allow-extra and --paths', async () => {
+  const dist = makeDist(join(root, 'dist-file-extra'), { bad: ['extra-page', 'file-format'] });
+  mkdirSync(join(dist, 'extra-feed'));
+  writeFileSync(join(dist, 'extra-feed', 'index.xml'), '<rss></rss>');
+  const failed = await routes(dist);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /\/extra-page\/ extra: expected null, got "extra-page\.html"/);
+  assert.match(failed.stdout, /\/extra-feed\/ extra: expected null, got "extra-feed\/index\.xml"/);
+  const allowed = await routes(dist, ['--allow-extra', '/extra-page/,/extra-feed/']);
+  assert.equal(allowed.code, 0, allowed.stdout);
+  const limited = await routes(dist, ['--paths', '/about/']);
+  assert.equal(limited.code, 0, limited.stdout);
+});
+
 test('a mixed ("preserve") layout passes; only the page that is really missing fails', async () => {
   const dist = makeDist(join(root, 'dist-preserve'));
   renameSync(join(dist, 'about', 'index.html'), join(dist, 'about.html'));

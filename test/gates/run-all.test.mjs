@@ -21,10 +21,13 @@ before(async () => {
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const runAll = (dist, args = []) => runGate('run-all', ['--dist', dist, '--baseline', baseline, ...args], { cwd: root });
+// The fixture build keeps the live form action, and its _headers say noindex (a staging build).
+const runAll = (dist, args = []) =>
+  runGate('run-all', ['--dist', dist, '--baseline', baseline, '--endpoint', '/contact/', ...args], { cwd: root, env: { PUBLIC_INDEXABLE: '' } });
 
 test('runs every gate in order and prints All N gates passed', async () => {
-  // Each gate gets only the options it accepts: --origin is seo's, --allow-extra is routes'.
+  // Each gate gets only the options it accepts: --origin is seo's, links' and sitemaps',
+  // --allow-extra is routes', --endpoint is forms'.
   const result = await runAll(good, ['--origin', DIST_ORIGIN, '--allow-extra', '/nothing/']);
   assert.equal(result.code, 0, result.stdout + result.stderr);
   const order = [...result.stdout.matchAll(/^([\w-]+): \d+ checked/gm)].map((m) => `${m[1]}.mjs`);

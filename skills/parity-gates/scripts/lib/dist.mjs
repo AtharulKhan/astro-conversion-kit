@@ -55,6 +55,30 @@ export function feedFiles(path) {
   return [`${p}/index.xml`, `${p}.xml`];
 }
 
+// The site path a dist file answers at, in the baseline's slashed form: about/index.html and
+// about.html -> /about/, feed/index.xml -> /feed/; any other file is its own path.
+export function servedPath(file) {
+  if (file === 'index.html') return '/';
+  if (file.endsWith('/index.html')) return `/${file.slice(0, -'index.html'.length)}`;
+  if (file.endsWith('/index.xml')) return `/${file.slice(0, -'index.xml'.length)}`;
+  if (file.endsWith('.html') && file !== '404.html') return `/${file.slice(0, -'.html'.length)}/`;
+  return `/${file}`;
+}
+
+// Every built HTML page among distFiles() as { path, file }, path in the baseline's form.
+export function htmlPages(files) {
+  return files.filter((f) => f.endsWith('.html')).map((file) => ({ path: servedPath(file), file }));
+}
+
+// The origin of a URL string, or null when it is not an absolute URL.
+export function originOf(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
 // The first of the candidates that exists in dist, or null.
 export function firstExisting(dist, candidates) {
   return candidates.find((c) => existsSync(join(dist, c))) ?? null;

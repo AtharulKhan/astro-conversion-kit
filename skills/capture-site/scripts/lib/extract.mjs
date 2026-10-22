@@ -99,7 +99,8 @@ function toInt(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function detectVendor(src, code) {
+// The vendor and account id of one script: its src URL, or its inline code when src is null.
+export function detectVendor(src, code) {
   for (const rule of VENDORS) {
     const hit = src ? rule.src.test(src) : rule.code.test(code);
     if (!hit) continue;
