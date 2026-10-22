@@ -24,9 +24,11 @@ Every script waits **2500 ms between requests** by default and sends a desktop C
 Keep the default `--delay` against a live site (`--delay 0` is for local fixtures only), and never
 change `--ua` to get past a block.
 
-- `capture` doubles its wait after a 429 or 503 (up to 32 times), tries each URL 3 times, and
-  stops after **3 different URLs blocked in a row** (403, 429, 503 or a network error), state
-  saved. It never requests `wp-admin`, `wp-login`, `xmlrpc.php` or `?s=` searches.
+- `capture` doubles its wait after a 429 or 503 (up to 32 times) and tries each URL 3 times. A
+  URL still blocked after that (403, 429, 503 or a network error) is recorded with its status and
+  `attempts` in `inventory.json` (a sitemap or REST list in `meta.json` `discoveryErrors`) and
+  the crawl moves on; it stops only after **3 different URLs blocked in a row**, state saved.
+  It never requests `wp-admin`, `wp-login`, `xmlrpc.php` or `?s=` searches.
 - `media` tries each file 3 times: a persistent 429 or 503 stops it at once; a 403 or network
   error is recorded as that file's status, and 3 such files in a row stop it.
 - `fingerprint` does not retry: a blocked home page is exit 3. `assets` and `shoot` back off and
@@ -88,7 +90,8 @@ source. Run each step as its own command, in this order:
 
 8. **README.** Summarises the capture in `capture/README.md`; its `## Notes` open with generated
    lines, rewritten on every run (how many Wayback paths the second pass verified and what each
-   answered: status, redirect target). Run it last, and after any rerun:
+   answered: status, redirect target; every URL still failing after its retries). Run it last,
+   and after any rerun:
 
        node <skill-dir>/scripts/readme.mjs --capture capture
 
@@ -105,9 +108,8 @@ source. Run each step as its own command, in this order:
 The site is blocking requests or cannot be reached. Wait (minutes, not seconds), then:
 
 - `fingerprint`: run it again.
-- `capture`: run the same command with `--resume`. URLs that answered 429, 503 or a network error
-  are retried with a fresh set of tries; a URL that kept answering 403 is recorded with status 403
-  (in `meta.json` `discoveryErrors` when it was a sitemap or REST list) and the crawl moves on.
+- `capture`: run the same command with `--resume`. The URLs still queued are retried with a fresh
+  set of tries; a URL already recorded as still failing after its retries is not requested again.
 - `media`, `assets`: run the same command again; work already done is kept.
 - `shoot`: rerun with a longer `--delay`.
 
@@ -139,8 +141,9 @@ Never retry in a tight loop. After two stops in a row, tell the person and carry
 ## What you write by hand
 
 Under `## Notes` in `capture/README.md` (kept when the README is regenerated): every resume and
-why; every URL recorded 403 and every `discoveryErrors` entry; the Wayback status from
-`meta.json`, and whether the second pass ran (its results are generated); whether shortlinks were verified; seeds you passed and where they came from; media
+why; every `discoveryErrors` entry (the URLs still failing after retries are generated); the
+Wayback status from `meta.json`, and whether the second pass ran (its results are generated);
+whether shortlinks were verified; seeds you passed and where they came from; media
 hosts other than the site's own (a platform CDN) seen in `pages/`; every `bannerClosed`,
 `heightMismatch` and `error` in `screens/live/manifest.json`; a template split or merge that looks
 wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, before the commit.
@@ -176,7 +179,8 @@ Repeat this list to the person verbatim. None of it was captured:
 - CSS `@import` more than 5 levels below a linked stylesheet (listed `too-deep` in
   `css/manifest.json`, never fetched).
 - Media on other hosts (platform CDNs, image services): not listed in `media.json`.
-- A URL that answers 503 for good blocks the run until it recovers.
+- A URL that still answered 403, 429, 503 or nothing after 3 tries: recorded with that status
+  and listed under `## Notes`; its content is not captured.
 - Indexing directives from `<meta name="robots">` only; `X-Robots-Tag` headers are not read.
 - Anything only a login, a form submission or a search reveals.
 - A file over `--max-file-bytes` or a page or stylesheet over 20 MB (`"too-large"`), and

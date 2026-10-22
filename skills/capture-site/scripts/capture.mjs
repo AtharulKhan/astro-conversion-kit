@@ -61,8 +61,10 @@ Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ onl
 REST lists. A Wayback failure is noted in meta.json and never fails the capture.
 
 Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address.
-Exit codes: 0 done, 2 usage error, 3 stopped because the site is blocking requests or
-cannot be reached (wait, then run again with --resume).`;
+Each URL is tried 3 times; one that still answers 403, 429, 503 or a network error is
+recorded with that status and its attempts, and the crawl moves on.
+Exit codes: 0 done, 2 usage error, 3 stopped because 3 different URLs in a row were blocked
+or the site cannot be reached (wait, then run again with --resume).`;
 
 const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
 // Same-site script files: larger ones are not saved, and redirects are followed at most this far.
@@ -70,8 +72,8 @@ const JS_MAX_BYTES = 5 * 1024 * 1024;
 const JS_MAX_HOPS = 5;
 // @import is followed this many levels below a linked stylesheet; a deeper one is "too-deep".
 const IMPORT_MAX_DEPTH = 5;
-// The one block status that can be a URL's real, lasting answer; 429, 503 and network errors
-// are always retried later (exit 3, --resume) rather than recorded.
+// The one block status that never counts towards the block streak in discovery (a sitemap or
+// REST list closed for good is that URL's answer, not a sign the site is blocking the crawl).
 const PERMANENT_BLOCK = 403;
 const MAX_HOPS = 10;
 const MAX_ATTEMPTS = 3;
@@ -263,9 +265,9 @@ class Crawler {
     return key;
   }
 
-  // Discovery fetch: retries a blocked answer (spaced out). A 403 that persists is that URL's
-  // answer (noted in meta.json, not fatal); a 429, 503 or network error that persists, or a
-  // streak of them on different URLs, throws Blocked so the run stops and resumes later.
+  // Discovery fetch: retries a blocked answer (spaced out). A block that persists is that URL's
+  // answer (noted in meta.json, not fatal); a streak of 429, 503 or network errors on different
+  // URLs throws Blocked so the run stops and resumes later.
   discoveryFetch() {
     return async (url, options) => {
       for (let attempt = 1; ; attempt += 1) {
@@ -279,13 +281,12 @@ class Crawler {
           }
           return res;
         }
-        if (res.status === PERMANENT_BLOCK) {
-          if (attempt >= MAX_ATTEMPTS) {
-            const errors = (this.state.discoveryErrors ??= []);
-            if (!errors.some((e) => e.url === url)) errors.push({ url, status: res.status });
-            return res;
-          }
-        } else if (this.noteBlocked(url) || attempt >= MAX_ATTEMPTS) throw new Blocked();
+        if (res.status !== PERMANENT_BLOCK && this.noteBlocked(url)) throw new Blocked();
+        if (attempt >= MAX_ATTEMPTS) {
+          const errors = (this.state.discoveryErrors ??= []);
+          if (!errors.some((e) => e.url === url)) errors.push({ url, status: res.status });
+          return res;
+        }
         await sleep(this.retryWait(attempt));
       }
     };
@@ -374,7 +375,7 @@ class Crawler {
     this.state.records.push(slim);
   }
 
-  record(key, res, kind = 'page') {
+  record(key, res, kind = 'page', extra = {}) {
     this.recorded.add(key);
     const type = res.headers?.['content-type'] ?? '';
     const body = typeof res.body === 'string' ? res.body : '';
@@ -399,7 +400,7 @@ class Crawler {
       return;
     }
     // Any other 200 is a file, not a page; a non-200 is still recorded with its status.
-    if (res.status !== 200) this.addRecord(extractPage('', key, { status: res.status, finalUrl: key }));
+    if (res.status !== 200) this.addRecord({ ...extractPage('', key, { status: res.status, finalUrl: key }), ...extra });
   }
 
   // Stylesheets in first-seen order, each fetched once after the crawl (css/<n>.css); a page's
@@ -664,9 +665,9 @@ class Crawler {
   }
 
   // Work through a queue with per-URL retries and the block streak.
-  // A URL still answering 403 after its retries is given up (recorded with that status).
-  // A URL still answering 429, 503 or a network error after its retries, or three different
-  // URLs blocked in a row, stops the run with the item back at the front of the queue.
+  // A URL still blocked (403, 429, 503 or a network error) after its retries is given up:
+  // recorded with that status and its attempts, and the run moves on. Three different URLs
+  // blocked in a row stop the run with the item back at the front of the queue.
   // Returns 'done', 'max' or 'blocked'.
   async drain(queue, visit, giveUp, max = null) {
     let sinceSave = 0;
@@ -677,15 +678,13 @@ class Crawler {
       this.lastVisited = item.url;
       const result = await visit(item);
       if (result.blocked) {
-        const streak = this.noteBlocked(item.url);
         item.attempts += 1;
-        const exhausted = item.attempts >= MAX_ATTEMPTS;
-        if (streak || (exhausted && result.status !== PERMANENT_BLOCK)) {
+        if (this.noteBlocked(item.url)) {
           item.attempts = 0; // a resumed run gives it a fresh set of retries
           queue.unshift(item);
           return 'blocked';
         }
-        if (exhausted) giveUp(item, result.status);
+        if (item.attempts >= MAX_ATTEMPTS) giveUp(item, result.status);
         else queue.push(item);
       } else this.noteOk();
       sinceSave += 1;
@@ -701,7 +700,7 @@ class Crawler {
     const outcome = await this.drain(
       this.state.queue,
       (item) => this.visit(item),
-      (item, status) => this.record(item.url, { status, headers: {}, body: '' }, item.kind),
+      (item, status) => this.record(item.url, { status, headers: {}, body: '' }, item.kind, { attempts: item.attempts }),
       max,
     );
     if (outcome === 'done') this.state.phase = 'done';

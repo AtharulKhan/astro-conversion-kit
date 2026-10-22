@@ -150,7 +150,27 @@ test('a page that is always 403 is recorded with its status, not treated as a bl
   }
 });
 
-test('a URL that keeps answering 429 stops the run with exit 3 and stays queued', async () => {
+test('a URL that keeps answering 503 is recorded with its status and attempts; the rest is captured and the README lists it', async () => {
+  const site = await startFixture({ alwaysStatus: { '/flaky/': 503 } });
+  try {
+    const out = tempDir();
+    const run = await capture([site.origin, '--out', out, '--delay', '0', '--no-rest', '--seed', '/flaky/']);
+    assert.equal(run.code, 0, run.stderr);
+    const inventory = readJson(out, 'inventory.json');
+    const flaky = inventory.find((r) => r.path === '/flaky/');
+    assert.equal(flaky.status, 503);
+    assert.equal(flaky.attempts, 3);
+    assert.equal(site.requests.filter((u) => u === '/flaky/').length, 3);
+    assert.equal(inventory.filter((r) => r.status === 200).length, 12, 'every other page is captured');
+    assert.equal(readJson(out, 'state.json').phase, 'done');
+    assert.ok(readJson(out, 'meta.json').finishedAt);
+    assert.match(await readme(out), /^- Still failing after retries: \/flaky\/ \(503 after 3 attempts\)$/m);
+  } finally {
+    await site.close();
+  }
+});
+
+test('a URL that keeps answering 429 is given up; three different URLs failing in a row stop the run with exit 3', async () => {
   const stub = await startStub({
     '/': { body: '<html><body><a href="/a/">a</a> <a href="/slow/">s</a></body></html>' },
     '/a/': { body: '<html><body>a</body></html>' },
@@ -159,12 +179,47 @@ test('a URL that keeps answering 429 stops the run with exit 3 and stays queued'
   try {
     const out = tempDir();
     const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/a/:200', '/slow/:429']);
+    assert.equal(stub.requests.filter((u) => u === '/slow/').length, 3);
+  } finally {
+    await stub.close();
+  }
+
+  const failing = { status: 503, body: 'unavailable' };
+  const busy = await startStub({
+    '/': { body: '<html><body><a href="/s1/">1</a> <a href="/s2/">2</a> <a href="/s3/">3</a> <a href="/ok/">ok</a></body></html>' },
+    '/s1/': failing,
+    '/s2/': failing,
+    '/s3/': failing,
+    '/ok/': { body: '<html><body>ok</body></html>' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([busy.origin, '--out', out, '--delay', '0']);
     assert.equal(run.code, 3, run.stderr);
     const state = readJson(out, 'state.json');
     assert.equal(state.phase, 'crawl');
-    assert.deepEqual(state.queue.map((q) => new URL(q.url).pathname), ['/slow/']);
-    assert.deepEqual(readJson(out, 'inventory.json').map((r) => r.path), ['/', '/a/']);
-    assert.equal(stub.requests.filter((u) => u === '/slow/').length, 3);
+    assert.deepEqual(state.queue.map((q) => new URL(q.url).pathname), ['/s3/', '/ok/', '/s1/', '/s2/']);
+    assert.ok(state.queue.every((q) => q.attempts <= 1));
+  } finally {
+    await busy.close();
+  }
+});
+
+test('a sitemap that keeps answering 503 is noted in discoveryErrors, not fatal', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><body>home</body></html>' },
+    '/robots.txt': { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'Sitemap: /busy-sitemap.xml\n' },
+    '/busy-sitemap.xml': { status: 503 },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => r.path), ['/']);
+    const errors = readJson(out, 'meta.json').discoveryErrors.map((e) => `${new URL(e.url).pathname}:${e.status}`);
+    assert.ok(errors.includes('/busy-sitemap.xml:503'), errors.join(' '));
   } finally {
     await stub.close();
   }

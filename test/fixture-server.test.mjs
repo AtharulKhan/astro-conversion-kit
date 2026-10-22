@@ -185,6 +185,22 @@ test('with blockAfter: 5 the sixth request is 429', async () => {
   }
 });
 
+test('alwaysStatus answers one path with a fixed status on every request', async () => {
+  const flaky = await startFixture({ alwaysStatus: { '/flaky/': 503 } });
+  try {
+    for (let i = 1; i <= 3; i += 1) {
+      const res = await fetch(`${flaky.origin}/flaky/`);
+      await res.arrayBuffer();
+      assert.equal(res.status, 503, `request ${i}`);
+    }
+    const about = await fetch(`${flaky.origin}/about/`);
+    await about.arrayBuffer();
+    assert.equal(about.status, 200);
+  } finally {
+    await flaky.close();
+  }
+});
+
 test('delayMs delays every response', async () => {
   const slow = await startFixture({ delayMs: 150 });
   try {

@@ -1,5 +1,6 @@
 // Fixture server: a static imitation of a WordPress site for tests.
-// startFixture({ port, blockAfter, delayMs, root }) -> { origin, requests, close() }
+// startFixture({ port, blockAfter, delayMs, root, alwaysStatus }) -> { origin, requests, close() }
+// alwaysStatus maps a path to the status it answers on every request, e.g. { '/flaky/': 503 };
 // root serves pages and assets from another copy of site/ (wp-json and redirects stay the fixture's);
 // `requests` lists every request URL in order.
 import { createServer } from 'node:http';
@@ -148,7 +149,7 @@ function respond(req, origin, site) {
   }
 }
 
-export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, root = SITE } = {}) {
+export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, root = SITE, alwaysStatus = {} } = {}) {
   const site = resolve(root);
   let requests = 0;
   const log = [];
@@ -158,9 +159,12 @@ export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, roo
     const blocked = requests > blockAfter;
     setTimeout(() => {
       const origin = `http://${req.headers.host ?? `127.0.0.1:${server.address().port}`}`;
+      const fixed = alwaysStatus[new URL(req.url, origin).pathname];
       const response = blocked
         ? { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain' }, body: 'Too Many Requests' }
-        : respond(req, origin, site);
+        : fixed
+          ? { status: fixed, headers: { 'Content-Type': 'text/plain' }, body: `Status ${fixed}` }
+          : respond(req, origin, site);
       const payload = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body);
       res.writeHead(response.status, { ...response.headers, 'Content-Length': payload.length });
       res.end(req.method === 'HEAD' ? undefined : payload);
