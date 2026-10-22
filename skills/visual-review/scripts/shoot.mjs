@@ -1,26 +1,27 @@
 #!/usr/bin/env node
 // Full-page Chromium screenshots of a set of routes at a set of widths.
-// Exit 0 all shot, 1 a route failed to load, 2 usage or environment error,
+// Exit 0 all shot, 1 a route failed, 2 usage or environment error,
 // 3 stopped after repeated blocks (the manifest holds what was shot).
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
-import { capture, launchBrowser, newShotContext, pngHeight } from './lib/browser.mjs';
+import { capture, launchBrowser, NavigationError, newShotContext, pngHeight } from './lib/browser.mjs';
 
 const HELP = `Usage: node shoot.mjs --base <origin> --routes <templates.json|/,/a/b/> --out <dir>
                       [--widths 390,768,1440] [--delay 2500] [--wait 1500] [--full] [--scale 1]
 
 Takes a full-page Chromium screenshot of every route at every width and writes
   <out>/<route>/<width>.png and <out>/manifest.json
-  ([{ route, width, file, heightPx, bannerClosed }]).
+  ([{ route, width, file, heightPx, bannerClosed, scrollHeight, heightMismatch }],
+  plus error on a route that failed, whose file is null).
 
   --base     origin to shoot, e.g. https://www.example.com
   --routes   a templates.json ([{ name, representative, paths[] }]: the folder is
              the template name and the representative path is shot) or a comma
              list of paths (folder is the path slug: / -> home, /a/b/ -> a__b)
-  --widths   comma list of viewport widths in CSS pixels (default 390,768,1440)
+  --widths   comma list of viewport widths in whole CSS pixels (default 390,768,1440)
   --out      output directory
   --delay    milliseconds between page loads (default 2500)
   --wait     milliseconds to settle before each capture (default 1500)
@@ -31,14 +32,17 @@ Takes a full-page Chromium screenshot of every route at every width and writes
 
 Motion is frozen (prefers-reduced-motion plus injected CSS), scroll-reveal
 content is forced visible, lazy images are loaded by scrolling to the bottom and
-back, web fonts are awaited, and a cookie banner whose button says accept,
-agree, got it or ok is closed (reported as bannerClosed).
+back (at most 60 viewports or 30 s), web fonts are awaited, and a cookie banner
+whose button says accept, agree, got it or ok is closed (reported as
+bannerClosed). A screenshot whose height is more than 2 pixels off the page's
+scrollHeight is flagged with heightMismatch and a warning.
 
-Exit codes: 0 all shot, 1 a route failed to load, 2 usage error,
+Exit codes: 0 all shot, 1 a route failed, 2 usage error,
 3 stopped after 3 consecutive blocked responses (403/429/503/network).`;
 
 const BLOCKED = new Set([403, 429, 503]);
 const MAX_CONSECUTIVE_BLOCKS = 3;
+const HEIGHT_TOLERANCE_PX = 2;
 
 class UsageError extends Error {}
 
@@ -48,7 +52,20 @@ export function slugFor(path) {
   return trimmed.split('/').map((part) => part.replace(/[^A-Za-z0-9_.-]/g, '-')).join('__');
 }
 
+// True when the PNG height is more than 2 px off the page height at this scale.
+export const heightMismatch = (heightPx, scrollHeight, scale) =>
+  Math.abs(heightPx - Math.round(scrollHeight * scale)) > HEIGHT_TOLERANCE_PX;
+
+function templateFolder(name) {
+  const folder = typeof name === 'string' ? name : '';
+  if (!folder || /[/\\]/.test(folder) || folder.includes('..') || folder.startsWith('.')) {
+    throw new UsageError(`template name ${JSON.stringify(name)} cannot be a folder name (no /, \\, .. or leading .)`);
+  }
+  return folder;
+}
+
 function readRoutes(value, full) {
+  let routes;
   if (value.endsWith('.json') || (existsSync(value) && statSync(value).isFile())) {
     let templates;
     try {
@@ -57,18 +74,27 @@ function readRoutes(value, full) {
       throw new UsageError(`cannot read --routes ${value}: ${error.message}`);
     }
     if (!Array.isArray(templates)) throw new UsageError('--routes JSON must be an array of { name, representative, paths }');
-    if (full) return templates.flatMap((t) => (t.paths ?? [t.representative]).map((path) => ({ route: slugFor(path), path })));
-    return templates.map((t) => {
-      if (!t.name || !t.representative) throw new UsageError('every template needs a name and a representative');
-      return { route: String(t.name), path: t.representative };
-    });
+    routes = full
+      ? templates.flatMap((t) => (t.paths ?? [t.representative]).map((path) => ({ route: slugFor(path), path })))
+      : templates.map((t) => {
+          if (!t.representative) throw new UsageError(`template ${JSON.stringify(t.name)} has no representative`);
+          return { route: templateFolder(t.name), path: t.representative };
+        });
+  } else {
+    routes = value.split(',').map((p) => p.trim()).filter(Boolean).map((path) => ({ route: slugFor(path), path }));
   }
-  return value.split(',').map((p) => p.trim()).filter(Boolean).map((path) => ({ route: slugFor(path), path }));
+  const seen = new Map();
+  for (const { route, path } of routes) {
+    if (seen.has(route)) throw new UsageError(`${seen.get(route)} and ${path} would both be saved in folder ${route}`);
+    seen.set(route, path);
+  }
+  return routes;
 }
 
-function number(value, name, { min, max }) {
+function number(value, name, { min, max, integer = false }) {
   const n = Number(value);
-  if (!Number.isFinite(n) || n < min || n > max) throw new UsageError(`--${name} must be a number from ${min} to ${max}`);
+  const ok = value !== '' && Number.isFinite(n) && n >= min && n <= max && (!integer || Number.isInteger(n));
+  if (!ok) throw new UsageError(`--${name} must be ${integer ? 'a whole number' : 'a number'} from ${min} to ${max}`);
   return n;
 }
 
@@ -100,7 +126,7 @@ function parse(argv) {
   } catch {
     throw new UsageError(`--base is not a URL: ${values.base}`);
   }
-  const widths = values.widths.split(',').map((w) => number(w.trim(), 'widths', { min: 100, max: 4000 }));
+  const widths = values.widths.split(',').map((w) => number(w.trim(), 'widths', { min: 100, max: 4000, integer: true }));
   const routes = readRoutes(values.routes, values.full);
   if (!routes.length) throw new UsageError('--routes names no paths');
   return {
@@ -116,20 +142,23 @@ function parse(argv) {
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+const failedEntry = (route, width, error) => ({
+  route, width, file: null, heightPx: null, bannerClosed: false, scrollHeight: null, heightMismatch: false, error,
+});
+
 async function shoot({ base, routes, widths, out, delay, wait, scale }) {
   const manifest = [];
-  const failures = [];
   let stopped = false;
   let pace = delay;
+  let blocks = 0;
   let first = true;
   const browser = await launchBrowser();
   try {
     widths: for (const width of widths) {
       const context = await newShotContext(browser, { width, scale });
-      const page = await context.newPage();
+      let page = await context.newPage();
       for (const { route, path } of routes) {
         const url = new URL(path, base).href;
-        let blocks = 0;
         for (;;) {
           if (!first) await sleep(pace);
           first = false;
@@ -137,11 +166,21 @@ async function shoot({ base, routes, widths, out, delay, wait, scale }) {
           try {
             result = await capture(page, url, { wait });
           } catch (error) {
-            result = { status: 0, error };
+            if (error instanceof NavigationError) {
+              result = { status: 0, error };
+            } else {
+              const entry = failedEntry(route, width, error.message.split('\n')[0]);
+              manifest.push(entry);
+              console.error(`failed: ${url} at ${width}: ${entry.error}`);
+              await page.close().catch(() => {});
+              page = await context.newPage();
+              blocks = 0;
+              break;
+            }
           }
           if (result.status === 0 || BLOCKED.has(result.status)) {
             blocks += 1;
-            console.error(`blocked: ${url} at ${width} (${result.error ? result.error.message.split('\n')[0] : result.status})`);
+            console.error(`blocked: ${url} at ${width} (${result.error ? result.error.message : result.status})`);
             if (blocks >= MAX_CONSECUTIVE_BLOCKS) {
               stopped = true;
               break widths;
@@ -149,16 +188,27 @@ async function shoot({ base, routes, widths, out, delay, wait, scale }) {
             pace = Math.max(pace, 1000) * 2;
             continue;
           }
+          blocks = 0;
+          pace = delay;
           if (result.status >= 400) {
-            failures.push(`${url} at ${width}: HTTP ${result.status}`);
+            const entry = failedEntry(route, width, `HTTP ${result.status}`);
+            manifest.push(entry);
+            console.error(`failed: ${url} at ${width}: ${entry.error}`);
             break;
           }
           const file = `${route}/${width}.png`;
           mkdirSync(join(out, route), { recursive: true });
           writeFileSync(join(out, file), result.buffer);
-          const entry = { route, width, file, heightPx: pngHeight(result.buffer), bannerClosed: result.bannerClosed };
+          const heightPx = pngHeight(result.buffer);
+          const entry = {
+            route, width, file, heightPx, bannerClosed: result.bannerClosed,
+            scrollHeight: result.scrollHeight, heightMismatch: heightMismatch(heightPx, result.scrollHeight, scale),
+          };
           manifest.push(entry);
-          console.log(`${file} ${entry.heightPx}px${entry.bannerClosed ? ' (cookie banner closed)' : ''}`);
+          if (entry.heightMismatch) {
+            console.error(`warning: ${file} is ${heightPx}px tall but the page is ${result.scrollHeight}px at scale ${scale}; the capture may be cut short`);
+          }
+          console.log(`${file} ${heightPx}px${entry.bannerClosed ? ' (cookie banner closed)' : ''}`);
           break;
         }
       }
@@ -170,11 +220,10 @@ async function shoot({ base, routes, widths, out, delay, wait, scale }) {
     writeFileSync(join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   }
   if (stopped) {
-    console.error(`stopped after ${MAX_CONSECUTIVE_BLOCKS} consecutive blocked responses; ${manifest.length} shots saved in ${join(out, 'manifest.json')}`);
+    console.error(`stopped after ${MAX_CONSECUTIVE_BLOCKS} consecutive blocked responses; ${manifest.length} entries saved in ${join(out, 'manifest.json')}`);
     return 3;
   }
-  for (const failure of failures) console.error(`failed: ${failure}`);
-  return failures.length ? 1 : 0;
+  return manifest.some((entry) => entry.error) ? 1 : 0;
 }
 
 async function main() {

@@ -10,6 +10,11 @@ export const USER_AGENT =
 export const FREEZE_CSS = join(dirname(fileURLToPath(import.meta.url)), 'freeze.css');
 const VIEWPORT_HEIGHT = 900;
 const IMAGE_TIMEOUT_MS = 10000;
+const EVALUATE_TIMEOUT_MS = 15000;
+export const LAZY_SCROLL_LIMITS = { maxViewports: 60, maxMs: 30000 };
+
+// Navigation and network failures, which count as blocks; anything else is a page fault.
+export class NavigationError extends Error {}
 
 export const launchBrowser = () => chromium.launch();
 
@@ -23,33 +28,58 @@ export function newShotContext(browser, { width, scale = 1 }) {
   });
 }
 
-// Stops animations and transitions and forces scroll-reveal content visible.
-// Injected with evaluate rather than addStyleTag, which never settles on a page
-// whose own scripts are disabled.
-export async function freezePage(page) {
-  await page.evaluate((css) => {
-    const style = document.createElement('style');
-    style.textContent = css;
-    (document.head ?? document.documentElement).append(style);
-  }, freezeCss());
+// page.evaluate has no timeout of its own; a page stuck in a loop must not hang the run.
+async function evaluate(page, fn, arg, { timeoutMs = EVALUATE_TIMEOUT_MS, label = 'page script' } = {}) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} did not finish within ${timeoutMs} ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([page.evaluate(fn, arg), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 let cachedFreezeCss;
 const freezeCss = () => (cachedFreezeCss ??= readFileSync(FREEZE_CSS, 'utf8'));
 
+// Stops animations and transitions and forces scroll-reveal content visible.
+// Injected with evaluate rather than addStyleTag, which never settles on a page
+// whose own scripts are disabled.
+export async function freezePage(page) {
+  await evaluate(page, (css) => {
+    const style = document.createElement('style');
+    style.textContent = css;
+    (document.head ?? document.documentElement).append(style);
+  }, freezeCss(), { label: 'freeze.css injection' });
+}
+
 // Scrolls to the bottom one viewport at a time so lazy loaders fire, returns to
-// the top, then waits for every image to finish (or fail).
-export async function loadLazyContent(page) {
-  await page.evaluate(async (timeoutMs) => {
+// the top, then waits for every image to finish (or fail). Pages that keep
+// growing (infinite scroll) stop at limits.maxViewports or limits.maxMs.
+// Returns { capped }; log receives a message when a limit was hit.
+export async function loadLazyContent(page, { limits = LAZY_SCROLL_LIMITS, log = console.error } = {}) {
+  const { capped } = await evaluate(page, async ({ maxViewports, maxMs, imageTimeoutMs }) => {
     const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+    const started = Date.now();
     for (const img of document.querySelectorAll('img[loading="lazy"]')) img.loading = 'eager';
     const step = Math.max(200, window.innerHeight);
+    let steps = 0;
+    let hitCap = false;
     for (let y = 0; y < document.documentElement.scrollHeight; y += step) {
+      if (steps >= maxViewports || Date.now() - started >= maxMs) {
+        hitCap = true;
+        break;
+      }
       window.scrollTo(0, y);
+      steps += 1;
       await pause(100);
     }
-    window.scrollTo(0, document.documentElement.scrollHeight);
-    await pause(250);
+    if (!hitCap) {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await pause(250);
+    }
     window.scrollTo(0, 0);
     const pending = [...document.images].filter((img) => !img.complete);
     await Promise.race([
@@ -57,15 +87,23 @@ export async function loadLazyContent(page) {
         img.addEventListener('load', done, { once: true });
         img.addEventListener('error', done, { once: true });
       }))),
-      pause(timeoutMs),
+      pause(imageTimeoutMs),
     ]);
-  }, IMAGE_TIMEOUT_MS);
+    return { capped: hitCap };
+  }, { ...limits, imageTimeoutMs: IMAGE_TIMEOUT_MS }, {
+    timeoutMs: limits.maxMs + IMAGE_TIMEOUT_MS + EVALUATE_TIMEOUT_MS,
+    label: 'lazy-content scroll',
+  });
+  if (capped) {
+    log(`lazy-content scroll stopped at ${limits.maxViewports} viewports or ${limits.maxMs} ms on ${page.url()}; the page may keep growing`);
+  }
+  return { capped };
 }
 
 // Clicks a consent button (accept / agree / got it / ok) inside a fixed or sticky
 // layer or a cookie / consent container. Returns true when one was clicked.
 export async function closeCookieBanner(page) {
-  const clicked = await page.evaluate(() => {
+  const clicked = await evaluate(page, () => {
     const LABEL = /\b(accept|agree|got it|ok)\b/i;
     const CONTAINER = /cookie|consent|gdpr|privacy/i;
     const inBanner = (el) => {
@@ -86,22 +124,35 @@ export async function closeCookieBanner(page) {
       return true;
     }
     return false;
-  });
+  }, undefined, { label: 'cookie banner check' });
   if (clicked) await page.waitForTimeout(300);
   return clicked;
 }
 
 // Loads url and returns a full-page PNG plus what was done to get it.
-export async function capture(page, url, { wait = 1500 } = {}) {
-  const response = await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+// Throws NavigationError when the page cannot be reached at all.
+export async function capture(page, url, { wait = 1500, log = console.error } = {}) {
+  let response;
+  try {
+    response = await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+  } catch (error) {
+    throw new NavigationError(error.message.split('\n')[0]);
+  }
   const status = response ? response.status() : 0;
+  if (status >= 400) return { status };
   await freezePage(page);
-  const bannerClosed = await closeCookieBanner(page);
-  await loadLazyContent(page);
-  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  let bannerClosed = await closeCookieBanner(page);
+  await loadLazyContent(page, { log });
+  await evaluate(page, () => document.fonts.ready.then(() => undefined), undefined, { label: 'document.fonts.ready' });
   if (wait > 0) await page.waitForTimeout(wait);
+  // Banners that appear late, after a scroll or a timer, are closed too.
+  if (await closeCookieBanner(page)) bannerClosed = true;
+  const scrollHeight = await evaluate(page, () => Math.max(
+    document.documentElement.scrollHeight,
+    document.body ? document.body.scrollHeight : 0,
+  ), undefined, { label: 'page height' });
   const buffer = await page.screenshot({ fullPage: true, animations: 'disabled' });
-  return { status, buffer, bannerClosed };
+  return { status, buffer, bannerClosed, scrollHeight };
 }
 
 // PNG height from the IHDR chunk, without decoding the image.
