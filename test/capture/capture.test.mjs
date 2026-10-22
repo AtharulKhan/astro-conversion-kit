@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ import { startStub } from './helpers.mjs';
 
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../skills/capture-site/scripts/capture.mjs', import.meta.url));
+const README = fileURLToPath(new URL('../../skills/capture-site/scripts/readme.mjs', import.meta.url));
 const dirs = [];
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), 'capture-test-'));
@@ -21,14 +22,14 @@ const tempDir = () => {
 const readJson = (dir, file) => JSON.parse(readFileSync(join(dir, file), 'utf8'));
 
 // A stand-in for the Wayback CDX API, so no test ever contacts web.archive.org. It answers any
-// query with the queried host's home page plus two paths the fixture does not have.
+// query with the queried host's home page plus two paths the fixture does not have (or `paths`).
 let cdx;
-function startCdx() {
+function startCdx(paths = ['/old-team/', '/2019/05/summer-sale/']) {
   const requests = [];
   const server = createServer((req, res) => {
     requests.push(req.url);
     const host = new URL(req.url, 'http://cdx').searchParams.get('url').replace(/\/\*$/, '');
-    const rows = [['original'], [`http://${host}/`], [`http://${host}/old-team/`], [`http://${host}/2019/05/summer-sale/`]];
+    const rows = [['original'], [`http://${host}/`], ...paths.map((p) => [`http://${host}${p}`])];
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(rows));
   });
@@ -53,6 +54,13 @@ async function capture(args, { wayback } = {}) {
     if (typeof err.code !== 'number') throw err;
     return { code: err.code, stdout: err.stdout, stderr: err.stderr };
   }
+}
+
+async function readme(dir) {
+  const { stdout } = await exec(process.execPath, [README, '--capture', dir]);
+  assert.match(stdout, /Wrote/);
+  const text = readFileSync(join(dir, 'README.md'), 'utf8');
+  return text.slice(text.indexOf('## Notes'));
 }
 
 let fixture;
@@ -446,6 +454,72 @@ test('js/: an on-site redirect is followed, an off-site one is not, a file over 
   }
 });
 
+test('--seed-file, --seed and --include-query given on --resume are honoured', async () => {
+  const out = tempDir();
+  const first = await capture([fixture.origin, '--out', out, '--delay', '0', '--no-rest', '--max', '3']);
+  assert.equal(first.code, 0, first.stderr);
+  const seeds = join(out, 'seeds.txt');
+  writeFileSync(seeds, '# old URLs from the previous host\n/old-services\n\n  /about  \n');
+  const before = fixture.requests.length;
+  const resumed = await capture([
+    fixture.origin, '--out', out, '--delay', '0', '--resume', '--seed-file', seeds, '--seed', '/contact/?utm=1', '--include-query',
+  ]);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  const requested = fixture.requests.slice(before);
+  for (const path of ['/old-services', '/about', '/contact/?utm=1']) assert.ok(requested.includes(path), path);
+  const redirects = readJson(out, 'redirects.json');
+  assert.deepEqual(redirects.find((r) => r.from === '/old-services'), { from: '/old-services', to: '/services/', status: 301, source: 'seed', hops: ['/old-services/'] });
+  assert.deepEqual(redirects.find((r) => r.from === '/about'), { from: '/about', to: '/about/', status: 301, source: 'seed', hops: [] });
+  const contact = readJson(out, 'inventory.json').find((r) => r.path === '/contact/?utm=1');
+  assert.equal(contact?.status, 200);
+  assert.ok(contact.foundBy.includes('seed'), contact.foundBy);
+  const options = readJson(out, 'meta.json').options;
+  assert.equal(options.includeQuery, true);
+  assert.deepEqual(options.seeds, ['/old-services', '/about', '/contact/?utm=1']);
+
+  const missing = await capture([fixture.origin, '--out', tempDir(), '--seed-file', join(out, 'no-such-file.txt')]);
+  assert.equal(missing.code, 2);
+  assert.match(missing.stderr, /no-such-file\.txt/);
+});
+
+test('the Wayback second pass verifies archived paths on a finished capture and the README notes the results', async () => {
+  const archive = await startCdx(['/old-services', '/old-team/']);
+  try {
+    const out = tempDir();
+    const first = await capture([fixture.origin, '--out', out, '--delay', '0', '--no-rest'], { wayback: archive.endpoint });
+    assert.equal(first.code, 0, first.stderr);
+    const list = join(out, 'wayback-unverified.txt');
+    assert.equal(readFileSync(list, 'utf8'), '/old-services\n/old-team/\n');
+    assert.match(await readme(out), /Wayback second pass: 0 of 2 archived paths verified/);
+
+    const asked = archive.requests.length;
+    const second = await capture([fixture.origin, '--out', out, '--delay', '0', '--resume', '--seed-file', list], { wayback: archive.endpoint });
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(archive.requests.length, asked, 'the Wayback Machine is not asked again');
+    assert.equal(readFileSync(list, 'utf8'), '/old-services\n/old-team/\n', 'the list is kept as it was');
+    const redirect = readJson(out, 'redirects.json').find((r) => r.from === '/old-services');
+    assert.deepEqual(redirect, { from: '/old-services', to: '/services/', status: 301, source: 'seed', hops: ['/old-services/'] });
+    const gone = readJson(out, 'inventory.json').find((r) => r.path === '/old-team/');
+    assert.equal(gone.status, 404);
+    assert.deepEqual(gone.foundBy, ['seed']);
+    assert.ok(readJson(out, 'meta.json').finishedAt);
+    assert.equal(readJson(out, 'state.json').phase, 'done');
+
+    const notes = await readme(out);
+    assert.match(notes, /Wayback second pass: 2 of 2 archived paths verified/);
+    assert.match(notes, /^ {2}- \/old-services: 301 to \/services\/ \(via \/old-services\/\)$/m);
+    assert.match(notes, /^ {2}- \/old-team\/: 404$/m);
+    // Notes written by hand survive a regeneration, and the generated lines are not repeated.
+    const file = join(out, 'README.md');
+    writeFileSync(file, `${readFileSync(file, 'utf8').trimEnd()}\n\nChecked by hand.\n`);
+    const again = await readme(out);
+    assert.equal(again.split('Wayback second pass').length, 2, again);
+    assert.ok(again.endsWith('Checked by hand.\n'), again);
+  } finally {
+    await archive.close();
+  }
+});
+
 test('--max 3 fetches exactly 3 pages', async () => {
   const out = tempDir();
   const run = await capture([fixture.origin, '--out', out, '--delay', '0', '--max', '3']);
@@ -458,6 +532,7 @@ test('usage errors exit 2 and --help prints usage', async () => {
   assert.equal(help.code, 0);
   assert.match(help.stdout, /Usage: node capture\.mjs <origin> --out <dir>/);
   assert.match(help.stdout, /--no-wayback/);
+  assert.match(help.stdout, /--seed-file <path>/);
   assert.match(help.stdout, /CAPTURE_WAYBACK_CDX/);
   assert.match(help.stdout, /media\.mjs/);
   assert.equal((await capture([fixture.origin])).code, 2, 'missing --out');

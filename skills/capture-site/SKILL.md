@@ -44,12 +44,21 @@ source. Run each step as its own command, in this order:
        node <skill-dir>/scripts/fingerprint.mjs https://www.example.com
 
 2. **Capture.** Discovery is the sitemaps, the REST lists (WordPress, when the fingerprint finds
-   REST; `--no-rest` skips), the link crawl, and `--seed <path>` for paths the crawl cannot reach
-   (old URLs, an old `.htaccess`). After the crawl, Wayback paths it did not find go to
-   `wayback-unverified.txt` (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and
-   never fetched unless you pass `--verify-shortlinks`.
+   REST; `--no-rest` skips), the link crawl, and `--seed <path>` or `--seed-file <file>` (one
+   path or URL per line, `#` comments) for paths the crawl cannot reach (old URLs, an old
+   `.htaccess`). After the crawl, Wayback paths it did not find go to `wayback-unverified.txt`
+   (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and never fetched unless you
+   pass `--verify-shortlinks`.
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
+
+   Then the **Wayback second pass**, when `wayback-unverified.txt` is not empty: it requests each
+   archived path once, so the ones that still redirect land in `capture/redirects.json` with
+   source `seed` (the baseline's redirects pick them up) and the rest are recorded with their
+   status in `inventory.json`. `--seed`, `--seed-file` and `--include-query` all apply on
+   `--resume`, and the Wayback Machine is not asked again:
+
+       node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture --resume --seed-file capture/wayback-unverified.txt
 
 3. **Media.** Lists every media file in `capture/media.json` and saves it under
    `.conversion/media-cache/`, the conversion's working directory, which stays out of git:
@@ -77,7 +86,9 @@ source. Run each step as its own command, in this order:
 
        npx --no-install lighthouse https://www.example.com/ --quiet --chrome-flags="--headless=new" --output json --output html --output-path capture/lighthouse-live/home
 
-8. **README.** Summarises the capture in `capture/README.md`. Run it last, and after any rerun:
+8. **README.** Summarises the capture in `capture/README.md`; its `## Notes` open with generated
+   lines, rewritten on every run (how many Wayback paths the second pass verified and what each
+   answered: status, redirect target). Run it last, and after any rerun:
 
        node <skill-dir>/scripts/readme.mjs --capture capture
 
@@ -126,7 +137,7 @@ Never retry in a tight loop. After two stops in a row, tell the person and carry
 
 Under `## Notes` in `capture/README.md` (kept when the README is regenerated): every resume and
 why; every URL recorded 403 and every `discoveryErrors` entry; the Wayback status from
-`meta.json`; whether shortlinks were verified; seeds you passed and where they came from; media
+`meta.json`, and whether the second pass ran (its results are generated); whether shortlinks were verified; seeds you passed and where they came from; media
 hosts other than the site's own (a platform CDN) seen in `pages/`; every `bannerClosed`,
 `heightMismatch` and `error` in `screens/live/manifest.json`; a template split or merge that looks
 wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, before the commit.

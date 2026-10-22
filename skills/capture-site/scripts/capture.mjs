@@ -44,9 +44,14 @@ to list and download the media.
   --ua "<string>"       user agent (default: a desktop Chrome)
   --seed <path>         also request this path or URL (repeatable), e.g. old URLs to
                         check for redirects
+  --seed-file <path>    also request every path or URL in this file, one per line
+                        (blank lines and lines starting with # are skipped); with
+                        --resume on a finished capture this is the Wayback second pass:
+                        --resume --seed-file <dir>/wayback-unverified.txt
   --verify-shortlinks   request every ?p= shortlink to confirm where it redirects
                         (by default they are recorded unverified, without a request)
   --include-query       keep query strings (by default only ?p= shortlinks keep theirs)
+                        --seed, --seed-file and --include-query also apply on --resume
   --no-rest             do not use the platform's REST API for discovery
   --no-wayback          do not ask the Wayback Machine for archived URLs
   --help                show this help
@@ -79,6 +84,17 @@ class Blocked extends Error {}
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+// The paths or URLs in a seed file: one per line, blank lines and # comments skipped.
+function readSeedFile(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    throw new UsageError(`cannot read --seed-file ${file}: ${err.code ?? err.message}`);
+  }
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+}
+
 function parseArgs(argv) {
   const args = {
     origin: null, out: null, delayMs: DEFAULT_DELAY_MS, max: null, resume: false, ua: DEFAULT_UA,
@@ -99,6 +115,7 @@ function parseArgs(argv) {
       else args.max = n;
     } else if (arg === '--ua') args.ua = value((i += 1), arg);
     else if (arg === '--seed') args.seeds.push(value((i += 1), arg));
+    else if (arg === '--seed-file') args.seeds.push(...readSeedFile(value((i += 1), arg)));
     else if (arg === '--resume') args.resume = true;
     else if (arg === '--verify-shortlinks') args.verifyShortlinks = true;
     else if (arg === '--include-query') args.includeQuery = true;
@@ -767,6 +784,7 @@ async function main() {
 
   const out = resolve(args.out);
   let state;
+  let newSeeds = [];
   if (args.resume) {
     try {
       state = loadState(out);
@@ -782,6 +800,10 @@ async function main() {
       console.error(`The saved crawl in ${out} is for ${state.origin}, not ${args.origin}.`);
       process.exit(2);
     }
+    if (args.includeQuery) state.options.includeQuery = true;
+    const known = new Set(state.options.seeds ?? []);
+    newSeeds = [...new Set(args.seeds.filter((seed) => !known.has(seed)))];
+    state.options.seeds = [...known, ...newSeeds];
   } else {
     state = newState(args.origin, {
       includeQuery: args.includeQuery,
@@ -796,6 +818,13 @@ async function main() {
   http.resetBlocked();
   const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
   const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs });
+  // Seeds given on --resume: once the home page is known they join the queue here (before that,
+  // discovery queues every seed in the options), and a finished capture crawls again for them.
+  if (state.fingerprint && newSeeds.length > 0) {
+    for (const seed of newSeeds) crawler.enqueue(seed, 'seed');
+    if (state.phase === 'done' && state.queue.length > 0) state.phase = 'crawl';
+    saveState(out, state);
+  }
   const stopBlocked = () => {
     saveState(out, state);
     console.error(
