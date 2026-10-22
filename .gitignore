@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env*
+test/tmp/
+review/
+*.log
+.DS_Store
+# planning and session material never enters history
+docs/superpowers/
+.superpowers/
+.agents/
