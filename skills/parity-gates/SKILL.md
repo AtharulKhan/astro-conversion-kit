@@ -74,13 +74,13 @@ rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 | Gate | Passes when | A skip means |
 |---|---|---|
 | `forms` | Each live form is on its page with the same field names in order, method, and action set to `--endpoint`; `--honeypot` on every form | No `--thank-you`: the thank-you page was not checked |
-| `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors, and `X-Robots-Tag: noindex` on every path; with `PUBLIC_INDEXABLE=true` noindex is forbidden | |
+| `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors on every path, and, when not indexable, `X-Robots-Tag: noindex` on every path or (Vercel) the meta robots noindex on every built page; a preview-host rule (`https://*.pages.dev/*`) counts only for the preview host; with `PUBLIC_INDEXABLE=true` noindex on every path is forbidden | |
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media; `/about` where the build serves `/about/` fails | |
 | `media` | Every baseline media file is in `dist/` (or the store manifest) with the same bytes | Plan mode `live-temporary`: served from live, nothing checked |
 | `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file | A no-op query row, or any query row on Cloudflare |
 | `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built (the capture's own scripts in `baseline/js.json`, at their live paths, and the launch icon set are not extras) | |
 | `scripts` | Each kept vendor is on exactly its live pages with the same ids; a dropped one on none; no new vendor | |
-| `seo` | Title, description, canonical, robots, lang, h1, h2, og and JSON-LD @types equal per page; site URLs on the site's origin | |
+| `seo` | Title, description, canonical, robots, lang, h1, h2, og and JSON-LD @types equal per page; site URLs on the site's origin. Unless `PUBLIC_INDEXABLE=true`, robots must carry the staging `noindex, nofollow` and the rest of it equals live's past those two; a release build compares robots exactly | |
 | `sitemaps` | The sitemap lists exactly the indexable 200 pages on the origin; every feed is built with as many items | |
 | `text` | Each page's visible text equals `baseline/text/` (word diff, 5 words of context) | |
 

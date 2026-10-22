@@ -203,8 +203,16 @@ The form flags go on the command line every time, as the `parity-gates` skill sh
 also `PROPOSALS=on npm run build` and `npm run verify:proposals -- <the same flags>`, then rebuild
 without it. Keep the plain-text `npm run verify` output for the PR, skip lines included.
 
-**Proof:** `npm run verify` exits 0 on the full build (and `verify:proposals` when there are
-proposals). No PR is opened before this holds.
+Then the release build, which compares robots exactly (a page that lost its own live noindex
+passes the staging comparison, never this one), and rebuild staging:
+
+    PUBLIC_INDEXABLE=true npm run build
+    npm run verify:release -- <the same flags>
+    npm run build
+
+**Proof:** `npm run verify` exits 0 on the full build, `npm run verify:release` on the
+`PUBLIC_INDEXABLE=true` build (and `verify:proposals` when there are proposals). No PR is opened
+before this holds.
 
 ## 8. visual
 
