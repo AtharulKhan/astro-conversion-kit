@@ -1,7 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -19,9 +20,32 @@ const tempDir = () => {
 };
 const readJson = (dir, file) => JSON.parse(readFileSync(join(dir, file), 'utf8'));
 
-async function capture(args) {
+// A stand-in for the Wayback CDX API, so no test ever contacts web.archive.org. It answers any
+// query with the queried host's home page plus two paths the fixture does not have.
+let cdx;
+function startCdx() {
+  const requests = [];
+  const server = createServer((req, res) => {
+    requests.push(req.url);
+    const host = new URL(req.url, 'http://cdx').searchParams.get('url').replace(/\/\*$/, '');
+    const rows = [['original'], [`http://${host}/`], [`http://${host}/old-team/`], [`http://${host}/2019/05/summer-sale/`]];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(rows));
+  });
+  return new Promise((done) => {
+    server.listen(0, '127.0.0.1', () =>
+      done({
+        endpoint: `http://127.0.0.1:${server.address().port}/cdx/search/cdx`,
+        requests,
+        close: () => new Promise((closed) => { server.closeAllConnections(); server.close(closed); }),
+      }));
+  });
+}
+
+async function capture(args, { wayback = cdx.endpoint } = {}) {
   try {
-    const { stdout, stderr } = await exec(process.execPath, [SCRIPT, ...args]);
+    const env = { ...process.env, CAPTURE_WAYBACK_CDX: wayback };
+    const { stdout, stderr } = await exec(process.execPath, [SCRIPT, ...args], { env });
     return { code: 0, stdout, stderr };
   } catch (err) {
     if (typeof err.code !== 'number') throw err;
@@ -34,6 +58,7 @@ let full;
 let fullRun;
 let fullRequests;
 before(async () => {
+  cdx = await startCdx();
   fixture = await startFixture();
   full = tempDir();
   fullRun = await capture([fixture.origin, '--out', full, '--delay', '0', '--seed', '/old-services']);
@@ -41,25 +66,30 @@ before(async () => {
 });
 after(async () => {
   await fixture.close();
+  await cdx.close();
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 
-test('a full capture inventories 12 pages and the sitemap 404', () => {
+test('a full capture inventories 13 pages and the sitemap 404', () => {
   assert.equal(fullRun.code, 0, fullRun.stderr);
   const inventory = readJson(full, 'inventory.json');
-  assert.equal(inventory.length, 13);
-  assert.equal(inventory.filter((r) => r.status === 200).length, 12);
+  assert.equal(inventory.length, 14);
+  assert.equal(inventory.filter((r) => r.status === 200).length, 13);
   const deleted = inventory.find((r) => r.path === '/deleted-post/');
   assert.equal(deleted.status, 404);
   assert.deepEqual(deleted.foundBy, ['sitemap']);
-  assert.ok(!inventory.some((r) => r.path === '/private-page/'), 'only REST knows the noindex page');
+  const hiddenFromSitemaps = inventory.find((r) => r.path === '/private-page/');
+  assert.equal(hiddenFromSitemaps.status, 200);
+  // Only REST knows the noindex page; once fetched, its own canonical link adds 'crawl'.
+  assert.deepEqual(hiddenFromSitemaps.foundBy, ['rest', 'crawl']);
+  assert.ok(!readJson(full, 'links.json').internal['/private-page/'], 'no page links to it');
   assert.ok(!inventory.some((r) => r.path === '/feed/'), 'feeds are not pages');
 
   const hidden = inventory.find((r) => r.path === '/hidden-page/');
   assert.equal(hidden.status, 200);
-  assert.deepEqual(hidden.foundBy, ['crawl']);
+  assert.deepEqual(hidden.foundBy, ['rest', 'crawl']);
   const home = inventory.find((r) => r.path === '/');
-  assert.ok(home.foundBy.includes('sitemap') && home.foundBy.includes('crawl'));
+  assert.deepEqual(home.foundBy, ['sitemap', 'rest', 'crawl']);
   assert.equal(home.snapshot, 'pages/home.html');
   assert.equal(home.finalUrl, `${fixture.origin}/`);
   assert.ok(home.text.length > 0);
@@ -89,7 +119,7 @@ test('--verify-shortlinks requests each shortlink and records where it goes', as
   const short = redirects.find((r) => r.from === '/?p=7');
   assert.deepEqual(short, { from: '/?p=7', to: '/services/', status: 301, source: 'shortlink', verified: true, hops: [] });
   assert.ok(redirects.filter((r) => r.source === 'shortlink').every((r) => r.verified));
-  assert.equal(readJson(out, 'inventory.json').length, 13);
+  assert.equal(readJson(out, 'inventory.json').length, 14);
 });
 
 test('a page that is always 403 is recorded with its status, not treated as a block', async () => {
@@ -175,7 +205,7 @@ test('a blocked --verify-shortlinks pass resumes without the flag', async () => 
   await open.close();
   assert.equal(resumed.code, 0, resumed.stderr);
   const shortlinks = readJson(out, 'redirects.json').filter((r) => r.source === 'shortlink');
-  assert.equal(shortlinks.length, 11);
+  assert.equal(shortlinks.length, 12, 'one per captured page, including the REST-only private page');
   assert.ok(shortlinks.every((r) => r.verified && r.status === 301), JSON.stringify(shortlinks));
   assert.deepEqual(readJson(out, 'state.json').verifyQueue, []);
 });
@@ -193,7 +223,9 @@ test('only HTML and hreflang alternates are followed; feeds go to feeds/, wp-jso
   });
   try {
     const out = tempDir();
-    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    // --no-rest: this page looks like WordPress, and the REST dump is the one thing that may
+    // request /wp-json/ on purpose.
+    const run = await capture([stub.origin, '--out', out, '--delay', '0', '--no-rest']);
     assert.equal(run.code, 0, run.stderr);
     assert.ok(!stub.requests.some((u) => u.startsWith('/wp-json') || u.includes('oembed')), stub.requests.join(' '));
     assert.ok(stub.requests.includes('/fr/'));
@@ -245,7 +277,8 @@ test('a blocked crawl exits 3 with a resumable state, and --resume finishes it',
   await probe.close();
 
   const out = tempDir();
-  const blocking = await startFixture({ port: Number(port), blockAfter: 12 });
+  // 6 discovery requests, 6 REST requests (5 types and the optional users), then 6 crawl requests.
+  const blocking = await startFixture({ port: Number(port), blockAfter: 18 });
   const stopped = await capture([blocking.origin, '--out', out, '--delay', '0', '--seed', '/old-services']);
   await blocking.close();
   assert.equal(stopped.code, 3, stopped.stderr);
@@ -262,13 +295,92 @@ test('a blocked crawl exits 3 with a resumable state, and --resume finishes it',
   assert.equal(resumed.code, 0, resumed.stderr);
   const paths = (dir) => readJson(dir, 'inventory.json').map((r) => r.path).sort();
   assert.deepEqual(paths(out), paths(full));
-  assert.equal(readJson(out, 'inventory.json').length, 13);
+  assert.equal(readJson(out, 'inventory.json').length, 14);
   const froms = readJson(out, 'redirects.json').map((r) => r.from);
   assert.equal(new Set(froms).size, froms.length, 'no duplicate redirects');
   assert.deepEqual(froms, readJson(full, 'redirects.json').map((r) => r.from));
   const home = readJson(out, 'inventory.json').find((r) => r.path === '/');
   assert.match(home.text, /Roofs and siding/, 'text of a page captured before the block is read back');
   assert.ok(readJson(out, 'redirects.json').some((r) => r.from === '/old-services'));
+});
+
+test('the REST dump is saved and its paths join the inventory; --no-rest skips it', async () => {
+  for (const type of ['pages', 'posts', 'media', 'categories', 'tags']) {
+    assert.ok(existsSync(join(full, 'wp-rest', `${type}.json`)), type);
+  }
+  const posts = readJson(full, 'inventory.json').filter((r) => r.bodyClasses.includes('single-post'));
+  assert.equal(posts.length, 3);
+  assert.ok(posts.every((r) => r.foundBy.includes('rest')));
+  assert.ok(!fullRequests.some((u) => u.startsWith('/wp-json/') && !u.startsWith('/wp-json/wp/v2/')), 'only the v2 lists');
+
+  const out = tempDir();
+  const before = fixture.requests.length;
+  const run = await capture([fixture.origin, '--out', out, '--delay', '0', '--no-rest']);
+  assert.equal(run.code, 0, run.stderr);
+  assert.ok(!fixture.requests.slice(before).some((u) => u.startsWith('/wp-json')));
+  assert.ok(!existsSync(join(out, 'wp-rest')));
+  const inventory = readJson(out, 'inventory.json');
+  assert.equal(inventory.length, 13);
+  assert.ok(!inventory.some((r) => r.path === '/private-page/'));
+  assert.ok(inventory.every((r) => !r.foundBy.includes('rest')));
+});
+
+test('Wayback paths the crawl did not find are written as unverified', () => {
+  assert.equal(readFileSync(join(full, 'wayback-unverified.txt'), 'utf8'), '/2019/05/summer-sale/\n/old-team/\n');
+  assert.deepEqual(readJson(full, 'meta.json').wayback, { status: 'ok', paths: 2 });
+  const host = new URL(fixture.origin).host;
+  assert.ok(cdx.requests.some((u) => u.includes(`url=${host}/*`)));
+});
+
+test('a Wayback failure is recorded in meta.json and never fails the capture; --no-wayback skips it', async () => {
+  const closed = await startCdx();
+  await closed.close();
+  const out = tempDir();
+  const run = await capture([fixture.origin, '--out', out, '--delay', '0', '--no-rest'], { wayback: closed.endpoint });
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(readFileSync(join(out, 'wayback-unverified.txt'), 'utf8'), '');
+  const meta = readJson(out, 'meta.json');
+  assert.equal(meta.wayback.status, 'failed');
+  assert.match(meta.wayback.error, /ECONNREFUSED|fetch failed/);
+
+  const skipped = tempDir();
+  const before = cdx.requests.length;
+  const quiet = await capture([fixture.origin, '--out', skipped, '--delay', '0', '--no-rest', '--no-wayback']);
+  assert.equal(quiet.code, 0, quiet.stderr);
+  assert.equal(cdx.requests.length, before, 'no CDX request');
+  assert.ok(!existsSync(join(skipped, 'wayback-unverified.txt')));
+  assert.deepEqual(readJson(skipped, 'meta.json').wayback, { status: 'skipped' });
+});
+
+test('stylesheets and <style> blocks are saved under css/ with a manifest', async () => {
+  const shared = '<style>.a { color: red; }</style>';
+  const page = (styles) =>
+    `<html><head><link rel="stylesheet" href="/s/main.css?ver=2">${styles}</head><body><a href="/one/">1</a> <a href="/two/">2</a></body></html>`;
+  const stub = await startStub({
+    '/': { body: page(`${shared}<style>.b { color: blue; }</style>`) },
+    '/one/': { body: page(`${shared}<style>.b { color: blue; }</style>`) },
+    '/two/': { body: page('<link rel="stylesheet" href="/s/missing.css"><style>.c { margin: 0; }</style>') },
+    '/s/main.css?ver=2': { headers: { 'Content-Type': 'text/css' }, body: 'body { margin: 0; }' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const manifest = readJson(out, 'css/manifest.json');
+    assert.deepEqual(manifest, [
+      { file: '1.css', href: `${stub.origin}/s/main.css?ver=2`, pages: ['/', '/one/', '/two/'] },
+      { file: 'inline-home.css', inline: true, pages: ['/', '/one/'] },
+      { file: null, href: `${stub.origin}/s/missing.css`, pages: ['/two/'], status: 404 },
+      { file: 'inline-two.css', inline: true, pages: ['/two/'] },
+    ]);
+    assert.equal(readFileSync(join(out, 'css/1.css'), 'utf8'), 'body { margin: 0; }');
+    assert.equal(readFileSync(join(out, 'css/inline-home.css'), 'utf8'), '.a { color: red; }\n.b { color: blue; }\n');
+    assert.equal(readFileSync(join(out, 'css/inline-two.css'), 'utf8'), '.c { margin: 0; }\n');
+    assert.deepEqual(readdirSync(join(out, 'css')).sort(), ['1.css', 'inline-home.css', 'inline-two.css', 'manifest.json']);
+    assert.equal(stub.requests.filter((u) => u === '/s/main.css?ver=2').length, 1, 'each stylesheet is fetched once');
+  } finally {
+    await stub.close();
+  }
 });
 
 test('--max 3 fetches exactly 3 pages', async () => {
@@ -282,6 +394,8 @@ test('usage errors exit 2 and --help prints usage', async () => {
   const help = await capture(['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /Usage: node capture\.mjs <origin> --out <dir>/);
+  assert.match(help.stdout, /--no-wayback/);
+  assert.match(help.stdout, /media\.mjs/);
   assert.equal((await capture([fixture.origin])).code, 2, 'missing --out');
   assert.equal((await capture(['not-a-url', '--out', tempDir()])).code, 2);
   assert.equal((await capture([fixture.origin, '--out', tempDir(), '--resume'])).code, 2, 'nothing to resume');

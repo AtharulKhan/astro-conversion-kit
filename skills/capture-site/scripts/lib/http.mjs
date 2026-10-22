@@ -1,5 +1,7 @@
 // Paced, read-only HTTP for live sites.
-// fetchPaced(url, { delayMs, ua, redirect }) -> { status, headers, body, finalUrl, error? }
+// fetchPaced(url, { delayMs, ua, redirect, method, raw }) -> { status, headers, body, finalUrl, error? }
+// - body is a string for text types and a Buffer otherwise; `raw: true` always gives the Buffer;
+// - method defaults to GET (HEAD for a size check without the body);
 // - waits delayMs (default 2500) since the previous request to the same host;
 // - doubles that host's wait after a 429 or 503, back to normal after a success;
 // - counts consecutive 403/429/503/network errors in `blocked` (callers stop at 3);
@@ -42,13 +44,14 @@ async function pace(host, delayMs) {
   return state;
 }
 
-export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT_UA, redirect = 'manual' } = {}) {
+export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT_UA, redirect = 'manual', method = 'GET', raw = false } = {}) {
   const target = new URL(url);
   const state = await pace(target.host, delayMs);
   let res;
   let buffer;
   try {
     res = await fetch(target, {
+      method,
       redirect,
       headers: { 'User-Agent': ua, Accept: '*/*' },
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -63,7 +66,7 @@ export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT
 
   const headers = Object.fromEntries(res.headers);
   const type = headers['content-type'] ?? 'text/plain';
-  const body = TEXT_TYPE.test(type) ? buffer.toString('utf8') : buffer;
+  const body = !raw && TEXT_TYPE.test(type) ? buffer.toString('utf8') : buffer;
   state.lastAt = Date.now();
 
   if (BLOCK_STATUSES.has(res.status)) blocked += 1;

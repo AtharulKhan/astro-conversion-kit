@@ -4,7 +4,11 @@
 // <a href>, <link rel=canonical> and HTML/hreflang <link rel=alternate> on a 200 HTML page.
 // Each URL is requested once with redirects followed by hand, so chains are recorded hop by
 // hop. Shortlinks (`/?p=N`) are recorded as unverified redirects and only requested with
-// --verify-shortlinks.
+// --verify-shortlinks. On WordPress the REST lists are dumped after the sitemaps (their pages and
+// posts join the queue); every stylesheet and <style> block goes to css/; after the crawl the
+// Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
+// CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,13 +19,19 @@ import { expandSitemaps } from './lib/sitemaps.mjs';
 import { extractPage } from './lib/extract.mjs';
 import { slugFor } from './lib/slug.mjs';
 import { loadState, newState, saveState } from './lib/state.mjs';
+import { dumpWpRest } from './lib/wp-rest.mjs';
+import { CDX_ENDPOINT, WAYBACK_FILE, waybackPaths } from './lib/wayback.mjs';
+import { parse } from 'parse5';
 
 const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
 
 Crawl a live site, read-only and paced, into a capture folder: one record per page in
 inventory.json, the raw HTML in pages/<slug>.html, the visible text in text/<slug>.txt,
 redirects.json (chains collapsed, hops kept), links.json, scripts.json (third-party vendors),
-meta.json, sitemaps/, robots.txt, feeds/ and state.json.
+meta.json, sitemaps/, robots.txt, feeds/, css/ (every stylesheet, <style> blocks as
+inline-<slug>.css, manifest.json), wp-rest/ (WordPress REST lists), wayback-unverified.txt
+(archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
+to list and download the media.
 
   <origin>              the site, e.g. https://www.example.com
   --out <dir>           the capture folder to write (e.g. capture)
@@ -35,9 +45,11 @@ meta.json, sitemaps/, robots.txt, feeds/ and state.json.
                         (by default they are recorded unverified, without a request)
   --include-query       keep query strings (by default only ?p= shortlinks keep theirs)
   --no-rest             do not use the platform's REST API for discovery
+  --no-wayback          do not ask the Wayback Machine for archived URLs
   --help                show this help
 
-Never requests wp-admin, wp-login, xmlrpc.php, /wp-json/ or ?s= searches.
+Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ only for the
+REST lists. A Wayback failure is noted in meta.json and never fails the capture.
 Exit codes: 0 done, 2 usage error, 3 stopped because the site is blocking requests or
 cannot be reached (wait, then run again with --resume).`;
 
@@ -65,7 +77,7 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 function parseArgs(argv) {
   const args = {
     origin: null, out: null, delayMs: DEFAULT_DELAY_MS, max: null, resume: false, ua: DEFAULT_UA,
-    seeds: [], verifyShortlinks: false, includeQuery: false, noRest: false, help: false,
+    seeds: [], verifyShortlinks: false, includeQuery: false, noRest: false, noWayback: false, help: false,
   };
   const value = (i, flag) => {
     if (i >= argv.length || argv[i].startsWith('--')) throw new UsageError(`${flag} needs a value`);
@@ -86,6 +98,7 @@ function parseArgs(argv) {
     else if (arg === '--verify-shortlinks') args.verifyShortlinks = true;
     else if (arg === '--include-query') args.includeQuery = true;
     else if (arg === '--no-rest') args.noRest = true;
+    else if (arg === '--no-wayback') args.noWayback = true;
     else if (arg.startsWith('--')) throw new UsageError(`unknown option ${arg}`);
     else if (args.origin) throw new UsageError('only one origin is allowed');
     else args.origin = arg;
@@ -172,6 +185,17 @@ function sitemapFileName(href) {
 }
 
 const byKey = (key) => (a, b) => (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0);
+
+// The text of every <style> element, in document order.
+function styleBlocks(html) {
+  const blocks = [];
+  const walk = (node) => {
+    if (node.tagName === 'style') blocks.push(node.childNodes.map((c) => c.value ?? '').join(''));
+    for (const child of node.content?.childNodes ?? node.childNodes ?? []) walk(child);
+  };
+  walk(parse(html));
+  return blocks;
+}
 
 class Crawler {
   constructor(state, { out, fetch, delayMs }) {
@@ -274,12 +298,25 @@ class Crawler {
         this.state.sitemapsDone.push(sitemap);
         saveState(this.out, this.state);
       }
+      await this.restDump(fetch);
     } catch (err) {
       if (err instanceof Blocked) return 'blocked';
       throw err;
     }
     this.state.phase = 'crawl';
     return 'ok';
+  }
+
+  // WordPress REST lists, once: saved under wp-rest/, their pages and posts found by 'rest'.
+  async restDump(fetch) {
+    const { fingerprint: fp, options } = this.state;
+    if (this.state.restDone || options.noRest || !fp.hasRest || fp.platform !== 'wordpress') return;
+    const rest = await dumpWpRest(this.state.canonicalOrigin, this.out, { fetch });
+    for (const path of [...rest.pagePaths, ...rest.postPaths]) this.enqueue(path, 'rest');
+    const errors = (this.state.discoveryErrors ??= []);
+    for (const e of rest.errors) if (!errors.some((x) => x.url === e.url)) errors.push(e);
+    this.state.restDone = true;
+    saveState(this.out, this.state);
   }
 
   // Follow one URL's redirects by hand. Returns { blocked, status } or { res, finalUrl, chain[] }.
@@ -335,11 +372,100 @@ class Crawler {
       const record = extractPage(body, key, { status: res.status, finalUrl: key, snapshot });
       writeText(join(this.out, 'text', `${slug}.txt`), `${record.text}\n`);
       this.addRecord(record);
-      if (res.status === 200) this.follow(record);
+      if (res.status === 200) {
+        this.collectCss(record, body, slug);
+        this.follow(record);
+      }
       return;
     }
     // Any other 200 is a file, not a page; a non-200 is still recorded with its status.
     if (res.status !== 200) this.addRecord(extractPage('', key, { status: res.status, finalUrl: key }));
+  }
+
+  // Stylesheets in first-seen order, each fetched once after the crawl (css/<n>.css); a page's
+  // <style> blocks concatenated into css/inline-<slug>.css, shared by pages with the same blocks.
+  collectCss(record, html, slug) {
+    const css = (this.state.css ??= { entries: [], queue: [] });
+    let inlineDone = false;
+    for (const style of record.styles) {
+      if (style.inline) {
+        if (inlineDone) continue;
+        inlineDone = true;
+        const blocks = styleBlocks(html);
+        if (blocks.length === 0) continue;
+        const text = blocks.map((b) => `${b.trim()}\n`).join('');
+        const hash = createHash('sha1').update(text).digest('hex');
+        let entry = css.entries.find((e) => e.hash === hash);
+        if (!entry) {
+          entry = { file: `inline-${slug}.css`, inline: true, pages: [], hash };
+          writeText(join(this.out, 'css', entry.file), text);
+          css.entries.push(entry);
+        }
+        if (!entry.pages.includes(record.path)) entry.pages.push(record.path);
+        continue;
+      }
+      let url;
+      try {
+        url = new URL(style.href);
+      } catch {
+        continue;
+      }
+      if (!/^https?:$/.test(url.protocol) || forbidden(url)) continue;
+      let entry = css.entries.find((e) => e.href === style.href);
+      if (!entry) {
+        const n = css.entries.filter((e) => e.href).length + 1;
+        entry = { file: `${n}.css`, href: style.href, pages: [], status: null };
+        css.entries.push(entry);
+        css.queue.push({ url: style.href, attempts: 0 });
+      }
+      if (!entry.pages.includes(record.path)) entry.pages.push(record.path);
+    }
+  }
+
+  async visitCss(item) {
+    const res = await this.fetch(item.url, { redirect: 'follow' });
+    if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
+    const entry = this.state.css.entries.find((e) => e.href === item.url);
+    entry.status = res.status;
+    if (res.status === 200) {
+      const text = Buffer.isBuffer(res.body) ? res.body.toString('utf8') : String(res.body ?? '');
+      writeText(join(this.out, 'css', entry.file), text);
+    }
+    return {};
+  }
+
+  async fetchCss() {
+    if (!this.state.css) return 'done';
+    return this.drain(
+      this.state.css.queue,
+      (item) => this.visitCss(item),
+      (item, status) => {
+        this.state.css.entries.find((e) => e.href === item.url).status = status;
+      },
+    );
+  }
+
+  cssManifest() {
+    return (this.state.css?.entries ?? []).map((e) => {
+      const pages = [...e.pages].sort();
+      if (e.inline) return { file: e.file, inline: true, pages };
+      if (e.status === 200) return { file: e.file, href: e.href, pages };
+      return { file: null, href: e.href, pages, status: e.status };
+    });
+  }
+
+  // Archived paths on this host that the crawl never saw. Never fatal: a failure is noted and
+  // the file is written empty.
+  async wayback(endpoint) {
+    const known = new Set([...this.state.seen.map(pathOf), ...this.state.records.map((r) => r.path)]);
+    const host = new URL(this.state.canonicalOrigin).host.replace(/^www\./i, '');
+    try {
+      const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint });
+      return { status: 'ok', paths: paths.length };
+    } catch (err) {
+      writeText(join(this.out, WAYBACK_FILE), '');
+      return { status: 'failed', error: err.message };
+    }
   }
 
   follow(record) {
@@ -523,7 +649,9 @@ class Crawler {
       finishedAt: finished ? new Date().toISOString() : null,
       options: this.state.options,
       discoveryErrors: this.state.discoveryErrors ?? [],
+      wayback: this.state.wayback ?? (this.state.options.noWayback ? { status: 'skipped' } : null),
     });
+    json('css/manifest.json', this.cssManifest());
 
     const internal = {};
     const external = {};
@@ -590,6 +718,7 @@ async function main() {
       noRest: args.noRest,
       seeds: args.seeds,
       verifyShortlinks: args.verifyShortlinks,
+      noWayback: args.noWayback,
     });
   }
   mkdirSync(out, { recursive: true });
@@ -614,7 +743,12 @@ async function main() {
   // A resumed run keeps the verify pass the first run asked for, flag or not.
   if (args.verifyShortlinks) state.options.verifyShortlinks = true;
   const verify = state.options.verifyShortlinks || (state.verifyQueue?.length ?? 0) > 0;
+  if (outcome === 'done') outcome = await crawler.fetchCss();
   if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();
+  if (args.noWayback) state.options.noWayback = true;
+  if (outcome === 'done' && !state.options.noWayback && !state.wayback) {
+    state.wayback = await crawler.wayback(process.env.CAPTURE_WAYBACK_CDX || CDX_ENDPOINT);
+  }
   const inventory = crawler.writeOutputs({ finished: outcome === 'done' });
   if (outcome === 'blocked') stopBlocked();
   saveState(out, state);
