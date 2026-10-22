@@ -28,9 +28,12 @@ Options:
   --path-env <PATH>  look up and run the CLIs with this PATH instead of $PATH
 
 Each probe times out after 10 s. Tokens and login output are never printed.
+Test hook: PREFLIGHT_PROBE_TIMEOUT_MS=<ms> overrides the 10 s probe timeout.
 Exit codes: 0 report printed, 2 usage error.`;
 
-const PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const timeoutOverride = Number.parseInt(process.env.PREFLIGHT_PROBE_TIMEOUT_MS ?? '', 10);
+const PROBE_TIMEOUT_MS = timeoutOverride > 0 ? timeoutOverride : DEFAULT_PROBE_TIMEOUT_MS;
 const MAX_OUTPUT = 64 * 1024;
 const REPOS_FOR_EXPERIENCED = 10;
 const TOOLS = {

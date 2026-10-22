@@ -18,7 +18,9 @@ Commands:
 
 Keys may be dotted paths, e.g. counts.pages or phases.capture.result.
 State lives in <site>/.conversion/state.json and is written atomically.
-Exit codes: 0 success, 2 usage error or unreadable state file.`;
+Each write command reads, changes and rewrites the file without a lock, so
+run state.mjs calls one after another, never in parallel.
+Exit codes: 0 success, 2 usage error or unreadable or unwritable state file.`;
 
 const NODE_VERSION_MESSAGE = 'Node 22.23.4 or newer is required (Node 20 is end of life and unpatched)';
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -62,11 +64,16 @@ export function readState(dir, now = new Date().toISOString()) {
     if (error.code === 'ENOENT') return freshState(now);
     throw new UsageError(`cannot read ${statePath(dir)}: ${error.message}`);
   }
+  let state;
   try {
-    return JSON.parse(text);
+    state = JSON.parse(text);
   } catch (error) {
     throw new UsageError(`${statePath(dir)} is not valid JSON (${error.message}); fix or remove it`);
   }
+  if (state === null || typeof state !== 'object' || Array.isArray(state)) {
+    throw new UsageError(`${statePath(dir)} does not hold a JSON object; fix or remove it`);
+  }
+  return state;
 }
 
 // Write to a temp file in the same directory, then rename over the real file.
@@ -193,8 +200,8 @@ function main(argv) {
     run(opts);
     return 0;
   } catch (error) {
-    if (!(error instanceof UsageError)) throw error;
-    console.error(`state: ${error.message}\n\n${HELP}`);
+    if (error instanceof UsageError) console.error(`state: ${error.message}\n\n${HELP}`);
+    else console.error(`state: ${error.message}`);
     return 2;
   }
 }

@@ -11,6 +11,16 @@ const PREFLIGHT = join(
   '..', '..', 'skills', 'convert-site', 'scripts', 'preflight.mjs',
 );
 const SECRET = 'gho_FAKETOKEN0123456789';
+const SLEEP_MARK = 7357;
+
+// True while a process matching pattern is alive; retries briefly so a just-killed one can be reaped.
+function strayProcess(pattern) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (spawnSync('pgrep', ['-f', pattern]).status !== 0) return false;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  return true;
+}
 
 function tempDir(t, prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -33,12 +43,16 @@ function fakeGh(dir) {
   ].join('\n'));
 }
 
-function run(args) {
-  return spawnSync(process.execPath, [PREFLIGHT, ...args], { encoding: 'utf8', timeout: 30000 });
+function run(args, env = {}) {
+  return spawnSync(process.execPath, [PREFLIGHT, ...args], {
+    encoding: 'utf8',
+    timeout: 30000,
+    env: { ...process.env, ...env },
+  });
 }
 
-function runJson(args) {
-  const result = run(['--json', ...args]);
+function runJson(args, env) {
+  const result = run(['--json', ...args], env);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(!result.stdout.includes(SECRET) && !result.stderr.includes(SECRET), 'token leaked');
   return JSON.parse(result.stdout);
@@ -48,6 +62,7 @@ test('preflight --help exits 0', () => {
   const result = run(['--help']);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage: node preflight\.mjs/);
+  assert.match(result.stdout, /PREFLIGHT_PROBE_TIMEOUT_MS/);
 });
 
 test('preflight rejects unknown or incomplete flags with exit 2', () => {
@@ -100,14 +115,16 @@ test('a hanging login probe times out instead of blocking', { timeout: 30000 }, 
   const bin = tempDir(t, 'preflight-bin-');
   const home = tempDir(t, 'preflight-home-');
   // Not exec: the sleep is a grandchild holding the output pipe, so the whole group must die.
-  fakeBin(bin, 'vercel', 'if [ "$1" = "--version" ]; then echo "44.2.0"; exit 0; fi\n/bin/sleep 60\nexit 0');
+  // The odd duration lets pgrep find exactly this sleep afterwards.
+  fakeBin(bin, 'vercel', `if [ "$1" = "--version" ]; then echo "44.2.0"; exit 0; fi\n/bin/sleep ${SLEEP_MARK}\nexit 0`);
   const started = Date.now();
-  const report = runJson(['--home', home, '--path-env', bin]);
+  const report = runJson(['--home', home, '--path-env', bin], { PREFLIGHT_PROBE_TIMEOUT_MS: '1000' });
   const elapsed = Date.now() - started;
   assert.equal(report.tools.vercel.present, true);
   assert.equal(report.tools.vercel.loggedIn, false);
-  assert.ok(elapsed >= 9000, `probe returned before the 10 s timeout (${elapsed} ms)`);
-  assert.ok(elapsed < 20000, `probe did not time out (${elapsed} ms)`);
+  assert.ok(elapsed >= 900, `probe returned before the 1 s timeout (${elapsed} ms)`);
+  assert.ok(elapsed < 8000, `probe did not time out (${elapsed} ms)`);
+  assert.equal(strayProcess(`sleep ${SLEEP_MARK}`), false, 'timed-out probe left its grandchild running');
 });
 
 test('ten git repos under --home plus gh login is experienced; dotfiles counted', (t) => {

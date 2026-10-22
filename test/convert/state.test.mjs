@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,7 @@ test('state --help exits 0', () => {
   const result = spawnSync(process.execPath, [STATE, '--help'], { encoding: 'utf8' });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage: node state\.mjs/);
+  assert.match(result.stdout, /never in parallel/);
 });
 
 test('usage errors exit 2', (t) => {
@@ -119,4 +120,34 @@ test('a corrupt state file is an environment error and is not overwritten', (t) 
   writeFileSync(join(dir, '.conversion', 'state.json'), '{oops');
   assert.equal(state(dir, 'set', 'hosting', '"vercel"').status, 2);
   assert.equal(readFileSync(join(dir, '.conversion', 'state.json'), 'utf8'), '{oops');
+});
+
+test('a state file holding null or an array exits 2 without a crash', (t) => {
+  for (const content of ['null', '[]', '"text"']) {
+    const dir = site(t);
+    mkdirSync(join(dir, '.conversion'));
+    writeFileSync(join(dir, '.conversion', 'state.json'), content);
+    for (const args of [['set', 'hosting', '"vercel"'], ['phase', 'capture'], ['get']]) {
+      const result = state(dir, ...args);
+      assert.equal(result.status, 2, `${content} ${args.join(' ')}`);
+      assert.match(result.stderr, /does not hold a JSON object/);
+      assert.doesNotMatch(result.stderr, /TypeError/);
+    }
+    assert.equal(readFileSync(join(dir, '.conversion', 'state.json'), 'utf8'), content);
+  }
+});
+
+test('an unwritable state directory exits 2 with a message, not a stack trace', (t) => {
+  const dir = site(t);
+  mkdirSync(join(dir, '.conversion'));
+  chmodSync(join(dir, '.conversion'), 0o500);
+  let result;
+  try {
+    result = state(dir, 'set', 'hosting', '"vercel"');
+  } finally {
+    chmodSync(join(dir, '.conversion'), 0o700);
+  }
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /^state: .*EACCES/);
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
 });
