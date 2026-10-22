@@ -3,7 +3,7 @@
 // compiled config, in exactly one hop to its target; every target is a page or file in dist or an
 // external URL; no redirect source is also a page or file in dist; and no built page or file is
 // redirected away from its own URL by the rules (the slash rules included).
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
@@ -11,8 +11,7 @@ import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { applyExceptions, exceptionFailure } from '../lib/exceptions.mjs';
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
 import { isDynamic, isExternal, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
-import { vercelResolver } from '../lib/vercel-resolver.mjs';
-import { cloudflareResolver, parseRedirectsFile } from '../lib/cloudflare-resolver.mjs';
+import { hostResolver } from '../lib/host-resolver.mjs';
 
 const NAME = 'redirects';
 const DEFAULT_CSV = 'redirects.csv';
@@ -255,10 +254,7 @@ function main() {
   const origins = [meta.origin, meta.canonicalOrigin].filter(Boolean).map((o) => o.replace(/\/+$/, ''));
   let resolve;
   try {
-    resolve =
-      host === 'vercel'
-        ? vercelResolver({ config: readJson(config), dist: args.dist, origins, explain: true })
-        : cloudflareResolver({ rules: parseRedirectsFile(readFileSync(config, 'utf8')), dist: args.dist, origins, explain: true });
+    resolve = hostResolver({ host, config, dist: args.dist, origins, explain: true });
   } catch (error) {
     exit2(`${config}: ${error.message}`);
   }

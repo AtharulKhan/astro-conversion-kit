@@ -1,11 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
 import { DIST_ORIGIN, edit, makeDist } from './fixtures/make-dist.mjs';
 import { runGate } from './fixtures/run-gate.mjs';
+import { vercelRules } from '../../skills/parity-gates/scripts/build-redirects.mjs';
 
 let root;
 let baseline;
@@ -99,6 +100,51 @@ test('--paths limits the pages checked', async () => {
   const result = await links(bad, ['--paths', '/services/*']);
   assert.equal(result.code, 0, result.stdout);
   assert.match(result.stdout, /^links: 3 checked, 0 failed$/m);
+});
+
+// A site folder (the gate's cwd) with a vercel.json holding the site's own rules and the compiled
+// "always" slash rules after them.
+function vercelSite(name, rules = []) {
+  const dir = join(root, name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify({ redirects: [...rules, ...vercelRules([], 'always')] }));
+  return dir;
+}
+const linksIn = (cwd, dist, args = []) => runGate('links', ['--dist', dist, '--baseline', baseline, '--origin', DIST_ORIGIN, ...args], { cwd });
+
+test('a link that lands on a built page in one hop through the compiled rules passes, counted', async () => {
+  const dist = makeDist(join(root, 'dist-one-hop'), { bad: ['unslashed-link'] });
+  edit(dist, 'about/index.html', '<a href="/contact/">', '<a href="/get-a-quote">');
+  const dir = vercelSite('site-one-hop', [{ source: '/get-a-quote', destination: '/contact/', statusCode: 301 }]);
+  const result = await linksIn(dir, dist);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^ {2}2 links resolved through redirects$/m);
+  assert.match(result.stdout, /^links: 14 checked, 0 failed$/m);
+});
+
+test('a link needing two hops, or landing on a missing page, still fails', async () => {
+  const dist = makeDist(join(root, 'dist-two-hops'));
+  edit(dist, 'about/index.html', '<a href="/contact/">', '<a href="/two">');
+  edit(dist, 'services/index.html', '<a href="/contact/">', '<a href="/gone/">');
+  const dir = vercelSite('site-two-hops', [
+    { source: '/two/', destination: '/contact/', statusCode: 301 },
+    { source: '/gone/', destination: '/missing/', statusCode: 301 },
+  ]);
+  const result = await linksIn(dir, dist);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/about\/ link: expected "a built page, file, redirect source or media path", got "\/two"$/m);
+  assert.match(result.stdout, /^ {2}\/services\/ link: expected "a built page, file, redirect source or media path", got "\/gone\/"$/m);
+  assert.match(result.stdout, /^ {2}0 links resolved through redirects$/m);
+});
+
+test('cloudflare: Pages slash handling resolves an unslashed link in one hop', async () => {
+  const dist = makeDist(join(root, 'dist-cf-links'), { bad: ['unslashed-link'] });
+  writeFileSync(join(dist, '_redirects'), '/old-quote /contact/ 301\n');
+  const dir = join(root, 'site-cf-links');
+  mkdirSync(dir, { recursive: true });
+  const result = await linksIn(dir, dist);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^ {2}1 links resolved through redirects$/m);
 });
 
 test('usage and missing inputs exit 2; --help exits 0', async () => {
