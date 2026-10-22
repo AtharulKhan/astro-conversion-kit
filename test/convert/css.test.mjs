@@ -123,6 +123,20 @@ test('coverage keys inline <style> blocks as inline:<n> with the pages they appe
   assert.ok(!overlaps(usedRanges, text.indexOf('.unused'), text.indexOf('.unused') + 7));
 });
 
+test('an inline <style> block ending in a sourceURL comment is still keyed inline:<n> with its pages', () => {
+  // WordPress 6.9+ ends each inline block with /*# sourceURL=<file> */ and Chromium then
+  // reports the block under that URL instead of the page's.
+  const coverage = readJson(COVERAGE);
+  assert.ok(!Object.keys(coverage).some((key) => key.includes('/fake/')), `keys: ${Object.keys(coverage).join(', ')}`);
+  const marked = Object.entries(coverage).filter(([, entry]) => entry.text.includes('sourceURL=http://127.0.0.1/fake/style-index.css'));
+  assert.equal(marked.length, 1);
+  const [key, entry] = marked[0];
+  assert.match(key, /^inline:\d+$/);
+  assert.deepEqual(entry.pages, ['/', '/contact/']);
+  const at = entry.text.indexOf(':root{');
+  assert.ok(overlaps(entry.usedRanges, at, at + 6), 'the :root rule is used');
+});
+
 test('coverage hovers the first link a person could point at, not a clipped skip link', async () => {
   const html = '<!doctype html><style>.skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }'
     + ' .real:hover { color: red; }</style><a class="skip" href="#main">Skip</a><p><a class="real" href="/x/">Real</a></p>';
