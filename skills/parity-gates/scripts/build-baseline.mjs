@@ -22,6 +22,9 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
   forms.json      { "<path>": [{ action, method, fields[] }] }
   scripts.json    { "<vendor>": { id, ids[], pages[], keep } }; keep is true, set it to false
                   to drop a vendor from the build
+  js.json         [{ src, file, pages[] }]: the site's own script files the capture saved
+                  (capture/js/manifest.json; file is relative to the capture), [] when none.
+                  The routes gate lets the build serve each at its live path
   text/           the visible text of each page, copied from the capture
   counts.json     routes, byStatus, byTemplate, redirects (by source), media, forms, scripts
   meta.json       { origin, canonicalOrigin, capturedAt, builtAt, platform } of the capture
@@ -172,6 +175,13 @@ export function buildForms(inventory) {
   return forms;
 }
 
+// The saved same-origin scripts of capture/js/manifest.json, as { src, file, pages }.
+export function buildJs(manifest) {
+  return (manifest ?? [])
+    .filter((e) => e.file)
+    .map((e) => ({ src: e.src, file: `js/${e.file}`, pages: [...(e.pages ?? [])].sort() }));
+}
+
 export function buildScripts(captured) {
   const scripts = {};
   for (const [vendor, entry] of Object.entries(captured ?? {})) {
@@ -299,6 +309,7 @@ function build(capture, out, csvFile) {
   writeJson(join(out, 'media.json'), baseline.media);
   writeJson(join(out, 'forms.json'), baseline.forms);
   writeJson(join(out, 'scripts.json'), baseline.scripts);
+  writeJson(join(out, 'js.json'), buildJs(readJson(join(capture, 'js', 'manifest.json'), [])));
   writeJson(join(out, 'counts.json'), counts);
   writeJson(join(out, 'meta.json'), buildMeta(readJson(join(capture, 'meta.json'), {}), state));
   rmSync(join(out, 'text'), { recursive: true, force: true });

@@ -66,10 +66,15 @@ parity and this file is wrong: say so and fix this file.
 ## Scripts
 
 - Third-party scripts follow the `keep` allowlist (`third-party.md`).
-- Same-origin theme and plugin scripts are not in the capture. Interactions that matter (menu
-  toggle, accordion, slider) are rebuilt with a small inline script against the same markup and
-  classes, checked in the visual review; the rest are dropped with their `<script>` tags. Each
-  is a decision row.
+- Same-origin theme and plugin scripts are in the capture (`capture/js/`, listed in
+  `baseline/js.json`). The default is to copy each one that drives visible behaviour (a lazy
+  loader, a menu toggle, a scroll reveal, a slider), and the vendor library it needs, to its
+  live path under `public/`, so the captured `<script src>` tags keep working; the routes gate
+  allows those paths. Rebuilding one as a small inline script against the same markup, or
+  dropping it, is a decision row per script.
+- Scripts that do nothing on a static site (`wp-emoji`, `admin-bar`, `comment-reply`,
+  `wp-embed` and the like) are dropped by default, with their `<script>` tags, under one decision
+  row for the set.
 
 ## Redirects
 

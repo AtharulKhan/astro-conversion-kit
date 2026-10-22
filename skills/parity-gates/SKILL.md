@@ -78,7 +78,7 @@ rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media; `/about` where the build serves `/about/` fails | |
 | `media` | Every baseline media file is in `dist/` (or the store manifest) with the same bytes | Plan mode `live-temporary`: served from live, nothing checked |
 | `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file | A no-op query row, or any query row on Cloudflare |
-| `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built | |
+| `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built (the capture's own scripts in `baseline/js.json`, at their live paths, and the launch icon set are not extras) | |
 | `scripts` | Each kept vendor is on exactly its live pages with the same ids; a dropped one on none; no new vendor | |
 | `seo` | Title, description, canonical, robots, lang, h1, h2, og and JSON-LD @types equal per page; site URLs on the site's origin | |
 | `sitemaps` | The sitemap lists exactly the indexable 200 pages on the origin; every feed is built with as many items | |

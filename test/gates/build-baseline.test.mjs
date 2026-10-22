@@ -54,7 +54,7 @@ after(() => rmSync(root, { recursive: true, force: true }));
 
 test('builds from the capture without a network and exits 0', () => {
   assert.equal(built.code, 0, built.stderr);
-  for (const file of ['routes.json', 'seo.json', 'redirects.json', 'media.json', 'forms.json', 'scripts.json', 'counts.json']) {
+  for (const file of ['routes.json', 'seo.json', 'redirects.json', 'media.json', 'forms.json', 'scripts.json', 'js.json', 'counts.json']) {
     assert.ok(existsSync(join(baseline, file)), `baseline/${file} written`);
   }
   assert.ok(existsSync(join(root, 'redirects.csv')), 'redirects.csv written beside the baseline');
@@ -171,6 +171,26 @@ test('media, forms, scripts and text', () => {
 
   assert.deepEqual(readdirSync(join(baseline, 'text')).sort(), readdirSync(join(capture, 'text')).sort());
   assert.equal(readFileSync(join(baseline, 'text', 'contact.txt'), 'utf8'), readFileSync(join(capture, 'text', 'contact.txt'), 'utf8'));
+});
+
+test('js.json lists the saved same-origin scripts from capture/js/, [] when the capture has none', async (t) => {
+  const origin = readJson(baseline, 'meta.json').origin;
+  assert.deepEqual(readJson(baseline, 'js.json'), [{
+    src: `${origin}/wp-content/themes/fixture/js/reveal.js?ver=1.4.2`,
+    file: 'js/1.js',
+    pages: readJson(baseline, 'routes.json').filter((r) => r.status === 200 && ['page', 'post', 'archive'].includes(r.kind)).map((r) => r.path).sort(),
+  }]);
+  const copy = join(root, 'no-js');
+  const out = join(root, 'no-js-out', 'baseline');
+  t.after(() => {
+    rmSync(copy, { recursive: true, force: true });
+    rmSync(join(root, 'no-js-out'), { recursive: true, force: true });
+  });
+  cpSync(capture, copy, { recursive: true });
+  rmSync(join(copy, 'js'), { recursive: true });
+  const result = await build(['--capture', copy, '--out', out]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(readJson(out, 'js.json'), []);
 });
 
 test('counts.json sums the baseline', () => {

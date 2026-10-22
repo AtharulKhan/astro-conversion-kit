@@ -63,6 +63,15 @@ One entry per third-party vendor, recognised by the same rules the capture uses.
 written `true`; set it to `false` to drop the vendor from the build. It is the only field that
 may be edited.
 
+## baseline/js.json
+
+    [{ "src": "https://www.example.com/wp-content/themes/x/js/menu.js?ver=1.2", "file": "js/1.js",
+       "pages": ["/", "/about/"] }]
+
+The site's own script files the capture saved (`capture/js/manifest.json`; `file` is relative to
+the capture), `[]` when there are none. The routes gate lets the build serve each at its live
+path; built or not, none is an extra.
+
 ## baseline/text/
 
 `<slug>.txt` per page, the capture's visible text copied as is (`pages/contact.html` pairs with
@@ -72,7 +81,7 @@ may be edited.
 
     { "routes": 16, "byStatus": { "200": 15, "404": 1 },
       "byTemplate": { "archive": 2, "home": 1, "other": 3, "page": 6, "page-2": 1, "single-post": 3 },
-      "redirects": { "seed": 2, "shortlink": 12 }, "media": 19, "forms": 1, "scripts": 2 }
+      "redirects": { "seed": 2, "shortlink": 12 }, "media": 20, "forms": 1, "scripts": 2 }
 
 Keys of `byStatus`, `byTemplate` and `redirects` are sorted. `redirects` is counted by
 `source`, `forms` is the total number of forms, `scripts` the number of

@@ -58,6 +58,19 @@ test('the launch icon set and web app manifest at the root are not extras; other
   assert.match(failed.stdout, /\/icons\/favicon\.ico extra/);
 });
 
+test("the capture's same-origin scripts (baseline/js.json) may be built at their live paths; other scripts are extras", async () => {
+  const dist = makeDist(join(root, 'dist-theme-js'));
+  mkdirSync(join(dist, 'wp-content', 'themes', 'fixture', 'js'), { recursive: true });
+  writeFileSync(join(dist, 'wp-content', 'themes', 'fixture', 'js', 'reveal.js'), 'x');
+  const passed = await routes(dist);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  writeFileSync(join(dist, 'wp-content', 'themes', 'fixture', 'js', 'other.js'), 'x');
+  const failed = await routes(dist);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /\/wp-content\/themes\/fixture\/js\/other\.js extra/);
+  assert.doesNotMatch(failed.stdout, /reveal\.js/);
+});
+
 test('a noindex route that lost its robots meta fails', async () => {
   const dist = makeDist(join(root, 'dist-noindex'), { bad: ['lost-noindex'] });
   const result = await routes(dist);
