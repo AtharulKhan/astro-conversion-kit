@@ -2,7 +2,7 @@
 import { readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { parseArgs } from 'node:util';
-import { DEFAULT_EXCEPTIONS, DEFAULT_PROPOSALS } from './exceptions.mjs';
+import { DEFAULT_EXCEPTIONS, DEFAULT_PROPOSALS, loadExceptions } from './exceptions.mjs';
 
 const STANDARD_OPTIONS = {
   dist: { type: 'string', default: 'dist', description: 'built site to check' },
@@ -13,14 +13,14 @@ const STANDARD_OPTIONS = {
   json: { type: 'boolean', default: false, description: 'print { gate, checked, failed, failures } as JSON' },
 };
 
-function usage(name, options) {
+function usage(name, options, notes = '') {
   const lines = Object.entries(options).map(([flag, spec]) => {
     const left = spec.type === 'string' ? `--${flag} <value>` : `--${flag}`;
     const def = spec.default !== undefined && spec.default !== '' && spec.default !== false ? ` (default: ${spec.default})` : '';
     return `  ${left.padEnd(24)}${spec.description ?? ''}${def}`;
   });
   lines.push(`  ${'--help'.padEnd(24)}show this help`);
-  return `Usage: ${name} [options]\n\n${lines.join('\n')}\n\nExit codes: 0 pass, 1 failed gate, 2 usage or environment error.\n`;
+  return `Usage: ${name} [options]\n\n${lines.join('\n')}\n${notes ? `\n${notes.trim()}\n` : ''}\nExit codes: 0 pass, 1 failed gate, 2 usage or environment error.\n`;
 }
 
 const camel = (flag) => flag.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase());
@@ -57,10 +57,10 @@ export function pathMatcher(list) {
 
 // gateArgs(argv, name, { options: { 'allow-extra': { type: 'boolean' }, host: { type: 'string', default: 'vercel' } } })
 // Standard keys plus each extra option, camelCased. --help exits 0, usage errors exit 2.
-export function gateArgs(argv, name, { options: extra = {} } = {}) {
+export function gateArgs(argv, name, { options: extra = {}, notes = '' } = {}) {
   const options = { ...STANDARD_OPTIONS, ...extra };
   if (argv.includes('--help') || argv.includes('-h')) {
-    process.stdout.write(usage(name, options));
+    process.stdout.write(usage(name, options, notes));
     process.exit(0);
   }
   const parserOptions = {};
@@ -72,13 +72,23 @@ export function gateArgs(argv, name, { options: extra = {} } = {}) {
   try {
     ({ values } = parseArgs({ args: argv, options: parserOptions, strict: true, allowPositionals: false }));
   } catch (error) {
-    process.stderr.write(`${name}: ${error.message}\n\n${usage(name, options)}`);
+    process.stderr.write(`${name}: ${error.message}\n\n${usage(name, options, notes)}`);
     process.exit(2);
   }
   const result = {};
   for (const [flag, value] of Object.entries(values)) result[camel(flag)] = value;
   result.paths = pathMatcher(values.paths);
   return result;
+}
+
+// loadExceptions for a gate's parsed args; a file that is not valid exits 2.
+export function gateExceptions(name, args) {
+  try {
+    return loadExceptions(args.exceptions, { proposals: args.proposals });
+  } catch (error) {
+    process.stderr.write(`${name}: ${error.message}\n`);
+    return process.exit(2);
+  }
 }
 
 function htmlFiles(dir) {

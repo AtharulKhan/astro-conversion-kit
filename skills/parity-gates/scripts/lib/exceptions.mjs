@@ -8,7 +8,7 @@ export const DEFAULT_EXCEPTIONS = 'exceptions.json';
 export const DEFAULT_PROPOSALS = 'proposals.json';
 export const EXCEPTION_KEYS = ['path', 'field', 'from', 'to', 'reason', 'approvedBy', 'date'];
 export const EXCEPTION_FIELDS = [
-  'title', 'description', 'canonical', 'robots', 'h1', 'h2', 'text',
+  'title', 'description', 'canonical', 'robots', 'lang', 'h1', 'h2', 'text',
   'og', 'jsonLd', 'link', 'redirect', 'media',
 ];
 const MAY_BE_EMPTY = new Set(['from', 'to']);
@@ -93,4 +93,15 @@ export function applyExceptions(expected, path, exceptions = []) {
     else staleExceptions.push(exception);
   }
   return { expected: record, stale: staleExceptions.length > 0, staleExceptions };
+}
+
+// The gate failure for an exception a gate could not use. Gates never skip one silently: the
+// exceptions file is the record of what the client approved, so a stale entry fails the gate.
+export function exceptionFailure(exception, reason) {
+  return {
+    path: exception.path,
+    field: 'exception',
+    expected: { field: exception.field, from: exception.from, to: exception.to },
+    actual: reason,
+  };
 }

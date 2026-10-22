@@ -2,18 +2,18 @@
 // Routes gate: every page, post, archive and feed the baseline recorded at 200 is built, every
 // noindex route still says noindex, and the build has nothing the live site did not.
 import { readFileSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
-import { gateArgs, pathMatcher, report } from '../lib/gate-cli.mjs';
+import { builtPages, gateArgs, pathMatcher, report } from '../lib/gate-cli.mjs';
 import { attr, find, parseHtml } from '../lib/html.mjs';
-import { distFiles, feedFiles, pageFile, pageFormat, PAGE_KINDS, readJson, requireInputs } from '../lib/dist.mjs';
+import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs } from '../lib/dist.mjs';
 
 const NAME = 'routes';
 const OPTIONS = {
   'allow-extra': { type: 'string', default: '', description: 'comma-separated extra paths the build may have, * matches anything' },
 };
-// Files every Astro build may carry besides the baseline routes and media.
+// Files every Astro build may carry besides the baseline routes, media and redirect sources.
 const ALWAYS_ALLOWED = [
   /^404\.html$/,
   /^_astro\//,
@@ -21,6 +21,17 @@ const ALWAYS_ALLOWED = [
   /^sitemap(?:-index|-\d+)?\.xml$/,
   /^_(?:redirects|headers|routes\.json)$/,
 ];
+const NOTES = `
+A page may be built as <path>/index.html or <path>.html; both are accepted for every route.
+The .html form (build.format "file") is served at /about rather than /about/, so the live site's
+slashed URLs change: the redirects gate checks that they still answer.
+Redirect sources are allowed as pages (Astro writes a meta-refresh page for each redirect).
+`;
+
+function robotsOf(html) {
+  const meta = find(parseHtml(html), (n) => n.tagName === 'meta' && (attr(n, 'name') ?? '').toLowerCase() === 'robots');
+  return meta ? attr(meta, 'content') : null;
+}
 
 const decode = (path) => {
   try {
@@ -30,21 +41,7 @@ const decode = (path) => {
   }
 };
 
-// dist file -> the site path it serves.
-function servedPath(file) {
-  if (file === 'index.html') return '/';
-  if (file.endsWith('/index.html')) return `/${file.slice(0, -'index.html'.length)}`;
-  if (file.endsWith('/index.xml')) return `/${file.slice(0, -'index.xml'.length)}`;
-  if (file.endsWith('.html')) return `/${file.slice(0, -'.html'.length)}`;
-  return `/${file}`;
-}
-
-function robotsOf(html) {
-  const meta = find(parseHtml(html), (n) => n.tagName === 'meta' && (attr(n, 'name') ?? '').toLowerCase() === 'robots');
-  return meta ? attr(meta, 'content') : null;
-}
-
-export function checkRoutes({ dist, routes, media, paths = () => true, allowExtra = () => false }) {
+export function checkRoutes({ dist, routes, media, redirects = [], paths = () => true, allowExtra = () => false }) {
   const files = distFiles(dist);
   const present = new Set(files);
   const format = pageFormat(files);
@@ -56,7 +53,7 @@ export function checkRoutes({ dist, routes, media, paths = () => true, allowExtr
     if (route.status !== 200) continue;
     const isFeed = route.kind === 'feed';
     if (!isFeed && !PAGE_KINDS.has(route.kind)) continue;
-    const candidates = (isFeed ? feedFiles(route.path) : [pageFile(route.path, format)]).map(decode);
+    const candidates = isFeed ? feedFiles(route.path) : pageFiles(route.path, format);
     candidates.forEach((c) => expected.add(c));
     if (!paths(route.path)) continue;
     checked += 1;
@@ -72,9 +69,11 @@ export function checkRoutes({ dist, routes, media, paths = () => true, allowExtr
   }
 
   for (const item of media) expected.add(decode(item.path).replace(/^\/+/, ''));
+  for (const redirect of redirects) pageFiles(redirect.from, format).forEach((c) => expected.add(c));
+  const servedAt = new Map(builtPages(dist).map(({ path, file }) => [relative(dist, file).split(sep).join('/'), path]));
   for (const file of files) {
     if (expected.has(file) || ALWAYS_ALLOWED.some((re) => re.test(file))) continue;
-    const path = servedPath(file);
+    const path = servedAt.get(file) ?? `/${file}`;
     if (!paths(path) || allowExtra(path) || allowExtra(`/${file}`)) continue;
     failures.push({ path, field: 'extra', expected: null, actual: file });
   }
@@ -83,12 +82,13 @@ export function checkRoutes({ dist, routes, media, paths = () => true, allowExtr
 
 function main() {
   assertNodeVersion();
-  const args = gateArgs(process.argv.slice(2), NAME, { options: OPTIONS });
-  requireInputs(NAME, args.dist, args.baseline, ['routes.json', 'media.json']);
+  const args = gateArgs(process.argv.slice(2), NAME, { options: OPTIONS, notes: NOTES });
+  requireInputs(NAME, args.dist, args.baseline, ['routes.json', 'media.json', 'redirects.json']);
   const results = checkRoutes({
     dist: args.dist,
     routes: readJson(join(args.baseline, 'routes.json')),
     media: readJson(join(args.baseline, 'media.json')),
+    redirects: readJson(join(args.baseline, 'redirects.json')),
     paths: args.paths,
     allowExtra: args.allowExtra ? pathMatcher(args.allowExtra) : () => false,
   });

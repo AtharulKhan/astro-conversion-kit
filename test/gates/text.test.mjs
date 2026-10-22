@@ -52,6 +52,23 @@ test('a phrase exception makes the changed paragraph pass', async () => {
   assert.equal(result.code, 0, result.stdout);
 });
 
+test('a stale text exception and one for a path not checked fail the gate', async () => {
+  const exceptions = join(root, 'stale-text-exceptions.json');
+  const base = { field: 'text', reason: 'test', approvedBy: 'client', date: '2026-10-22' };
+  writeFileSync(
+    exceptions,
+    JSON.stringify([
+      { ...base, path: '/about/', from: 'since 1999', to: 'since 2001' },
+      { ...base, path: '/feed/', from: 'a', to: 'b' },
+    ]),
+  );
+  const result = await text(good, ['--exceptions', exceptions]);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/about\/ exception: .*"no longer matches the baseline"/);
+  assert.match(result.stdout, /\/feed\/ exception: .*"path not checked"/);
+  assert.match(result.stdout, /^text: 13 checked, 2 failed$/m);
+});
+
 test('usage errors exit 2 and --help exits 0', async () => {
   assert.equal((await text(good, ['--bogus'])).code, 2);
   assert.equal((await runGate('text', ['--dist', join(root, 'nope'), '--baseline', baseline], { cwd: root })).code, 2);

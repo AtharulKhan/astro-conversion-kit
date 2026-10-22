@@ -48,7 +48,8 @@ function html(source, origin) {
 
 const pagePath = (rel) => (rel === 'index.html' ? '/' : `/${rel.slice(0, -'index.html'.length)}`);
 
-function edit(dist, file, from, to) {
+// Replace the first `from` in a dist file; throws when it is not there.
+export function edit(dist, file, from, to) {
   const full = join(dist, file);
   const source = readFileSync(full, 'utf8');
   if (!source.includes(from)) throw new Error(`make-dist: ${file} has no ${JSON.stringify(from)}`);
@@ -68,6 +69,8 @@ export const MUTATIONS = {
   'changed-title': (dist) => edit(dist, 'about/index.html', '<title>About Us | ', '<title>About | '),
   'changed-h1': (dist) => edit(dist, 'services/index.html', '>Services</h1>', '>Our services</h1>'),
   'changed-paragraph': (dist) => edit(dist, 'contact/index.html', 'within one business day', 'within two business days'),
+  'removed-description': (dist) =>
+    edit(dist, 'about/index.html', '<meta name="description" content="A family-run roofing and siding company serving the area since 1998.">\n', ''),
   // /private-page/ loses its robots noindex.
   'lost-noindex': (dist) => edit(dist, 'private-page/index.html', '<meta name="robots" content="noindex, nofollow">\n', ''),
   // Not a defect: the build.format "file" layout, every <dir>/index.html moved to <dir>.html.

@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -58,6 +58,26 @@ test('a build.format "file" build is read as <path>.html', async () => {
   const failed = await routes(missing);
   assert.equal(failed.code, 1);
   assert.match(failed.stdout, /\/about\/ file: expected "about\.html", got null/);
+});
+
+test('a mixed ("preserve") layout passes; only the page that is really missing fails', async () => {
+  const dist = makeDist(join(root, 'dist-preserve'));
+  renameSync(join(dist, 'about', 'index.html'), join(dist, 'about.html'));
+  const passed = await routes(dist);
+  assert.equal(passed.code, 0, passed.stdout);
+  rmSync(join(dist, 'contact', 'index.html'));
+  const failed = await routes(dist);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /^routes: 14 checked, 1 failed$/m);
+  assert.match(failed.stdout, /\/contact\/ file: expected "contact\/index\.html", got null/);
+});
+
+test('a page at a baseline redirect source is not an extra', async () => {
+  const dist = makeDist(join(root, 'dist-redirect-page'));
+  mkdirSync(join(dist, 'old-services'));
+  writeFileSync(join(dist, 'old-services', 'index.html'), '<!doctype html><meta http-equiv="refresh" content="0;url=/services/">');
+  const result = await routes(dist);
+  assert.equal(result.code, 0, result.stdout);
 });
 
 test('--paths limits the check', async () => {

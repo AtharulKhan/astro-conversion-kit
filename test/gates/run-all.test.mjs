@@ -34,7 +34,7 @@ test('runs every gate in order and prints All N gates passed', async () => {
 
 test('stops at the first failing gate with its exit code', async () => {
   const bad = makeDist(join(root, 'dist-bad'), { bad: ['changed-title'] });
-  const result = await runAll(bad);
+  const result = await runAll(bad, ['--origin', DIST_ORIGIN]);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^routes: \d+ checked, 0 failed$/m);
   assert.match(result.stdout, /^seo: \d+ checked, 1 failed$/m);

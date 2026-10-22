@@ -5,7 +5,8 @@
 // <link rel=shortlink>: a site-relative path such as `/?p=7` when on the same site) so the
 // crawler can use them without parsing the page twice.
 import { attr, byTag, find, findAll, parseHtml, walk } from '../../../parity-gates/scripts/lib/html.mjs';
-import { normaliseText, visibleText } from '../../../parity-gates/scripts/lib/visible-text.mjs';
+import { visibleText } from '../../../parity-gates/scripts/lib/visible-text.mjs';
+import { jsonLdBlocks, jsonLdNodes, jsonLdTypes, metaMaps, relTokens, textOf } from '../../../parity-gates/scripts/lib/head.mjs';
 
 // Checked in order; the first rule that matches a script names its vendor.
 // `src` and `code` test the script URL and the inline code; `id` patterns capture the account id.
@@ -67,19 +68,6 @@ const LAZY_SRCSET = ['data-srcset', 'data-lazy-srcset'];
 const bareHost = (host) => host.toLowerCase().replace(/^www\./, '');
 const unique = (values) => [...new Set(values)];
 
-function textOf(node) {
-  const parts = [];
-  walk(node, (n) => {
-    if (n.nodeName === '#text') parts.push(n.value);
-    return n.tagName === 'script' || n.tagName === 'style' ? false : undefined;
-  });
-  return normaliseText(parts.join(' '));
-}
-
-function relTokens(node) {
-  return (attr(node, 'rel') ?? '').toLowerCase().split(/\s+/).filter(Boolean);
-}
-
 function resolver(base) {
   return (href) => {
     if (href === null || href === undefined) return null;
@@ -123,49 +111,6 @@ function detectVendor(src, code) {
     return { vendor: rule.vendor, id: null };
   }
   return { vendor: 'other', id: null };
-}
-
-function jsonLdBlocks(document) {
-  const blocks = [];
-  for (const node of findAll(document, (n) => n.tagName === 'script' && (attr(n, 'type') ?? '').toLowerCase() === 'application/ld+json')) {
-    const raw = node.childNodes.map((c) => c.value ?? '').join('').trim();
-    try {
-      blocks.push(JSON.parse(raw));
-    } catch {
-      // A broken block is left out; the snapshot still has it.
-    }
-  }
-  return blocks;
-}
-
-// Top-level nodes of every block, flattening arrays and @graph.
-function jsonLdNodes(blocks) {
-  const nodes = [];
-  const visit = (value) => {
-    if (Array.isArray(value)) value.forEach(visit);
-    else if (value && typeof value === 'object') {
-      nodes.push(value);
-      if (value['@graph']) visit(value['@graph']);
-    }
-  };
-  visit(blocks);
-  return nodes;
-}
-
-function metaMaps(document) {
-  const og = {};
-  const twitter = {};
-  const named = {};
-  for (const meta of findAll(document, byTag('meta'))) {
-    const key = (attr(meta, 'property') ?? attr(meta, 'name') ?? '').trim();
-    const content = attr(meta, 'content');
-    if (!key || content === null) continue;
-    const lower = key.toLowerCase();
-    if (lower.startsWith('og:')) og[lower.slice(3)] ??= content;
-    else if (lower.startsWith('twitter:')) twitter[lower.slice(8)] ??= content;
-    named[lower] ??= content;
-  }
-  return { og, twitter, named };
 }
 
 export function extractPage(html, url, { status = null, finalUrl = null, snapshot = null } = {}) {
@@ -267,7 +212,7 @@ export function extractPage(html, url, { status = null, finalUrl = null, snapsho
     og,
     twitter,
     jsonLd: blocks,
-    jsonLdTypes: unique(ldNodes.flatMap((n) => [].concat(n['@type'] ?? []))),
+    jsonLdTypes: jsonLdTypes(blocks),
     published: named['article:published_time'] ?? ldValue('datePublished'),
     modified: named['article:modified_time'] ?? og.updated_time ?? ldValue('dateModified'),
     wordCount: text ? text.split(/\s+/).length : 0,

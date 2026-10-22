@@ -2,8 +2,8 @@
 // No side effects on import.
 //
 // Astro writes `/about/` to `about/index.html` (build.format "directory", the default) or to
-// `about.html` (build.format "file", used with trailingSlash "never"); `/` is always `index.html`.
-// The gates read the layout from the build itself.
+// `about.html` (build.format "file"); "preserve" mixes the two. `/` is always `index.html`.
+// Every page path is looked up in both forms, the build's main layout first.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
@@ -31,13 +31,21 @@ export function pageFormat(files) {
   return 'directory';
 }
 
-const trim = (path) => String(path).split(/[?#]/)[0].replace(/^\/+|\/+$/g, '');
+const decode = (path) => {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+};
+const trim = (path) => decode(String(path).split(/[?#]/)[0]).replace(/^\/+|\/+$/g, '');
 
-// The dist-relative file that serves a page path in the given format.
-export function pageFile(path, format) {
+// The dist-relative files that may serve a page path, the build's main layout first.
+export function pageFiles(path, format = 'directory') {
   const p = trim(path);
-  if (!p) return 'index.html';
-  return format === 'file' ? `${p}.html` : `${p}/index.html`;
+  if (!p) return ['index.html'];
+  const both = [`${p}/index.html`, `${p}.html`];
+  return format === 'file' ? both.reverse() : both;
 }
 
 // The dist-relative files that may serve a feed path, in order of preference.
@@ -45,6 +53,11 @@ export function feedFiles(path) {
   const p = trim(path);
   if (!p) return ['index.xml'];
   return [`${p}/index.xml`, `${p}.xml`];
+}
+
+// The first of the candidates that exists in dist, or null.
+export function firstExisting(dist, candidates) {
+  return candidates.find((c) => existsSync(join(dist, c))) ?? null;
 }
 
 // Exits 2 with a message when dist or a baseline file is missing.

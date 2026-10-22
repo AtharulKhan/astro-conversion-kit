@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -9,17 +9,19 @@ import { runGate } from './fixtures/run-gate.mjs';
 
 let root;
 let baseline;
+let canonicalOrigin;
 let good;
 let bad;
 before(async () => {
   root = mkdtempSync(join(tmpdir(), 'seo-gate-'));
   baseline = await buildFixtureBaseline(root);
+  canonicalOrigin = JSON.parse(readFileSync(join(baseline, 'meta.json'), 'utf8')).canonicalOrigin;
   good = makeDist(join(root, 'dist-good'));
   bad = makeDist(join(root, 'dist-bad'), { bad: ['missing-page', 'extra-page', 'changed-title', 'changed-h1', 'changed-paragraph'] });
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const seo = (dist, args = [], env = {}) => runGate('seo', ['--dist', dist, '--baseline', baseline, ...args], { cwd: root, env });
+const seo = (dist, args = [], env = {}, base = baseline) => runGate('seo', ['--dist', dist, '--baseline', base, ...args], { cwd: root, env });
 
 const record = (fields) => ({ reason: 'test', approvedBy: 'client', date: '2026-10-22', ...fields });
 function writeRecords(name, records) {
@@ -28,15 +30,29 @@ function writeRecords(name, records) {
   return file;
 }
 
-test('dist-good passes with the site origin and with paths only', async () => {
-  const withOrigin = await seo(good, ['--origin', DIST_ORIGIN]);
-  assert.equal(withOrigin.code, 0, withOrigin.stdout + withOrigin.stderr);
-  assert.match(withOrigin.stdout, /^seo: 13 checked, 0 failed$/m);
-  const pathsOnly = await seo(good);
-  assert.equal(pathsOnly.code, 0, pathsOnly.stdout);
+test('dist-good passes with --origin set to the origin it was built for', async () => {
+  const result = await seo(good, ['--origin', DIST_ORIGIN]);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^seo: 13 checked, 0 failed$/m);
 });
 
-test('a canonical on the wrong origin fails when --origin is given', async () => {
+test('without --origin the comparison origin is the baseline canonicalOrigin', async () => {
+  const onCanonical = makeDist(join(root, 'dist-canonical'), { origin: canonicalOrigin });
+  const passed = await seo(onCanonical);
+  assert.equal(passed.code, 0, passed.stdout);
+
+  const local = makeDist(join(root, 'dist-local'), { origin: 'http://localhost:4321' });
+  const failed = await seo(local, ['--paths', '/about/']);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, new RegExp(`/about/ canonical: expected "${canonicalOrigin}/about/", got "http://localhost:4321/about/"`));
+});
+
+test('--origin lets a staging host pass and a different host fail', async () => {
+  const staging = makeDist(join(root, 'dist-staging'), { origin: 'https://staging.example.com' });
+  assert.equal((await seo(staging)).code, 1, 'a staging host fails without --origin');
+  const passed = await seo(staging, ['--origin', 'https://staging.example.com']);
+  assert.equal(passed.code, 0, passed.stdout);
+
   const result = await seo(good, ['--origin', 'https://other.example.com', '--paths', '/about/']);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /\/about\/ canonical: expected "https:\/\/other\.example\.com\/about\/", got "https:\/\/www\.example\.com\/about\/"/);
@@ -54,9 +70,9 @@ test('dist-bad fails and lists the title and the h1 per path', async () => {
 
 test('an exception for the h1 makes that path pass', async () => {
   const exceptions = writeRecords('h1-exceptions.json', [record({ path: '/services/', field: 'h1', from: 'Services', to: 'Our services' })]);
-  const one = await seo(bad, ['--paths', '/services/', '--exceptions', exceptions]);
+  const one = await seo(bad, ['--origin', DIST_ORIGIN, '--paths', '/services/', '--exceptions', exceptions]);
   assert.equal(one.code, 0, one.stdout);
-  const all = await seo(bad, ['--exceptions', exceptions]);
+  const all = await seo(bad, ['--origin', DIST_ORIGIN, '--exceptions', exceptions]);
   assert.equal(all.code, 1);
   assert.doesNotMatch(all.stdout, /\/services\/ h1/);
   assert.match(all.stdout, /\/about\/ title/);
@@ -67,16 +83,58 @@ test('a title proposal counts only with PROPOSALS=on', async () => {
   const proposals = writeRecords('title-proposals.json', [
     record({ path: '/about/', field: 'title', from: 'About Us | Fixture Roofing & Siding', to: 'About | Fixture Roofing & Siding' }),
   ]);
-  assert.equal((await seo(titleOnly, ['--proposals', proposals])).code, 1);
-  const on = await seo(titleOnly, ['--proposals', proposals], { PROPOSALS: 'on' });
+  const args = ['--origin', DIST_ORIGIN, '--proposals', proposals];
+  assert.equal((await seo(titleOnly, args)).code, 1);
+  const on = await seo(titleOnly, args, { PROPOSALS: 'on' });
   assert.equal(on.code, 0, on.stdout);
 });
 
-test('an exception that no longer matches is named on stderr', async () => {
+test('a removed description passes with a to "" exception', async () => {
+  const dist = makeDist(join(root, 'dist-no-description'), { bad: ['removed-description'] });
+  const args = ['--origin', DIST_ORIGIN, '--paths', '/about/'];
+  const failed = await seo(dist, args);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /\/about\/ description: expected "A family-run[^"]*", got ""/);
+  const exceptions = writeRecords('removed-description.json', [
+    record({ path: '/about/', field: 'description', from: 'A family-run roofing and siding company serving the area since 1998.', to: '' }),
+  ]);
+  const passed = await seo(dist, [...args, '--exceptions', exceptions]);
+  assert.equal(passed.code, 0, passed.stdout);
+});
+
+test('an added description passes with a from "" exception', async () => {
+  // A copy of the baseline in which /about/ had no description on the live site.
+  const copy = join(root, 'baseline-no-description');
+  cpSync(baseline, copy, { recursive: true });
+  const seoJson = JSON.parse(readFileSync(join(copy, 'seo.json'), 'utf8'));
+  seoJson['/about/'].description = null;
+  writeFileSync(join(copy, 'seo.json'), JSON.stringify(seoJson));
+  const args = ['--origin', DIST_ORIGIN, '--paths', '/about/'];
+  assert.equal((await seo(good, args, {}, copy)).code, 1);
+  const exceptions = writeRecords('added-description.json', [
+    record({ path: '/about/', field: 'description', from: '', to: 'A family-run roofing and siding company serving the area since 1998.' }),
+  ]);
+  const passed = await seo(good, [...args, '--exceptions', exceptions], {}, copy);
+  assert.equal(passed.code, 0, passed.stdout);
+});
+
+test('an exception that no longer matches fails the gate', async () => {
   const exceptions = writeRecords('stale-exceptions.json', [record({ path: '/about/', field: 'h1', from: 'Old heading', to: 'About Us' })]);
-  const result = await seo(good, ['--exceptions', exceptions, '--paths', '/about/']);
-  assert.equal(result.code, 0);
-  assert.match(result.stderr, /stale exception: \/about\/ h1 "Old heading"/);
+  const result = await seo(good, ['--origin', DIST_ORIGIN, '--exceptions', exceptions, '--paths', '/about/']);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/about\/ exception: expected \{"field":"h1","from":"Old heading","to":"About Us"\}, got "no longer matches the baseline"/);
+});
+
+test('an exception for a path the gate does not check fails the gate', async () => {
+  const exceptions = writeRecords('unchecked-exceptions.json', [
+    record({ path: '/no-such-page/', field: 'title', from: 'A', to: 'B' }),
+    record({ path: '/about/', field: 'text', from: 'A', to: 'B' }),
+  ]);
+  const result = await seo(good, ['--origin', DIST_ORIGIN, '--exceptions', exceptions]);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/no-such-page\/ exception: .*"path not checked"/);
+  assert.doesNotMatch(result.stdout, /\/about\/ exception/, 'a text exception is the text gate\'s');
+  assert.match(result.stdout, /^seo: 13 checked, 1 failed$/m);
 });
 
 test('usage errors exit 2 and --help exits 0', async () => {
@@ -86,4 +144,5 @@ test('usage errors exit 2 and --help exits 0', async () => {
   const help = await runGate('seo', ['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /--origin/);
+  assert.match(help.stdout, /canonicalOrigin/);
 });
