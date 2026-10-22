@@ -96,9 +96,11 @@ reason, cost if wrong) saying so and what the fix would be.
 ## 5. Staging, proposals and release builds
 
 `PUBLIC_INDEXABLE` and `PROPOSALS` change what Astro builds, so set them on the **build**, not
-only on the gate run; a gate run on a build made without them checks the wrong site.
+only on the gate run; a gate run on a build made without them checks the wrong site. Pass
+`--origin` only when the build itself was made for that host; a scaffolded build's `site` is the
+live origin, so its canonicals and sitemap stay on it.
 
-    npm run build && npm run verify -- --origin https://my-site.vercel.app --endpoint ... --thank-you ...    # staging
+    npm run build && npm run verify -- --endpoint ... --thank-you ...                                       # staging
     PROPOSALS=on npm run build && npm run verify:proposals -- --endpoint ... --thank-you ...                 # proposals
     PUBLIC_INDEXABLE=true npm run build && npm run verify:release -- --endpoint ... --thank-you ...          # release
 
@@ -107,7 +109,7 @@ environment, never pasted in chat). A release deploy is checked the same way wit
 `--expect-noindex`:
 
     npm run verify:live -- --base https://my-site.vercel.app --expect-noindex --bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"
-    node <skill-dir>/scripts/verify-live.mjs --base https://my-site.vercel.app --expect-noindex    # fallback
+    node <skill-dir>/scripts/verify-live.mjs --base https://my-site.vercel.app --expect-noindex --bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"    # fallback
 
 It checks every baseline route at 200 (or a `--sample`), every redirect in one hop with the same
 kind of status, noindex on pages iff `--expect-noindex`, the sitemap, and 20 media files by
