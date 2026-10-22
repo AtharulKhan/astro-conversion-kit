@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { gzipSync } from 'node:zlib';
 import { startFixture } from '../fixture/serve.mjs';
 import { startStub } from './helpers.mjs';
 import { expandSitemaps } from '../../skills/capture-site/scripts/lib/sitemaps.mjs';
@@ -88,6 +89,23 @@ test('a server that ignores ?page= does not loop forever', async () => {
     });
     assert.equal(entries.length, 1);
     assert.ok(seen.length <= 3, `fetched ${seen.length} times`);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a gzipped sitemap is decompressed before parsing', async () => {
+  const stub = await startStub({
+    '/sitemap_index.xml': (o) => ({ body: `<sitemapindex><sitemap><loc>${o}/pages.xml.gz</loc></sitemap></sitemapindex>` }),
+    '/pages.xml.gz': (o) => ({
+      headers: { 'Content-Type': 'application/x-gzip' },
+      body: gzipSync(`<urlset><url><loc>${o}/a/</loc></url><url><loc>${o}/b/</loc></url></urlset>`),
+    }),
+  });
+  try {
+    const entries = await expandSitemaps([`${stub.origin}/sitemap_index.xml`], { fetch: fast });
+    assert.deepEqual(entries.map((e) => new URL(e.loc).pathname), ['/a/', '/b/']);
+    assert.equal(entries[0].source, `${stub.origin}/pages.xml.gz`);
   } finally {
     await stub.close();
   }

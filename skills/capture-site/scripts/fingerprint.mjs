@@ -10,6 +10,7 @@ import { fetchPaced, DEFAULT_DELAY_MS } from './lib/http.mjs';
 import { parseSitemap } from './lib/sitemaps.mjs';
 
 const MAX_SITEMAP_REQUESTS = 2;
+const BLOCK_STATUSES = new Set([403, 429, 503]);
 
 // Each rule: generator text that names the platform, and page markers that give it away.
 const PLATFORM_RULES = [
@@ -127,6 +128,24 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
   const html = home.status === 200 ? String(home.body) : '';
   const headers = home.headers ?? {};
 
+  // Unreachable or blocking: do not keep knocking.
+  if (home.status === 0 || BLOCK_STATUSES.has(home.status)) {
+    return {
+      platform: 'unknown',
+      platformVersion: null,
+      generator: null,
+      theme: null,
+      plugins: [],
+      hasRest: false,
+      hasSitemap: false,
+      sitemapUrls: [],
+      robots: '',
+      server: headers.server ?? null,
+      poweredBy: headers['x-powered-by'] ?? null,
+      homeStatus: home.status,
+    };
+  }
+
   const gens = generators(html, headers);
   const detected = home.status === 200 ? detectPlatform(html, gens) : { platform: 'unknown', generator: null };
   const { platform } = detected;
@@ -209,7 +228,7 @@ async function main() {
     console.error(`Could not reach ${origin.origin}.`);
     process.exit(2);
   }
-  if ([403, 429, 503].includes(result.homeStatus)) {
+  if (BLOCK_STATUSES.has(result.homeStatus)) {
     console.error(`${origin.origin} answered ${result.homeStatus}: it is blocking requests. Wait and run again.`);
     process.exit(3);
   }

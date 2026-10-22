@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
@@ -178,6 +179,95 @@ test('fetchPaced keeps redirects manual by default and counts network errors', a
   resetBlocked();
 });
 
+test('fetchPaced returns status 0 and counts a block when the body is cut off', async () => {
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Length': '1000' });
+    res.write('partial');
+    setTimeout(() => res.socket.destroy(), 50);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    resetBlocked();
+    const res = await fast(`http://127.0.0.1:${server.address().port}/`);
+    assert.equal(res.status, 0);
+    assert.ok(res.error);
+    assert.equal(http.blocked, 1);
+  } finally {
+    resetBlocked();
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('fetchPaced counts 403 and 503 as blocks', async () => {
+  const stub = await startStub({ '/403': { status: 403 }, '/503': { status: 503 }, '/404': { status: 404 } });
+  try {
+    resetBlocked();
+    await fast(`${stub.origin}/403`);
+    await fast(`${stub.origin}/503`);
+    assert.equal(http.blocked, 2);
+    await fast(`${stub.origin}/404`);
+    assert.equal(http.blocked, 0, 'a 404 is not a block');
+  } finally {
+    resetBlocked();
+    await stub.close();
+  }
+});
+
+test('fetchPaced doubles the wait after a 429 and restores it after a success', async () => {
+  const stub = await startStub({ '/ok': { body: 'ok' }, '/no': { status: 429 } });
+  try {
+    await fetchPaced(`${stub.origin}/no`, { delayMs: 100 });
+    let started = Date.now();
+    await fetchPaced(`${stub.origin}/ok`, { delayMs: 100 });
+    const doubled = Date.now() - started;
+    started = Date.now();
+    await fetchPaced(`${stub.origin}/ok`, { delayMs: 100 });
+    const normal = Date.now() - started;
+    assert.ok(doubled >= 190, `waited ${doubled} ms after a 429`);
+    assert.ok(normal >= 90 && normal < 180, `waited ${normal} ms after a success`);
+  } finally {
+    resetBlocked();
+    await stub.close();
+  }
+});
+
+test('fetchPaced returns a Buffer for a binary content type', async () => {
+  const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]);
+  const stub = await startStub({ '/a.jpg': { headers: { 'Content-Type': 'image/jpeg' }, body: bytes } });
+  try {
+    const res = await fast(`${stub.origin}/a.jpg`);
+    assert.ok(Buffer.isBuffer(res.body));
+    assert.deepEqual(res.body, bytes);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('fingerprint stops after the home page when it is blocked or unreachable', async () => {
+  const stub = await startStub({ '/': { status: 429 } });
+  try {
+    const result = await fingerprint(stub.origin, { fetch: fast });
+    assert.equal(result.platform, 'unknown');
+    assert.equal(result.homeStatus, 429);
+    assert.deepEqual(stub.requests, ['/']);
+  } finally {
+    resetBlocked();
+    await stub.close();
+  }
+  const calls = [];
+  const result = await fingerprint(stub.origin, {
+    fetch: (url, options) => {
+      calls.push(url);
+      return fast(url, options);
+    },
+  });
+  assert.equal(result.homeStatus, 0);
+  assert.equal(result.platform, 'unknown');
+  assert.equal(calls.length, 1);
+  resetBlocked();
+});
+
 test('fetchPaced waits delayMs between requests to the same host', async () => {
   const stub = await startStub({ '/': { body: 'x' } });
   try {
@@ -201,4 +291,20 @@ test('the CLI prints help and rejects a missing origin', async () => {
   const { stdout } = await run(process.execPath, [SCRIPT, '--help']);
   assert.match(stdout, /Usage: node fingerprint\.mjs <origin>/);
   await assert.rejects(run(process.execPath, [SCRIPT]), (err) => err.code === 2);
+});
+
+test('the CLI exits 3 when the site blocks and 2 when it is unreachable', async () => {
+  const stub = await startStub({ '/': { status: 429 } });
+  try {
+    await assert.rejects(
+      run(process.execPath, [SCRIPT, stub.origin, '--delay', '0']),
+      (err) => err.code === 3 && /blocking/.test(err.stderr),
+    );
+  } finally {
+    await stub.close();
+  }
+  await assert.rejects(
+    run(process.execPath, [SCRIPT, stub.origin, '--delay', '0']),
+    (err) => err.code === 2 && /Could not reach/.test(err.stderr),
+  );
 });

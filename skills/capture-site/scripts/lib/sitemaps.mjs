@@ -3,6 +3,8 @@
 // A bare `/sitemap.xml` that is a URL set is also paged Drupal-style (`?page=1`, `?page=2`, ...)
 // until a page is non-200, lists no <loc>, or adds nothing new.
 
+import { gunzipSync } from 'node:zlib';
+
 const MAX_PAGES = 10_000;
 
 function decode(text) {
@@ -25,8 +27,21 @@ function blocks(xml, name) {
   return [...xml.matchAll(new RegExp(`<(?:[\\w-]+:)?${name}\\b[^>]*>([\\s\\S]*?)</(?:[\\w-]+:)?${name}>`, 'gi'))].map((m) => m[1]);
 }
 
+// A gzipped sitemap (`.xml.gz`) arrives as a binary Buffer starting with the gzip magic bytes.
+function toText(body) {
+  if (!Buffer.isBuffer(body)) return String(body ?? '');
+  if (body[0] === 0x1f && body[1] === 0x8b) {
+    try {
+      return gunzipSync(body).toString('utf8');
+    } catch {
+      return '';
+    }
+  }
+  return body.toString('utf8');
+}
+
 export function parseSitemap(xml, base) {
-  const text = String(xml);
+  const text = toText(xml);
   const resolveLoc = (loc) => {
     try {
       return new URL(loc, base).href;

@@ -46,12 +46,15 @@ export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT
   const target = new URL(url);
   const state = await pace(target.host, delayMs);
   let res;
+  let buffer;
   try {
     res = await fetch(target, {
       redirect,
       headers: { 'User-Agent': ua, Accept: '*/*' },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+    // Inside the try: a reset or timeout partway through the body is a network error too.
+    buffer = Buffer.from(await res.arrayBuffer());
   } catch (err) {
     blocked += 1;
     state.lastAt = Date.now();
@@ -60,7 +63,6 @@ export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT
 
   const headers = Object.fromEntries(res.headers);
   const type = headers['content-type'] ?? 'text/plain';
-  const buffer = Buffer.from(await res.arrayBuffer());
   const body = TEXT_TYPE.test(type) ? buffer.toString('utf8') : buffer;
   state.lastAt = Date.now();
 
