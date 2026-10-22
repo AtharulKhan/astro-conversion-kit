@@ -43,7 +43,7 @@ test('the fixture fingerprints as WordPress with REST and 3 sitemaps', async () 
 
 test('a page whose generator is Webflow fingerprints as webflow', async () => {
   const stub = await startStub({
-    '/': { body: '<html><head><meta name="generator" content="Webflow"></head><body></body></html>' },
+    '/': { body: '<html><head><title>Home</title><meta name="generator" content="Webflow"></head><body></body></html>' },
   });
   try {
     const result = await fingerprint(stub.origin, { fetch: fast });
@@ -63,7 +63,7 @@ test('a Drupal 10 site is drupal with version, theme and /sitemap.xml', async ()
   const stub = await startStub({
     '/': {
       headers: { 'X-Generator': 'Drupal 10 (https://www.drupal.org)', Server: 'nginx' },
-      body: '<html><head><meta name="Generator" content="Drupal 10 (https://www.drupal.org)">'
+      body: '<html><head><title>Home</title><meta name="Generator" content="Drupal 10 (https://www.drupal.org)">'
         + '<link rel="stylesheet" href="/themes/custom/acme/css/base.css">'
         + '<script src="/modules/contrib/webform/js/webform.js"></script></head>'
         + '<body><img src="/sites/default/files/hero.jpg"></body></html>',
@@ -91,7 +91,7 @@ test('a Drupal 10 site is drupal with version, theme and /sitemap.xml', async ()
 
 test('a Drupal 7 site is recognised by /sites/default/files/ alone', async () => {
   const stub = await startStub({
-    '/': { body: '<html><body><img src="/sites/default/files/logo.png"></body></html>' },
+    '/': { body: '<html><head><title>Home</title></head><body><img src="/sites/default/files/logo.png"></body></html>' },
   });
   try {
     const result = await fingerprint(stub.origin, { fetch: fast });
@@ -104,7 +104,7 @@ test('a Drupal 7 site is recognised by /sites/default/files/ alone', async () =>
 
 test('a Drupal 7 generator string gives version 7', async () => {
   const stub = await startStub({
-    '/': { body: '<html><head><meta name="Generator" content="Drupal 7 (http://drupal.org)"></head></html>' },
+    '/': { body: '<html><head><title>Home</title><meta name="Generator" content="Drupal 7 (http://drupal.org)"></head></html>' },
   });
   try {
     const result = await fingerprint(stub.origin, { fetch: fast });
@@ -124,7 +124,7 @@ test('other platforms and plain HTML', async () => {
     ['<p>hello</p>', 'static'],
   ];
   for (const [html, platform] of cases) {
-    const stub = await startStub({ '/': { body: `<html><head>${html}</head></html>` } });
+    const stub = await startStub({ '/': { body: `<html><head><title>Home</title>${html}</head></html>` } });
     try {
       assert.equal((await fingerprint(stub.origin, { fetch: fast })).platform, platform, html);
     } finally {
@@ -307,4 +307,43 @@ test('the CLI exits 3 when the site blocks and 2 when it is unreachable', async 
     run(process.execPath, [SCRIPT, stub.origin, '--delay', '0']),
     (err) => err.code === 2 && /Could not reach/.test(err.stderr),
   );
+});
+
+test('a bot challenge on the home page stops the fingerprint: SiteGround and Cloudflare', async () => {
+  for (const [host, provider, cause] of [
+    ['siteground', 'SiteGround', /202 .*\/\.well-known\/sgcaptcha\//],
+    ['cloudflare', 'Cloudflare', /403 with cf-mitigated: challenge/],
+  ]) {
+    const site = await startFixture({ challenge: host });
+    try {
+      const result = await fingerprint(site.origin, { fetch: fast });
+      assert.equal(result.challenge.provider, provider);
+      assert.match(result.challenge.cause, cause);
+      assert.equal(result.platform, 'unknown');
+      assert.deepEqual(result.sitemapUrls, []);
+      assert.deepEqual(site.requests, ['/'], 'nothing after the home page');
+
+      await assert.rejects(run(process.execPath, [SCRIPT, site.origin, '--delay', '0']), (err) => {
+        assert.equal(err.code, 3);
+        assert.match(err.stderr, new RegExp(`^blocked: ${provider} anti-bot challenge \\(`, 'm'));
+        assert.match(err.stderr, cause);
+        return true;
+      });
+    } finally {
+      resetBlocked();
+      await site.close();
+    }
+  }
+});
+
+test('a tiny untitled 200 home page is a challenge named by the site host', async () => {
+  const stub = await startStub({ '/': { body: '<html><body><script src="/check.js"></script></body></html>' } });
+  try {
+    await assert.rejects(
+      run(process.execPath, [SCRIPT, stub.origin, '--delay', '0']),
+      (err) => err.code === 3 && /^blocked: 127\.0\.0\.1 anti-bot challenge \(200 with a \d+-byte page and no title\)/m.test(err.stderr),
+    );
+  } finally {
+    await stub.close();
+  }
 });

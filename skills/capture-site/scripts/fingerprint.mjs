@@ -2,12 +2,14 @@
 // Platform fingerprint: what a site is built on, and where its sitemaps are.
 // fingerprint(origin, { fetch }) uses at most 4 requests: `/`, `/robots.txt`, then the
 // robots-declared sitemap or `/sitemap_index.xml` (Drupal: `/sitemap.xml`), then `/sitemap.xml`
-// as a fallback when that found nothing.
+// as a fallback when that found nothing. A home page that is a bot challenge (lib/challenge.mjs)
+// stops it there: `challenge` is { provider, cause } and nothing else is requested.
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { fetchPaced, DEFAULT_DELAY_MS } from './lib/http.mjs';
 import { parseSitemap } from './lib/sitemaps.mjs';
+import { detectChallenge } from './lib/challenge.mjs';
 
 const MAX_SITEMAP_REQUESTS = 2;
 const BLOCK_STATUSES = new Set([403, 429, 503]);
@@ -33,7 +35,12 @@ Wix, Shopify, Joomla, static) and find its sitemaps, in at most 4 paced requests
   --delay <ms>  wait between requests (default ${DEFAULT_DELAY_MS})
   --help        show this help
 
-Exit codes: 0 done, 2 usage or unreachable site, 3 the site is blocking requests.`;
+A home page that is an anti-bot challenge (SiteGround's /.well-known/sgcaptcha/, Cloudflare's
+challenge page, or a tiny page with no title) prints "blocked: <host> anti-bot challenge
+(<cause>)" and exits 3.
+
+Exit codes: 0 done, 2 usage or unreachable site, 3 the site is blocking requests or answers
+with a bot challenge.`;
 
 function attr(tagText, name) {
   const match = tagText.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
@@ -128,9 +135,10 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
   const home = await fetch(new URL('/', base).href, { redirect: 'follow' });
   const html = home.status === 200 ? String(home.body) : '';
   const headers = home.headers ?? {};
+  const challenge = detectChallenge(home);
 
-  // Unreachable or blocking: do not keep knocking.
-  if (home.status === 0 || BLOCK_STATUSES.has(home.status)) {
+  // Unreachable, blocking or challenging: do not keep knocking.
+  if (home.status === 0 || BLOCK_STATUSES.has(home.status) || challenge) {
     return {
       platform: 'unknown',
       platformVersion: null,
@@ -144,6 +152,7 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
       server: headers.server ?? null,
       poweredBy: headers['x-powered-by'] ?? null,
       homeStatus: home.status,
+      challenge,
     };
   }
 
@@ -168,6 +177,7 @@ export async function fingerprint(origin, { fetch = fetchPaced } = {}) {
     server: headers.server ?? null,
     poweredBy: headers['x-powered-by'] ?? null,
     homeStatus: home.status,
+    challenge: null,
   };
 }
 
@@ -228,6 +238,10 @@ async function main() {
   if (result.homeStatus === 0) {
     console.error(`Could not reach ${origin.origin}.`);
     process.exit(2);
+  }
+  if (result.challenge) {
+    console.error(`blocked: ${result.challenge.provider ?? origin.hostname} anti-bot challenge (${result.challenge.cause})`);
+    process.exit(3);
   }
   if (BLOCK_STATUSES.has(result.homeStatus)) {
     console.error(`${origin.origin} answered ${result.homeStatus}: it is blocking requests. Wait and run again.`);

@@ -1,5 +1,8 @@
 // Fixture server: a static imitation of a WordPress site for tests.
-// startFixture({ port, blockAfter, delayMs, root, alwaysStatus }) -> { origin, requests, close() }
+// startFixture({ port, blockAfter, delayMs, root, alwaysStatus, challenge }) -> { origin, requests, close() }
+// challenge: 'siteground' | 'cloudflare' answers every request with that host's bot challenge
+// (SiteGround: a 202 page refreshing to /.well-known/sgcaptcha/; Cloudflare: a 403 "Just a
+// moment..." page with cf-mitigated: challenge);
 // alwaysStatus maps a path to the status it answers on every request, e.g. { '/flaky/': 503 };
 // root serves pages and assets from another copy of site/ (wp-json and redirects stay the fixture's);
 // `requests` lists every request URL in order.
@@ -141,6 +144,21 @@ function notFound(origin, site) {
   return { status: 404, headers: { 'Content-Type': contentTypeFor(file) }, body: body(file, origin) };
 }
 
+// What each host answers a client it wants to check, on every request.
+const CHALLENGES = {
+  siteground: (req) => ({
+    status: 202,
+    headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+    body: `<html><head><link rel="icon" href="data:;"><meta http-equiv="refresh" content="0;/.well-known/sgcaptcha/?r=${encodeURIComponent(req.url)}"></meta></head></html>`,
+  }),
+  cloudflare: () => ({
+    status: 403,
+    headers: { 'Content-Type': 'text/html; charset=UTF-8', 'cf-mitigated': 'challenge' },
+    body: '<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title></head><body><noscript>Enable JavaScript and cookies to continue</noscript>'
+      + '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=fixture"></script></body></html>',
+  }),
+};
+
 function respond(req, origin, site) {
   try {
     return route(req, origin, site);
@@ -149,7 +167,8 @@ function respond(req, origin, site) {
   }
 }
 
-export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, root = SITE, alwaysStatus = {} } = {}) {
+export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, root = SITE, alwaysStatus = {}, challenge = null } = {}) {
+  if (challenge && !CHALLENGES[challenge]) throw new Error(`unknown challenge ${challenge}`);
   const site = resolve(root);
   let requests = 0;
   const log = [];
@@ -162,9 +181,11 @@ export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0, roo
       const fixed = alwaysStatus[new URL(req.url, origin).pathname];
       const response = blocked
         ? { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain' }, body: 'Too Many Requests' }
-        : fixed
-          ? { status: fixed, headers: { 'Content-Type': 'text/plain' }, body: `Status ${fixed}` }
-          : respond(req, origin, site);
+        : challenge
+          ? CHALLENGES[challenge](req)
+          : fixed
+            ? { status: fixed, headers: { 'Content-Type': 'text/plain' }, body: `Status ${fixed}` }
+            : respond(req, origin, site);
       const payload = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body);
       res.writeHead(response.status, { ...response.headers, 'Content-Length': payload.length });
       res.end(req.method === 'HEAD' ? undefined : payload);

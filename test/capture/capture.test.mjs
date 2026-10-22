@@ -136,8 +136,8 @@ test('--verify-shortlinks requests each shortlink and records where it goes', as
 
 test('a page that is always 403 is recorded with its status, not treated as a block', async () => {
   const stub = await startStub({
-    '/': { body: '<html><body><a href="/forbidden/">f</a></body></html>' },
-    '/forbidden/': { status: 403, body: '<html><body>no</body></html>' },
+    '/': { body: '<html><head><title>Page</title></head><body><a href="/forbidden/">f</a></body></html>' },
+    '/forbidden/': { status: 403, body: '<html><head><title>Page</title></head><body>no</body></html>' },
   });
   try {
     const out = tempDir();
@@ -173,8 +173,8 @@ test('a URL that keeps answering 503 is recorded with its status and attempts; t
 
 test('a URL that keeps answering 429 is given up; three different URLs failing in a row stop the run with exit 3', async () => {
   const stub = await startStub({
-    '/': { body: '<html><body><a href="/a/">a</a> <a href="/slow/">s</a></body></html>' },
-    '/a/': { body: '<html><body>a</body></html>' },
+    '/': { body: '<html><head><title>Page</title></head><body><a href="/a/">a</a> <a href="/slow/">s</a></body></html>' },
+    '/a/': { body: '<html><head><title>Page</title></head><body>a</body></html>' },
     '/slow/': { status: 429, body: 'slow down' },
   });
   try {
@@ -189,11 +189,11 @@ test('a URL that keeps answering 429 is given up; three different URLs failing i
 
   const failing = { status: 503, body: 'unavailable' };
   const busy = await startStub({
-    '/': { body: '<html><body><a href="/s1/">1</a> <a href="/s2/">2</a> <a href="/s3/">3</a> <a href="/ok/">ok</a></body></html>' },
+    '/': { body: '<html><head><title>Page</title></head><body><a href="/s1/">1</a> <a href="/s2/">2</a> <a href="/s3/">3</a> <a href="/ok/">ok</a></body></html>' },
     '/s1/': failing,
     '/s2/': failing,
     '/s3/': failing,
-    '/ok/': { body: '<html><body>ok</body></html>' },
+    '/ok/': { body: '<html><head><title>Page</title></head><body>ok</body></html>' },
   });
   try {
     const out = tempDir();
@@ -219,7 +219,7 @@ test('a URL that keeps answering 429 is given up; three different URLs failing i
 
 test('a gzipped sitemap too large once decoded is a discoveryErrors entry "too-large", not fatal', async () => {
   const stub = await startStub({
-    '/': { body: '<html><body>home</body></html>' },
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
     '/robots.txt': { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'Sitemap: /big.xml.gz\n' },
     '/big.xml.gz': { headers: { 'Content-Type': 'application/x-gzip' }, body: gzipSync(Buffer.alloc(20 * 1024 * 1024 + 1, ' ')) },
   });
@@ -236,7 +236,7 @@ test('a gzipped sitemap too large once decoded is a discoveryErrors entry "too-l
 
 test('a sitemap that keeps answering 503 is noted in discoveryErrors, not fatal', async () => {
   const stub = await startStub({
-    '/': { body: '<html><body>home</body></html>' },
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
     '/robots.txt': { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'Sitemap: /busy-sitemap.xml\n' },
     '/busy-sitemap.xml': { status: 503 },
   });
@@ -254,7 +254,7 @@ test('a sitemap that keeps answering 503 is noted in discoveryErrors, not fatal'
 
 test('robots.txt and sitemaps that always answer 403 are noted, not fatal', async () => {
   const stub = await startStub({
-    '/': { body: '<html><body>home</body></html>' },
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
     '/robots.txt': { status: 403 },
     '/sitemap_index.xml': { status: 403 },
     '/sitemap.xml': { status: 403 },
@@ -310,8 +310,8 @@ test('only HTML and hreflang alternates are followed; feeds go to feeds/, wp-jso
     <link rel="alternate" type="application/rss+xml" href="/news-feed/">
     <link rel="alternate" hreflang="fr" href="/fr/">`;
   const stub = await startStub({
-    '/': { body: `<html><head>${head}</head><body><a href="/wp-json/">api</a></body></html>` },
-    '/fr/': { body: '<html><body>bonjour</body></html>' },
+    '/': { body: `<html><head><title>Page</title>${head}</head><body><a href="/wp-json/">api</a></body></html>` },
+    '/fr/': { body: '<html><head><title>Page</title></head><body>bonjour</body></html>' },
     '/news-feed/': { headers: { 'Content-Type': 'application/rss+xml' }, body: '<rss version="2.0"></rss>' },
   });
   try {
@@ -452,7 +452,7 @@ test('a Wayback failure is recorded in meta.json and never fails the capture; --
 test('stylesheets and <style> blocks are saved under css/ with a manifest', async () => {
   const shared = '<style>.a { color: red; }</style>';
   const page = (styles) =>
-    `<html><head><link rel="stylesheet" href="/s/main.css?ver=2">${styles}</head><body><a href="/one/">1</a> <a href="/two/">2</a></body></html>`;
+    `<html><head><title>Page</title><link rel="stylesheet" href="/s/main.css?ver=2">${styles}</head><body><a href="/one/">1</a> <a href="/two/">2</a></body></html>`;
   const stub = await startStub({
     '/': { body: page(`${shared}<style>.b { color: blue; }</style>`) },
     '/one/': { body: page(`${shared}<style>.b { color: blue; }</style>`) },
@@ -538,7 +538,7 @@ test('@import is followed into css/, on the site and on other hosts, cycle-safe,
 test('a redirected stylesheet records its final URL, and its @import resolves against it', async () => {
   const css = (body) => ({ headers: { 'Content-Type': 'text/css' }, body });
   const stub = await startStub({
-    '/': { body: '<html><head><link rel="stylesheet" href="/old.css"></head><body>moved</body></html>' },
+    '/': { body: '<html><head><title>Page</title><link rel="stylesheet" href="/old.css"></head><body>moved</body></html>' },
     '/old.css': { status: 301, headers: { Location: '/new/main.css' } },
     '/new/main.css': css('@import "part.css";\n.main { margin: 0; }'),
     '/new/part.css': css('.part { margin: 0; }'),
@@ -557,7 +557,7 @@ test('a redirected stylesheet records its final URL, and its @import resolves ag
 });
 
 test('@import is followed 5 levels deep; a deeper sheet is listed "too-deep" and not requested', async () => {
-  const routes = { '/': { body: '<html><head><link rel="stylesheet" href="/d0.css"></head><body>deep</body></html>' } };
+  const routes = { '/': { body: '<html><head><title>Page</title><link rel="stylesheet" href="/d0.css"></head><body>deep</body></html>' } };
   for (let n = 0; n <= 7; n += 1) {
     routes[`/d${n}.css`] = { headers: { 'Content-Type': 'text/css' }, body: `@import "d${n + 1}.css";\n.d${n} { margin: 0; }` };
   }
@@ -579,7 +579,7 @@ test('@import is followed 5 levels deep; a deeper sheet is listed "too-deep" and
 
 test('first-party <script src> files are saved under js/ with a manifest; vendors and inline code are not', async () => {
   const page = (extra) =>
-    `<html><head><script src="https://www.googletagmanager.com/gtag/js?id=G-X1"></script><script>var inline = 1;</script></head>`
+    `<html><head><title>Page</title><script src="https://www.googletagmanager.com/gtag/js?id=G-X1"></script><script>var inline = 1;</script></head>`
     + `<body><a href="/one/">1</a><script src="/js/site.js?ver=3"></script>${extra}</body></html>`;
   const stub = await startStub({
     '/': { body: page('') },
@@ -603,7 +603,7 @@ test('first-party <script src> files are saved under js/ with a manifest; vendor
 });
 
 test('js/: an on-site redirect is followed, an off-site one is not, a file over 5 MB is not saved, and the manifest is always written', async () => {
-  const page = (scripts) => `<html><body>${scripts.map((s) => `<script src="${s}"></script>`).join('')}</body></html>`;
+  const page = (scripts) => `<html><head><title>Page</title></head><body>${scripts.map((s) => `<script src="${s}"></script>`).join('')}</body></html>`;
   const stub = await startStub({
     '/': { body: page(['/js/moved.js', '/js/away.js', '/js/huge.js']) },
     '/js/moved.js': { status: 301, headers: { Location: '/js/new.js' } },
@@ -627,7 +627,7 @@ test('js/: an on-site redirect is followed, an off-site one is not, a file over 
     await stub.close();
   }
 
-  const none = await startStub({ '/': { body: '<html><body><p>No scripts.</p></body></html>' } });
+  const none = await startStub({ '/': { body: '<html><head><title>Page</title></head><body><p>No scripts.</p></body></html>' } });
   try {
     const out = tempDir();
     const run = await capture([none.origin, '--out', out, '--delay', '0']);
@@ -722,4 +722,65 @@ test('usage errors exit 2 and --help prints usage', async () => {
   assert.equal((await capture([fixture.origin])).code, 2, 'missing --out');
   assert.equal((await capture(['not-a-url', '--out', tempDir()])).code, 2);
   assert.equal((await capture([fixture.origin, '--out', tempDir(), '--resume'])).code, 2, 'nothing to resume');
+});
+
+test('a host that answers every request with a bot challenge stops the capture at the home page: SiteGround and Cloudflare', async () => {
+  for (const [host, provider, cause] of [
+    ['siteground', 'SiteGround', /202 .*\/\.well-known\/sgcaptcha\//],
+    ['cloudflare', 'Cloudflare', /403 with cf-mitigated: challenge/],
+  ]) {
+    const site = await startFixture({ challenge: host });
+    try {
+      const out = tempDir();
+      const run = await capture([site.origin, '--out', out, '--delay', '0']);
+      assert.equal(run.code, 3, run.stderr);
+      assert.match(run.stderr, new RegExp(`^blocked: ${provider} anti-bot challenge \\(`, 'm'));
+      assert.match(run.stderr, cause);
+      assert.match(run.stderr, /--resume/);
+      assert.doesNotMatch(run.stdout, /Captured/);
+      assert.deepEqual(site.requests, ['/'], 'one request, no retries');
+      const inventory = readJson(out, 'inventory.json');
+      assert.deepEqual(inventory.map((r) => `${r.path}:${r.status}`), ['/:challenge']);
+      assert.match(inventory[0].challenge, cause);
+      assert.equal(inventory[0].snapshot, null, 'never saved as a page');
+      assert.equal(readJson(out, 'state.json').phase, 'discover');
+      assert.equal(readJson(out, 'meta.json').challenge.provider, provider);
+      const notes = await readme(out);
+      assert.match(notes, new RegExp(`^- Stopped by a ${provider} anti-bot challenge at / \\(`, 'm'));
+      assert.match(notes, cause);
+    } finally {
+      await site.close();
+    }
+  }
+});
+
+test('a challenge partway through the crawl stops it with the URL queued; --resume once allowed finishes without the challenge row', async () => {
+  let allowed = false;
+  const titled = (title, links = '') => `<html><head><title>${title}</title></head><body>${links}</body></html>`;
+  const stub = await startStub({
+    '/': { body: titled('Home', '<a href="/a/">a</a> <a href="/b/">b</a>') },
+    '/a/': { body: titled('A') },
+    '/b/': () => (allowed
+      ? { body: titled('B') }
+      : { status: 202, body: '<html><head><meta http-equiv="refresh" content="0;/.well-known/sgcaptcha/?r=%2Fb%2F"></head></html>' }),
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 3, run.stderr);
+    assert.match(run.stderr, /^blocked: SiteGround anti-bot challenge \(/m);
+    assert.equal(stub.requests.filter((u) => u === '/b/').length, 1, 'a challenge is not retried');
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/a/:200', '/b/:challenge']);
+    const state = readJson(out, 'state.json');
+    assert.equal(state.phase, 'crawl');
+    assert.equal(new URL(state.queue[0].url).pathname, '/b/');
+
+    allowed = true;
+    const resumed = await capture([stub.origin, '--out', out, '--delay', '0', '--resume']);
+    assert.equal(resumed.code, 0, resumed.stderr);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/a/:200', '/b/:200']);
+    assert.equal(readJson(out, 'meta.json').challenge, null);
+  } finally {
+    await stub.close();
+  }
 });

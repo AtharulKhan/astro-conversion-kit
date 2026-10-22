@@ -9,6 +9,8 @@
 // <script src> to js/ (stylesheets' @import rules are followed, 5 deep); after the crawl the
 // Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
 // CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
+// A bot challenge (lib/challenge.mjs) on any page or discovery request stops the run at once:
+// the URL is recorded with status "challenge" (never a page) and queued again for --resume.
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
@@ -24,6 +26,7 @@ import { dumpWpRest } from './lib/wp-rest.mjs';
 import { CDX_ENDPOINT, WAYBACK_FILE, waybackPaths } from './lib/wayback.mjs';
 import { extensionOf, NEVER, NOT_PAGES, PAGE_EXTENSIONS } from './lib/page-rules.mjs';
 import { cssImports } from './lib/css-urls.mjs';
+import { CHALLENGE, detectChallenge } from './lib/challenge.mjs';
 import { parse } from 'parse5';
 
 const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
@@ -63,9 +66,13 @@ REST lists. A Wayback failure is noted in meta.json and never fails the capture.
 Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address.
 Each URL is tried 3 times; one that still answers 403, 429, 503 or a network error is
 recorded with that status and its attempts, and the crawl moves on.
+An anti-bot challenge (SiteGround's /.well-known/sgcaptcha/, Cloudflare's challenge page, a
+tiny page with no title) is never retried and never counted as a page: the run stops at the
+first one with "blocked: <host> anti-bot challenge (<cause>)", the URL recorded with status
+"challenge" in inventory.json and meta.json, and queued again for --resume.
 Exit codes: 0 done, 2 usage error, 3 stopped because 3 different URLs in a row used up their
-tries or the site cannot be reached (wait, then run again with --resume; those URLs get one
-more set of tries and are recorded if they fail again).`;
+tries, the site cannot be reached, it answered with a bot challenge (resume with --resume
+once the capture machine is allowed through), or no page answered 200.`;
 
 const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
 // Same-site script files: larger ones are not saved, and redirects are followed at most this far.
@@ -87,6 +94,13 @@ const FEED_ALTERNATE = /^application\/(rss|atom)\+xml$/;
 
 class UsageError extends Error {}
 class Blocked extends Error {}
+class Challenged extends Error {
+  constructor(url, found) {
+    super(found.cause);
+    this.url = url;
+    this.found = found;
+  }
+}
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -221,6 +235,9 @@ function styleBlocks(html) {
 
 class Crawler {
   constructor(state, { out, fetch, delayMs }) {
+    // A challenge row only marks where the last run stopped: that URL is asked again.
+    state.records = state.records.filter((r) => r.status !== CHALLENGE);
+    delete state.challenge;
     this.state = state;
     this.out = out;
     this.fetch = fetch;
@@ -273,6 +290,8 @@ class Crawler {
     return async (url, options) => {
       for (let attempt = 1; ; attempt += 1) {
         const res = await this.fetch(url, options);
+        const found = detectChallenge(res);
+        if (found) throw new Challenged(url, found);
         if (!BLOCK_STATUSES.has(res.status)) {
           this.noteOk();
           const path = new URL(url).pathname;
@@ -294,7 +313,7 @@ class Crawler {
   }
 
   // Discovery in resumable steps: fingerprint (home, robots, sitemap index), then each sitemap.
-  // Returns 'ok' or 'blocked'.
+  // Returns 'ok', 'blocked' or 'challenge'.
   async discover() {
     const fetch = this.discoveryFetch();
     try {
@@ -326,6 +345,10 @@ class Crawler {
       await this.restDump(fetch);
     } catch (err) {
       if (err instanceof Blocked) return 'blocked';
+      if (err instanceof Challenged) {
+        this.noteChallenge(err.url, err.found);
+        return 'challenge';
+      }
       throw err;
     }
     this.state.phase = 'crawl';
@@ -344,13 +367,23 @@ class Crawler {
     saveState(this.out, this.state);
   }
 
-  // Follow one URL's redirects by hand. Returns { blocked, status } or { res, finalUrl, chain[] }.
+  // Where the run stopped on a challenge: state.challenge for meta.json, and (for a page) an
+  // inventory row with status "challenge" and no snapshot.
+  noteChallenge(url, found, { row = true } = {}) {
+    this.state.challenge = { url, path: pathOf(url), provider: found.provider, cause: found.cause };
+    if (row) this.addRecord({ ...extractPage('', url, { status: CHALLENGE, finalUrl: url }), challenge: found.cause });
+  }
+
+  // Follow one URL's redirects by hand. Returns { blocked, status }, { challenge } or
+  // { res, finalUrl, chain[] }.
   // A hop to another site, a forbidden path, a file or a loop ends the chain without a request.
   async fetchChain(start) {
     const chain = [];
     let current = start;
     for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
       const res = await this.fetch(current, { redirect: 'manual' });
+      const found = detectChallenge(res);
+      if (found) return { challenge: found };
       if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
       const location = res.headers?.location;
       if (res.status < 300 || res.status >= 400 || !location) return { res, finalUrl: current, chain };
@@ -610,7 +643,8 @@ class Crawler {
 
   async visit(item) {
     const result = await this.fetchChain(item.url);
-    if (result.blocked) return result;
+    if (result.challenge) this.noteChallenge(item.url, result.challenge);
+    if (result.blocked || result.challenge) return result;
     const { res, chain } = result;
     if (chain.length === 0) {
       this.record(item.url, res, item.kind);
@@ -661,7 +695,8 @@ class Crawler {
 
   async visitShortlink(item) {
     const result = await this.fetchChain(new URL(item.url, this.state.canonicalOrigin).href);
-    if (result.blocked) return result;
+    if (result.challenge) this.noteChallenge(item.url, result.challenge, { row: false });
+    if (result.blocked || result.challenge) return result;
     const { res, chain } = result;
     const final = chain.length === 0 ? null : result.offSite ? result.finalUrl : pathOf(result.finalUrl);
     this.state.shortlinkChecks[item.url] = {
@@ -679,7 +714,8 @@ class Crawler {
   // success between them, stop the run with those three back at the front of the queue (fresh
   // tries, `stops` counted). One that was already put back once is given up for good when it
   // fails again and no longer counts, so URLs that are down for good cannot stop every resume.
-  // Returns 'done', 'max' or 'blocked'.
+  // A challenge stops at once, that URL back at the front of the queue.
+  // Returns 'done', 'max', 'blocked' or 'challenge'.
   async drain(queue, visit, giveUp, max = null) {
     let sinceSave = 0;
     let pending = []; // used up, given up once a success shows the site is still answering
@@ -696,6 +732,11 @@ class Crawler {
       if (item.attempts > 0 && this.lastVisited === item.url) await sleep(this.retryWait(item.attempts));
       this.lastVisited = item.url;
       const result = await visit(item);
+      if (result.challenge) {
+        queue.unshift(item);
+        settle();
+        return 'challenge';
+      }
       if (result.blocked) {
         item.attempts += 1;
         if (item.attempts < MAX_ATTEMPTS) queue.push(item);
@@ -797,6 +838,7 @@ class Crawler {
       options: this.state.options,
       discoveryErrors: this.state.discoveryErrors ?? [],
       wayback: this.state.wayback ?? (this.state.options.noWayback ? { status: 'skipped' } : null),
+      challenge: this.state.challenge ?? null,
     });
     json('css/manifest.json', this.cssManifest());
     json('js/manifest.json', this.jsManifest());
@@ -894,8 +936,24 @@ async function main() {
     process.exit(3);
   };
 
+  // The host answers with a bot challenge: no retry gets past it, so stop and say what is needed.
+  const stopChallenge = () => {
+    crawler.writeOutputs({ finished: false });
+    saveState(out, state);
+    const { provider, cause, path } = state.challenge;
+    console.error(
+      `blocked: ${provider ?? new URL(state.origin).hostname} anti-bot challenge (${cause}) at ${path}.\n`
+        + 'The host or its firewall is checking for a real browser; the capture does not get past that and will not try.\n'
+        + 'Needs the site owner: allowlist the capture machine\'s public IP on the host or in the WAF for the capture window, '
+        + 'or send a URL list. Then run the same command with --resume.',
+    );
+    process.exit(3);
+  };
+
   if (state.phase === 'discover') {
-    if ((await crawler.discover()) === 'blocked') stopBlocked();
+    const found = await crawler.discover();
+    if (found === 'blocked') stopBlocked();
+    if (found === 'challenge') stopChallenge();
     saveState(out, state);
   }
 
@@ -910,6 +968,7 @@ async function main() {
   if (outcome === 'done' && !state.options.noWayback && !state.wayback) {
     state.wayback = await crawler.wayback(process.env.CAPTURE_WAYBACK_CDX || CDX_ENDPOINT);
   }
+  if (outcome === 'challenge') stopChallenge();
   const inventory = crawler.writeOutputs({ finished: outcome === 'done' });
   if (outcome === 'blocked') stopBlocked();
   saveState(out, state);
