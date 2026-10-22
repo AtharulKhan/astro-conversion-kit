@@ -90,7 +90,7 @@ vendors.
     from,to,status,source,note
     /old-services,/services/,301,seed,
     /?p=6,/contact/,301,shortlink,unverified shortlink
-    /old-blog/*,/blog/:splat,301,decision,D7
+    /old-blog/*,/blog/:splat,301,decision,d7
 
 - `from`: a root-relative path, optionally with a query (`/?p=7`), or a catch-all: a trailing
   `/*` (the target may use `:splat`) or a `:name*` or `:name+` parameter (the target may use

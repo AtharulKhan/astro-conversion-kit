@@ -18,14 +18,14 @@ with these six fields:
 
 | Field | Holds |
 |---|---|
-| id | `D1`, `D2`, ... in order; never reused. A `decision` row in `redirects.csv` puts it in `note` |
+| id | `d1`, `d2`, ... in order; never reused. A `decision` row in `redirects.csv` puts it in `note` |
 | topic | What the decision is about, with the path: "/about/ has two H1s" |
 | choice | What the build does: "reproduce live by default", or what it does instead |
 | default | What the build would do without a decision (live as it is) |
 | reason | Why this choice; for a departure from live, the evidence or the person who asked |
 | cost if wrong | What breaks or is lost if the choice is wrong, and how it would be noticed |
 
-Example: `D4 | /services/ links to /old-quote/, which 404s on live | reproduce live by default |
+Example: `d4 | /services/ links to /old-quote/, which 404s on live | reproduce live by default |
 keep the broken link | parity; fixing it is a content change | a visitor still hits a 404; fix:
 proposal to link /contact/`.
 
@@ -56,7 +56,7 @@ Both files are a JSON array of records with the same shape. An exception:
 
 A proposal, the same plus its `id`:
 
-    { "id": "D9", "path": "/about/", "field": "h1", "from": "Abuot us", "to": "About us",
+    { "id": "d9", "path": "/about/", "field": "h1", "from": "Abuot us", "to": "About us",
       "reason": "typo on live", "approvedBy": "proposed", "date": "2026-10-22" }
 
 Every key is required and non-empty except `from` and `to`, which may be `""`. The gates ignore
