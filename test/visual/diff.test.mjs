@@ -9,7 +9,7 @@ import { run, readPng, TMP } from './helpers.mjs';
 const ROOT = join(TMP, 'visual-diff');
 const A = join(ROOT, 'a');
 const B = join(ROOT, 'b');
-const ROW_KEYS = ['heightA', 'heightB', 'offset', 'pass', 'percent', 'percentUnaligned', 'reason', 'route', 'threshold', 'width'];
+const ROW_KEYS = ['heightA', 'heightB', 'heightMismatch', 'offset', 'pass', 'percent', 'percentUnaligned', 'reason', 'route', 'threshold', 'width'];
 let fixture;
 
 const shoot = (routes, out) =>
@@ -71,6 +71,7 @@ test('shooting the same pages twice diffs to 0 percent and exits 0', async () =>
     assert.equal(row.pass, true);
     assert.deepEqual(row.offset, [0, 0], 'no search when aligned passes');
     assert.equal(row.heightA, row.heightB);
+    assert.equal(row.heightMismatch, false);
     assert.equal(row.threshold, 0.5);
     assert.equal(row.reason, null);
   }
@@ -117,16 +118,49 @@ test('a cascade (everything below row 300 pushed down 1 px) passes', async () =>
   assert.equal(row.pass, true);
 });
 
-test('a height difference over 2 percent fails even when the common area matches', async () => {
+// The page with only its top `rows` rows, as when the new build lost its footer.
+function cropped(png, rows) {
+  const out = new PNG({ width: png.width, height: rows });
+  png.data.copy(out.data, 0, 0, png.width * rows * 4);
+  return out;
+}
+
+test('the extra rows of a taller page count as differing pixels and are painted red in the diff image', async () => {
   const original = readPng(join(A, 'home', '1440.png'));
   const taller = new PNG({ width: original.width, height: Math.ceil(original.height * 1.05) });
   taller.data.fill(255);
   original.data.copy(taller.data);
   const { result, row } = await diffHome('taller', taller, 1440);
   assert.equal(result.code, 1);
-  assert.equal(row.percent, 0);
+  const extra = taller.height - original.height;
+  assert.equal(row.percent, Math.round((extra / taller.height) * 100 * 1000) / 1000);
   assert.equal(row.pass, false);
   assert.equal(row.heightB, taller.height);
+  assert.equal(row.heightMismatch, true);
+  assert.match(result.stdout, new RegExp(`${extra} rows on one side only`));
+  const image = readPng(join(ROOT, 'taller-out', 'home', '1440.png'));
+  assert.equal(image.height, taller.height);
+  const last = (image.height - 1) * image.width * 4;
+  assert.deepEqual([...image.data.subarray(last, last + 4)], [255, 0, 0, 255]);
+});
+
+test('a missing footer 1 percent of the page tall fails, though the rows both sides have match', async () => {
+  const original = readPng(join(A, 'home', '1440.png'));
+  const short = cropped(original, original.height - Math.ceil(original.height * 0.01));
+  const { result, row } = await diffHome('no-footer', short, 1440);
+  assert.equal(result.code, 1, result.stdout);
+  assert.equal(row.pass, false);
+  assert.ok(row.percent >= 1, `percent ${row.percent}`);
+  assert.equal(row.heightMismatch, true);
+});
+
+test('a height difference of a few rows is counted, and passes when the count stays under the threshold', async () => {
+  const original = readPng(join(A, 'home', '1440.png'));
+  const { result, row } = await diffHome('few-rows', cropped(original, original.height - 3), 1440);
+  assert.equal(result.code, 0, result.stdout);
+  assert.equal(row.pass, true);
+  assert.ok(row.percent > 0 && row.percent <= 0.5, `percent ${row.percent}`);
+  assert.equal(row.heightMismatch, true);
 });
 
 function blackedOut() {

@@ -88,17 +88,22 @@ Add `--per-route review/overrides.json` once that file exists; a missing file ex
 | `--threshold` | `0.5` | Pass line in percent of differing pixels |
 | `--per-route` | none | Overrides file (below); leave it off when there are none |
 
-Every `<route>/<width>.png` in either folder is compared on the common width and height with
-pixelmatch threshold 0.1 and anti-aliasing ignored. Output: `review/diff/<route>/<width>.png`
-(differing pixels in red) and `review/diff/diff.json`, one row per pair:
-`{ route, width, percent, pass, heightA, heightB, percentUnaligned, offset, threshold, reason }`,
+Every `<route>/<width>.png` in either folder is compared with pixelmatch threshold 0.1 and
+anti-aliasing ignored. Output: `review/diff/<route>/<width>.png` (differing pixels in red) and
+`review/diff/diff.json`, one row per pair:
+`{ route, width, percent, pass, heightA, heightB, heightMismatch, percentUnaligned, offset, threshold, reason }`,
 plus `error` when a side is missing or unreadable.
 
-A pair passes when **all** of these hold:
+**Height differences are counted, not ignored.** When the two images differ in height, every row
+the taller one has and the shorter one lacks counts as differing pixels and is painted red at the
+foot of the diff image. A new page that lost its footer fails on those rows alone. `heightMismatch`
+is true on such a row, pass or fail; a pass with `heightMismatch` means only a few rows differ,
+and is still worth a look.
 
-- `percent` is at most the threshold (0.5 % unless overridden);
-- the widths are equal;
-- the heights differ by no more than 2 %.
+A pair passes when **both** of these hold:
+
+- `percent` (the extra rows included) is at most the threshold (0.5 % unless overridden);
+- the widths are equal.
 
 **The 1 px offset search.** When the aligned comparison fails, the new image is compared again
 moved by up to 1 px in each direction (the eight neighbours, overlapping area only) and the lowest
@@ -181,7 +186,7 @@ Common causes, to point the fix:
 | Whole page red below a point | Something above it changed height: a font, a missing element, margin collapse |
 | Text red, layout the same | Font family, weight or rendering; check the `font-family` style row and that the WOFF2 loaded |
 | A block blank on one side | A reveal class not in the freeze list, a lazy image past the cap, or a missing asset |
-| Height differs by more than 2 % | Missing or extra section, or an embed that renders differently statically |
+| `heightMismatch`, a red band at the foot | Missing or extra section, or an embed that renders differently statically |
 | `present` row fails | An element missing, or marked up as a different tag |
 | Banner closed on one side only | The new build kept or dropped the consent banner |
 

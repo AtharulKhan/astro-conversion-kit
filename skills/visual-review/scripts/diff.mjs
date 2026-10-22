@@ -11,11 +11,16 @@ import { assertNodeVersion } from './lib/node-version.mjs';
 
 const HELP = `Usage: node diff.mjs --a <dir> --b <dir> --out <dir> [--threshold 0.5] [--per-route overrides.json]
 
-Compares every <route>/<width>.png in --a with the same file in --b on their
-common width and height (pixelmatch threshold 0.1, anti-aliasing ignored) and
-writes <out>/<route>/<width>.png diff images and <out>/diff.json
-([{ route, width, percent, pass, heightA, heightB, percentUnaligned, offset,
-threshold, reason }]).
+Compares every <route>/<width>.png in --a with the same file in --b
+(pixelmatch threshold 0.1, anti-aliasing ignored) and writes
+<out>/<route>/<width>.png diff images and <out>/diff.json
+([{ route, width, percent, pass, heightA, heightB, heightMismatch,
+percentUnaligned, offset, threshold, reason }]).
+
+When the heights differ, the rows the taller image has and the shorter one
+lacks are counted as differing pixels (painted red at the foot of the diff
+image), so a missing footer or section fails. heightMismatch says the heights
+differ; the difference is counted, never ignored.
 
 When the aligned comparison fails, the images are also compared with b moved
 by up to 1 pixel in each direction (overlapping area only) and the lowest
@@ -23,9 +28,9 @@ percentage is kept, so sub-pixel rounding that shifts a layout by 1 pixel is
 not reported as a difference. offset is the [dx, dy] used; percentUnaligned is
 the aligned result. Shifts wider than 1 pixel are never searched.
 
-A pair passes when at most --threshold percent of pixels differ (default 0.5),
-the widths match, and the heights differ by no more than 2 percent. A file
-present on only one side, or one that cannot be read as a PNG, fails.
+A pair passes when at most --threshold percent of pixels differ (default 0.5)
+and the widths match. A file present on only one side, or one that cannot be
+read as a PNG, fails.
 
   --per-route  JSON object of per-route thresholds in percent, each with the
                reason it is looser, for example
@@ -34,7 +39,6 @@ present on only one side, or one that cannot be read as a PNG, fails.
 Exit codes: 0 all pass, 1 any failure (listed on stdout), 2 usage error.`;
 
 const PIXELMATCH = { threshold: 0.1, includeAA: false };
-const MAX_HEIGHT_DIFF = 0.02;
 const OFFSETS = [-1, 0, 1].flatMap((dx) => [-1, 0, 1].map((dy) => [dx, dy])).filter(([dx, dy]) => dx || dy);
 
 class UsageError extends Error {}
@@ -118,15 +122,21 @@ function crop(png, x0, y0, w, h) {
   return data;
 }
 
-// Compares a with b moved by (dx, dy), over the area where both overlap.
+// Compares a with b moved by (dx, dy) over the area where both overlap, then counts every
+// row the taller image has beyond the shorter one as differing (red in the diff image).
 function matchAt(pngA, pngB, dx, dy) {
   const w = Math.min(pngA.width, pngB.width) - Math.abs(dx);
   const h = Math.min(pngA.height, pngB.height) - Math.abs(dy);
-  const diff = new PNG({ width: w, height: h });
+  const extraRows = Math.abs(pngA.height - pngB.height);
+  const diff = new PNG({ width: w, height: h + extraRows });
   const dataA = crop(pngA, Math.max(0, -dx), Math.max(0, -dy), w, h);
   const dataB = crop(pngB, Math.max(0, dx), Math.max(0, dy), w, h);
-  const differing = pixelmatch(dataA, dataB, diff.data, w, h, PIXELMATCH);
-  return { percent: Math.round((differing / (w * h)) * 100 * 1000) / 1000, offset: [dx, dy], diff };
+  const overlap = Buffer.alloc(w * h * 4);
+  const differing = pixelmatch(dataA, dataB, overlap, w, h, PIXELMATCH) + extraRows * w;
+  overlap.copy(diff.data);
+  for (let i = w * h * 4; i < diff.data.length; i += 4) diff.data.set([255, 0, 0, 255], i);
+  const total = w * (h + extraRows);
+  return { percent: Math.round((differing / total) * 100 * 1000) / 1000, offset: [dx, dy], diff };
 }
 
 function readSide(dir, key, present) {
@@ -147,7 +157,7 @@ function compare(key, { a, b, out, threshold, overrides }, inA, inB) {
   const sideB = readSide(b, key, inB);
   const row = {
     route, width, percent: 100, pass: false,
-    heightA: sideA.png?.height ?? null, heightB: sideB.png?.height ?? null,
+    heightA: sideA.png?.height ?? null, heightB: sideB.png?.height ?? null, heightMismatch: false,
     percentUnaligned: 100, offset: [0, 0], threshold: limit, reason,
   };
   if (sideA.error || sideB.error) {
@@ -171,11 +181,12 @@ function compare(key, { a, b, out, threshold, overrides }, inA, inB) {
   row.offset = best.offset;
   const { height: hA, width: wA } = sideA.png;
   const { height: hB, width: wB } = sideB.png;
+  row.heightMismatch = hA !== hB;
   const reasons = [];
   if (row.percent > limit) reasons.push(`${row.percent}% of pixels differ (limit ${limit}%)`);
-  if (Math.abs(hA - hB) / Math.max(hA, hB) > MAX_HEIGHT_DIFF) reasons.push(`height ${hA}px vs ${hB}px`);
+  if (row.heightMismatch) reasons.push(`height ${hA}px vs ${hB}px: ${Math.abs(hA - hB)} rows on one side only, counted as differing`);
   if (wA !== wB) reasons.push(`width ${wA}px vs ${wB}px`);
-  row.pass = reasons.length === 0;
+  row.pass = row.percent <= limit && wA === wB;
   return { row, why: reasons.join('; ') };
 }
 

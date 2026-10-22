@@ -48,7 +48,9 @@ button says accept, agree, got it or ok is closed and reported as `bannerClosed`
 more than 2 px off the page's `scrollHeight` is flagged `heightMismatch`.
 
 What the diff measures: pixelmatch at threshold 0.1 with anti-aliasing ignored. A pair passes at
-**0.5 % differing pixels or fewer**, equal widths and heights within 2 %. When the aligned
+**0.5 % differing pixels or fewer** and equal widths. When the heights differ, every row the
+taller image has and the shorter one lacks counts as differing, so a missing footer fails; the
+row says `heightMismatch` and the difference is counted, never ignored. When the aligned
 comparison fails, the new image is also tried shifted by up to **1 px** in each direction, so a
 sub-pixel rounding shift is not reported; the row records the `offset` used and the aligned
 `percentUnaligned`. Wider shifts are never searched: 2 px off is a real difference.
