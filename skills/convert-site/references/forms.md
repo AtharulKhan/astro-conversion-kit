@@ -1,20 +1,33 @@
 # Forms
 
-A static site cannot receive a form, so every form posts to a third-party endpoint chosen at
-intake. Formspree is the default; any endpoint that accepts a plain HTML `POST` works the same way.
-The live site's form is never submitted.
+A static site cannot receive a form, so every form posts to a third-party endpoint. Formspree is
+the default; any endpoint that accepts a plain HTML `POST` works the same way. The live site's
+form is never submitted.
 
 ## What stays the same
 
-The forms gate compares each built form with `baseline/forms.json`: the same field names (every
-named `input`, `select` and `textarea`, without buttons), the same method. Keep the captured form
-markup, labels, classes and order exactly; change only:
+The forms gate compares each built form with `baseline/forms.json`: the same field names in
+order (every named `input`, `select` and `textarea`, without buttons) and the same method. Keep
+the captured form markup, labels, classes, order and every captured field exactly, the
+platform's hidden ones (nonces, `_wpcf7*`, `form_id`) included: they are harmless, and forms is
+not an exception field. Change only:
 
 - `action` to the endpoint (`https://formspree.io/f/<form id>`), `method="POST"`;
 - add the honeypot and thank-you fields below.
 
-The platform's hidden fields (nonces, `_wpcf7*`, `form_id`) are part of the captured field set, so
-they stay, harmless, as captured. Dropping one is an exception with a reason.
+## The form id
+
+Asked here, at the forms step, never at intake, and never a stop: send the person one line
+("create a form at formspree.io, send me the id after /f/; ids are not secret") and carry on with
+the placeholder `https://formspree.io/f/REPLACE`. Add the needs-you item. While the placeholder is
+in the build, `pre-launch` fails `placeholders.form-id`, the PR is opened with `--draft`, and the
+final report names the form id as the blocker. When the id arrives, replace the placeholder,
+rerun the gates and `pre-launch`, and mark the PR ready.
+
+**One endpoint.** The gate takes one `--endpoint`, so every form on the site posts to the same
+form id. A site whose forms need distinct endpoints (different inboxes, different services) is
+a recorded decision, and "forms after the first posting to their own endpoints were not checked
+by the forms gate" is a "Not covered" line in the PR.
 
 ## Honeypot
 
@@ -27,42 +40,38 @@ The gate allows a honeypot the live form did not have when it is named with `--h
 
 ## Thank-you page
 
-Every form leads to one thank-you page, through a hidden field:
+Every form leads to one thank-you page, through a hidden field holding the absolute URL on the
+canonical host:
 
-    <input type="hidden" name="_next" value="/thank-you/">
+    <input type="hidden" name="_next" value="https://<canonical host>/thank-you/">
 
-The gate compares the field's value with `--thank-you` as a string, so both carry the same path.
-Check during the one test submission that the endpoint lands on it; if the endpoint needs an
-absolute URL there, the gate is wrong about this endpoint: say so and fix the gate, never the
-value alone.
+The gate is given the path (`--thank-you /thank-you/`) and accepts the field as that path or as
+an absolute URL on the canonical or `--base` host; the page must be built.
 
 Use the live site's thank-you URL when it has one (it is a captured page and already built).
 When it has none, build `/thank-you/` from the site's plain page template with a one-line
-message, add it to the routes gate with `--allow-extra /thank-you/`, and record a decision. A
-redirect after submission depends on the endpoint's plan; note on the needs-you list if the
-chosen plan does not honour `_next`.
+message, pass `--allow-extra /thank-you/` to the routes gate, and record a decision. Whether the
+endpoint honours `_next` depends on its plan: if it does not, that is a needs-you line.
 
 ## The gate flags
 
-Add the flags to the three verify scripts in the site's `package.json`, so every `npm run verify`
-carries them:
+The form flags go on the command line every time the gates run, as the `parity-gates` skill
+does; they are never written into `package.json`:
 
-    "verify": "node scripts/verify/run-all.mjs --endpoint https://formspree.io/f/<id> --honeypot _gotcha --thank-you /thank-you/",
+    npm run verify -- --endpoint https://formspree.io/f/<id> --honeypot _gotcha --thank-you /thank-you/
 
-(the same flags on `verify:proposals` and `verify:release`, plus `--allow-extra /thank-you/`
-when that page is new). With several endpoints, one form
-id per form, the gate takes one `--endpoint`: use one form id for all, or record an exception per
-extra form. Without a form id at intake the endpoint is `https://formspree.io/f/REPLACE`, and
-`pre-launch` fails `placeholders.form-id` on purpose until the person gives the id.
+The same flags follow `npm run verify:proposals --` and `npm run verify:release --`, and the
+path-scoped `node scripts/verify/forms.mjs` run in the build phase.
 
 ## The one test submission
 
-Once, after the staging deploy, and only when the intake gave a test address:
+Once, after the staging deploy, and only when the intake gave a test address and the form id is
+real:
 
 1. Open the staging contact page (with Playwright, or your agent's own browser).
 2. Fill each field with an obvious test value (`Conversion test`, the intake test address in the
    email field, `Test submission from the staging copy` as the message), leave the honeypots
-   empty, and submit once.
+   empty, and submit once. Note where it lands (the thank-you page, or the endpoint's own page).
 3. Record it: `S set forms.testSentAt '"<ISO time>"'` and the page you used.
 
 Never submit on the live site, never to an address found on the site, never more than once per

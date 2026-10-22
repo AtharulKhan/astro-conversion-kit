@@ -33,6 +33,10 @@ parity and this file is wrong: say so and fix this file.
 - Coverage first, then prune: `capture/css-coverage.json` (phase 2) and `css-prune.mjs` into
   `src/styles/site.css`, imported once by `Base.astro`. The pruned file is the stylesheet; it is
   never rewritten, reformatted or "cleaned up".
+- **One stylesheet for every template** is the v0.1 default, recorded as a decision in the plan
+  (topic "one pruned site.css", default "one file", cost if wrong "each page loads rules other
+  templates use"). Splitting it per template is an improvement the suggestions report may
+  propose, never part of the default build.
 - A diff caused by pruning (a state the coverage run never saw: an open menu, a JavaScript-added
   class) is fixed by restoring the original rule from `capture/css/`, copied as written, into
   `src/styles/restored.css` with a comment naming the source file. New CSS is allowed only for a
@@ -42,8 +46,9 @@ parity and this file is wrong: say so and fix this file.
 
 ## Media and fonts
 
-- **Original paths, always.** Mode `repo`: copy `media-cache/` into `public/` so every file is at
-  its site path (`cp -R media-cache/. public/`), every file the capture listed, referenced or not
+- **Original paths, always.** Mode `repo`: copy the capture's download into `public/` so every
+  file is at its site path (`cp -R .conversion/media-cache/. public/`), every file the capture
+  listed, referenced or not
   (WordPress image sizes included). Mode `store` or `live-temporary`: nothing under the media
   prefix goes in `public/`; the host file says how the prefix is reached.
 - **Optimiser suffixes are separate files.** `-scaled`, `-e1612345678`, `photo.jpg.webp`,

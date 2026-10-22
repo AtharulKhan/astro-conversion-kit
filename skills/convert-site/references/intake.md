@@ -23,9 +23,9 @@ opening explaining what a repository, a staging deploy and a pull request are.
        I'll create a project and a noindexed staging deploy." Not logged in: "Run `npx vercel
        login` (or `npx wrangler login`) if you want a staging deploy; otherwise you get a local
        preview and the deploy is on your list.">
-    3. Forms (<n> found: <pages>). Default: Formspree. Give me the form id(s) from
-       formspree.io (the part after /f/), one per form or one for all; ids are not secret.
-       Or name another endpoint.
+    3. Forms (<n> found: <pages>). Default: they post to Formspree, with the same fields. If you
+       prefer another form service, name it. (I'll ask for the form id when I wire the forms;
+       nothing waits on it.)
     4. Test address. One test submission goes to the address you give here, once, from the
        staging copy; never to an address found on the site. Default: none, and no test is sent.
     5. Analytics and tags. Found: <GA4 G-..., GTM-..., others>. Default: every one carries
@@ -60,7 +60,7 @@ Include each line that applies, worded for this run. Each becomes a `state.needs
 |---|---|
 | `gh` not logged in | The repo stays local; "create the repo, push `main` and `astro-rebuild`, open the PR from `.conversion/pr-body.md`" goes on your list |
 | Hosting CLI not logged in | No staging deploy; `npm run preview` locally; the staging audit and `verify-live` are "Not covered"; "deploy staging" goes on your list |
-| No form id | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` by design until you give the id; "create the form, send me the id" goes on your list |
+| No form id yet (asked at the forms step, never here) | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` until you give the id; the PR opens as a draft; "create the form, send me the id" goes on your list |
 | No test address | No test submission; the `forms` launch check waits on you |
 | No store credentials and media over the limits | Media is served from the live site on staging only (`live-temporary`); "create the store, upload, regenerate rewrites" goes on your list and must be done before DNS moves |
 | Vercel preview protection on | `launch-audit` and `verify-live` cannot reach staging and are "Not covered" until you open the preview or give a bypass secret through the environment |
@@ -70,13 +70,13 @@ Include each line that applies, worded for this run. Each becomes a `state.needs
 
 ## Recording the answers
 
-Write each answer, or the default that stood, to state before the capture starts (the state lives
-in `WORK` until the scaffold):
+Write each answer, or the default that stood, to state before the capture starts. The state
+lives in `$SITE/.conversion/` from the start; `init-site.mjs` scaffolds around it later:
 
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $WORK set site '"<LIVE>"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $WORK set hosting '"vercel"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $WORK set repo '"<owner>/<slug>"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $WORK set intake '{"forms":{"endpoint":"https://formspree.io/f/<id>"},"testAddress":"you@example.com","analytics":["G-..."],"keepPages":[],"components":false}'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set site '"<LIVE>"'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set hosting '"vercel"'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set repo '"<owner>/<slug>"'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","analytics":["G-..."],"keepPages":[],"components":false}'
 
 Every default you applied is also a decision (`state.mjs decision`), so the PR shows it. Add each
 missing item to `needsYou` as `{ "item": "...", "command": "...", "before": "<phase or DNS>" }`:
@@ -84,8 +84,7 @@ read the array with `state.mjs get needsYou`, append, and write it back with `se
 
 ## Exceptions and proposals, said once
 
-State this in the intake for `new` and `some` people, in one sentence each: the default build
-copies the live site exactly, faults included; a difference the static build cannot avoid is an
-exception you sign off in the PR; an improvement is a proposal with `"approvedBy": "proposed"`
-that ships only in a `PROPOSALS=on` build, and when you approve it, it moves to
-`exceptions.json` with your name.
+For `new` and `some` people, add one sentence each to the message: the default build copies the
+live site exactly, faults included; a difference the static build cannot avoid is an exception
+they sign off in the PR; an improvement is a proposal that ships only when they approve it. The
+rule itself is in SKILL.md, "Decisions, exceptions, proposals".

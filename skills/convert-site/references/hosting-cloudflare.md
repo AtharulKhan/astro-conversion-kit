@@ -8,7 +8,7 @@ is what you run.
 You deploy previews. You never change project settings in the dashboard, never add a domain or a
 redirect rule there; those are runbook steps for the person.
 
-## Project and staging deploy (phase 11)
+## Project and staging deploy (phase 10, prelaunch)
 
 Only when `preflight.mjs` reports `wrangler.loggedIn: true`. From `SITE`:
 
@@ -26,15 +26,15 @@ needs-you list.
 
 ## Indexing
 
-Non-release builds carry `noindex, nofollow` and a blocking robots.txt. The headers gate also
-wants `X-Robots-Tag: noindex` for the preview hosts; a whole-host pattern in `public/_headers`
-satisfies it without touching production. The scaffold phase appends:
+Staging builds leave `PUBLIC_INDEXABLE` unset, so `Base.astro` puts `noindex, nofollow` on every
+page and robots.txt blocks everything. The header comes from the template's `public/_headers`,
+which carries a whole-host block for the preview hosts:
 
-    https://:project.pages.dev/*
+    https://*.pages.dev/*
       X-Robots-Tag: noindex
 
-    https://:version.:project.pages.dev/*
-      X-Robots-Tag: noindex
+It applies to every `*.pages.dev` address, preview branches included, and never to the custom
+domain, so production needs no change to it. Do not remove it.
 
 Production is `PUBLIC_INDEXABLE=true npm run build` then
 `npx wrangler pages deploy dist --project-name <slug> --branch main`, which reaches production
@@ -65,7 +65,7 @@ on `/_astro/*`. `_headers` and `_redirects` do not apply to a Pages Function's r
 **Store.** With `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` in
 the environment (never in chat or the repo):
 
-    node $KIT/skills/convert-site/scripts/media-upload.mjs --store r2 --dir media-cache --manifest media-manifest.json --prefix /wp-content/uploads/ --media capture/media.json
+    node $KIT/skills/convert-site/scripts/media-upload.mjs --store r2 --dir .conversion/media-cache --manifest media-manifest.json --prefix /wp-content/uploads/ --media capture/media.json
 
 Rerun until it exits 0 (it resumes); commit `media-manifest.json`. Pages cannot rewrite to another
 origin, so a Pages Function serves the prefix from the bucket. No public bucket and no R2 custom
@@ -92,11 +92,12 @@ prints, before any other rule matching the prefix, to `public/_redirects` (after
 `redirects:build`, which rewrites that file, or as a row in `redirects.csv` with `source`
 `decision`, status 302, which survives regeneration; prefer the row):
 
-    node --input-type=module -e "import { rewriteConfig } from '$KIT/skills/convert-site/scripts/media-plan.mjs'; console.log(rewriteConfig('live-temporary', '$LIVE', '/wp-content/uploads/'))"
+    node --input-type=module -e "import { rewriteConfig } from '$KIT/skills/convert-site/scripts/media-plan.mjs'; console.log(rewriteConfig('live-temporary', '$LIVE', '/wp-content/uploads/', { store: 'r2' }))"
 
 The needs-you item: create the bucket, put the R2 credentials in the environment, run the upload,
-add the function and binding, remove the 302 row, rerun `media-plan.mjs` without `--mode`, and
-rerun the gates. Live-temporary must be gone before DNS moves.
+add the function and binding, remove the 302 row, rerun `media-plan.mjs` without `--mode`
+(`--out docs/media-plan.json`), and rerun the gates. Live-temporary must be gone before DNS
+moves.
 
 ## Production (the person, on launch day)
 

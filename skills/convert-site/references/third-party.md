@@ -13,7 +13,7 @@ live loaded, on the same pages, with the same IDs. `keep` is the only field anyo
 To drop a vendor:
 
 1. Record the decision (`state.mjs decision`, topic `drop <vendor>`, with the reason and the cost
-   if wrong) and its row in `docs/DECISIONS.md`.
+   if wrong) and its row in the Decisions table of `docs/plan.md`.
 2. Set its `keep` to `false` in `baseline/scripts.json`.
 3. Remove its tags from the layouts and content, rebuild, and run `npm run verify`: the scripts
    gate now fails if the vendor still loads anywhere.
@@ -44,7 +44,7 @@ whenever a `keep` flag changes, one row per vendor:
 |---|---|---|---|---|---|
 | ga4 | analytics | 13 pages (all) | G-FIXTURE1 | same tag in `Base.astro` | kept as is |
 | gtm | tag manager | 13 pages (all) | GTM-… | same snippet in `Base.astro` | kept as is |
-| (vendor) | (kind) | n pages, first three | id | where it lives now | removed, decision d7 |
+| (vendor) | (kind) | n pages, first three | id | where it lives now | removed, d7 |
 
 Add the form endpoint (`forms.md`) and any font service (`build-rules.md`) as rows too, with what
 replaced them. The PR's counts line quotes vendors kept and dropped from this table.

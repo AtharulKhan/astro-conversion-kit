@@ -1,7 +1,7 @@
 # The optional component pass
 
 Off by default. Run it only when the intake said "components", the person asked for it, or the
-run was started with `--components`. It happens after `visual-all` passes and before
+run was started with `--components`. It happens after the `visual` phase passes and before
 `prelaunch`, and it changes how the site is built, never what it serves.
 
 ## What it does
@@ -21,10 +21,12 @@ not touch them.
 2. One block type at a time: write the component, replace each occurrence in the content files
    with it (by a script, passing the captured text and attributes as props, never retyped), and
    rebuild.
-3. After each block type: `npm run build`, `npm run verify` (text, links, media, SEO must not
-   move) and the visual review on every page that holds the block (shoot, diff against
-   `capture/screens/live-all`). Every pair must still pass. A block whose pixels or text move is
-   reverted, not tuned.
+3. After each block type: `npm run build`, `npm run verify -- <form flags>` (`forms.md`; text,
+   links, media and SEO must not move) and the visual review on every page that holds the block.
+   Shoot those pages into `review/new-blocks`; `review:diff` fails a route present on one side
+   only, so diff against a live folder holding just those routes, built from
+   `capture/screens/live-all` with the copy command in `apply-suggestion.md`, step 7. Every pair
+   must still pass. A block whose pixels or text move is reverted, not tuned.
 4. If your agent can run subagents, give each block type to one implementer, with the absolute
    paths of the component to write and the pages it replaces.
 

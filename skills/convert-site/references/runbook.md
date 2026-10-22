@@ -1,8 +1,8 @@
 # The runbook: docs/LAUNCH.md
 
-The scaffold writes `docs/LAUNCH.md` with four sections. In phase 13 you fill it for this run:
-every line concrete (the real host, project, counts, commands and URLs), in the order a person
-does them. It is the person's document; you never tick a box in it on their behalf.
+The scaffold writes `docs/LAUNCH.md` with four sections. In phase 12 (`pr`) you fill it for this
+run: every line concrete (the real host, project, counts, commands and URLs), in the order a
+person does them. It is the person's document; you never tick a box in it on their behalf.
 
 ## A. Needs you
 
@@ -26,19 +26,20 @@ after doing it; `--progress` shows where they are. You never run `--confirm`.
 
 Typical run-specific lines (keep the ones that apply):
 
-- the form id, if the endpoint is still `REPLACE`;
 - "create the store, upload, regenerate rewrites; live-temporary must be gone before DNS moves"
   with the commands from the host file;
 - Cloudflare: create one Single Redirect per row of `cloudflare-query-redirects.csv` (n rows);
 - Vercel: open the preview for the audit or accept the "Not covered" gap;
 - push the repo and open the PR (when `gh` was not logged in);
-- sign off every entry in `exceptions.json`; approve or decline every proposal (an approved one
-  moves to `exceptions.json` with the approver's name);
+- sign off every entry in `exceptions.json`; approve or decline every proposal id (an approved
+  proposal's records move to `exceptions.json` with the approver's name);
+- the form id, when the PR is still a draft because `placeholders.form-id` fails;
 - the out-of-scope features and the option chosen for each.
 
 ## B. Closeout (before the merge)
 
-- [ ] `npm run build` then `npm run verify` passes on `astro-rebuild` (paste the summary line).
+- [ ] `npm run build` then `npm run verify -- --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/`
+      passes on `astro-rebuild` (paste the summary line).
 - [ ] The visual review passes for templates and every page (`review/all.html`).
 - [ ] `npm run redirects:build` output committed.
 - [ ] Staging: `<staging url>`, noindexed (`npm run verify:live -- --base <staging url> --expect-noindex`).
@@ -53,19 +54,19 @@ Typical run-specific lines (keep the ones that apply):
 2. Media: no `live-temporary` left (`docs/media-plan.json` mode is `repo` or `store`, and the
    media gate passes without skips).
 3. Cloudflare only: every Single Redirect from `cloudflare-query-redirects.csv` exists.
-4. Vercel only: on a branch from `main`, remove the `X-Robots-Tag` rule from `vercel.json`,
-   open a PR, merge it.
-5. A day ahead: lower the TTL of the apex and `www` records.
-6. `PUBLIC_INDEXABLE=true npm run build` then `npm run verify:release`: must exit 0.
-7. Set the switch for production (Vercel: `npx vercel env add PUBLIC_INDEXABLE production`,
+4. A day ahead: lower the TTL of the apex and `www` records.
+5. `PUBLIC_INDEXABLE=true npm run build` then
+   `npm run verify:release -- --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/`:
+   must exit 0.
+6. Set the switch for production (Vercel: `npx vercel env add PUBLIC_INDEXABLE production`,
    value `true`; Cloudflare: it is on the local build) and deploy production
    (`npx vercel deploy --prod`, or the wrangler production deploy).
-8. Add the domain to the project, then change the DNS records for the apex and `www` only, to
+7. Add the domain to the project, then change the DNS records for the apex and `www` only, to
    what the host shows. Nothing else in the zone changes (mail, verification records stay).
-9. When the certificate is issued:
+8. When the certificate is issued:
    `node <kit>/skills/post-launch/scripts/post-launch.mjs --mode cutover --url <production url> --baseline docs/launch/audit-baseline.json --redirects docs/launch/audit-redirects.csv --staging-url <staging url> --expect-analytics <measurement id> --expect-dns apex=<ip>,www=<host> --out website-launch/cutover`
    and `npm run verify:live -- --base <production url>`.
-10. Submit the sitemap in Search Console. Keep the old host running, untouched, through section D.
+9. Submit the sitemap in Search Console. Keep the old host running, untouched, through section D.
 
 ## D. 30-day watch
 

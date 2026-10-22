@@ -7,7 +7,7 @@ The kit's `docs/hosting.md` explains the background; this file is what you run.
 You deploy previews. You never change project settings in the dashboard, never add a domain, and
 never set an environment variable other than the one the runbook names for launch day.
 
-## Project and staging deploy (phase 11)
+## Project and staging deploy (phase 10, prelaunch)
 
 Only when `preflight.mjs` reports `vercel.loggedIn: true`. From `SITE`:
 
@@ -25,19 +25,11 @@ and `npx vercel deploy`" goes on the needs-you list.
 
 ## Indexing
 
-Every build without `PUBLIC_INDEXABLE=true` writes `noindex, nofollow` and a blocking robots.txt.
-The headers gate also wants an every-path `X-Robots-Tag: noindex` in `vercel.json` for any
-non-release build, and none for a release build. `vercel.json` cannot vary by environment in a
-way the gate accepts, so the scaffold phase adds this to the `/(.*)` headers rule:
-
-    { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
-
-and the runbook's launch day removes it, on a branch, before `npm run verify:release` (see
-`runbook.md`, section C). Until that commit, production deploys stay noindexed: that is the safe
-direction.
-
-`PUBLIC_INDEXABLE` is set for the Production environment only, on launch day, by the person:
-`npx vercel env add PUBLIC_INDEXABLE production` with the value `true`. Never for Preview.
+Staging builds leave `PUBLIC_INDEXABLE` unset, so `Base.astro` puts `noindex, nofollow` on every
+page and robots.txt blocks everything. Vercel adds an `X-Robots-Tag: noindex` header to preview
+deployments itself, so nothing is added to `vercel.json` for staging. Production is the build
+with `PUBLIC_INDEXABLE=true`, set for the Production environment only, on launch day, by the
+person: `npx vercel env add PUBLIC_INDEXABLE production` with the value `true`. Never for Preview.
 
 ## Redirects
 
@@ -51,10 +43,11 @@ points the person to the project's bulk redirects.
 **Store (Blob).** With `BLOB_READ_WRITE_TOKEN` in the environment (never in chat, never in a
 file in the repo):
 
-    node $KIT/skills/convert-site/scripts/media-upload.mjs --store blob --dir media-cache --manifest media-manifest.json --prefix /wp-content/uploads/ --media capture/media.json
+    node $KIT/skills/convert-site/scripts/media-upload.mjs --store blob --dir .conversion/media-cache --manifest media-manifest.json --prefix /wp-content/uploads/ --media capture/media.json
 
-Rerun until it exits 0 (it resumes). Commit `media-manifest.json`. Then write the rewrite, with
-the store origin taken from any `url` in the manifest:
+Rerun until it exits 0 (it resumes). Commit `media-manifest.json`. `.conversion/media-cache/` is
+the capture's download, on the machine that ran the capture; it stays out of git. Then write the
+rewrite, with the store origin taken from any `url` in the manifest:
 
     node --input-type=module -e "import { rewriteConfig } from '$KIT/skills/convert-site/scripts/media-plan.mjs'; console.log(JSON.stringify(rewriteConfig('store', '<store origin>', '/wp-content/uploads/', { store: 'blob' })))"
 
@@ -68,7 +61,8 @@ site (staging only):
 
 The media gate counts every file as skipped (not a pass). The needs-you item: create a public Blob
 store, put its token in the environment, run the upload above, rerun `media-plan.mjs` without
-`--mode`, replace the rewrite with the store one, and rerun the gates. Live-temporary must be gone
+`--mode` (`--out docs/media-plan.json`), replace the rewrite with the store one, and rerun the
+gates. Live-temporary must be gone
 before DNS moves: when the old host goes, the media goes with it.
 
 In both modes, nothing under the media prefix goes in `public/` (a file there would win over the

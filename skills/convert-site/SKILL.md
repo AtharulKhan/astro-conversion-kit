@@ -27,11 +27,20 @@ stopping again, and ends with a pull request the person merges and a runbook the
 
 ## Names used below
 
-`KIT` is the absolute path of this kit (the folder holding `skills/`, with `npm install` run).
+`KIT` is the absolute path of this kit (the folder holding `skills/` and `package.json`).
 `LIVE` is the live origin. `SITE` is the absolute path of the new site repository (default
-`<current folder>/<slug>`). `WORK` is `<SITE>-work`, where the capture lives until the scaffold
-exists (init-site only fills an empty folder). Run every command from `SITE` (or `WORK` before
-the scaffold). Every script prints `--help`; run that rather than reading the source.
+`<current folder>/<slug>`); the capture and the run state are written into it from the start,
+and `init-site.mjs` scaffolds around them. Run every command from `SITE`. Every script prints
+`--help`; run that rather than reading the source.
+
+## Step 0a: a kit that can run
+
+The scripts import `parse5`, `playwright` and the rest from the kit's `node_modules`. If
+`$KIT/package.json` or `$KIT/node_modules` is missing (an install that copied only the skill
+folders has neither), clone the kit and install it, then use the clone as `KIT`:
+
+    git clone https://github.com/ethanplusai/astro-conversion-kit <folder>/astro-conversion-kit
+    npm install --prefix <folder>/astro-conversion-kit
 
 ## Step 0: preflight and fingerprint (before the intake message)
 
@@ -55,28 +64,29 @@ does not answer, the defaults stand. Never send a second question message.
 
 ## The phases
 
-`references/phases.md` has every command and the proof each phase is done. At each boundary run
-`node $KIT/skills/convert-site/scripts/state.mjs --dir <SITE or WORK> phase <name>`; do not
-start a phase until the previous one's proof holds. Run `state.mjs` calls one at a time.
+The order is `docs/process.md`'s. `references/phases.md` has every command and the proof each
+phase is done. At each boundary run
+`node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE phase <name>`; do not start a phase
+until the previous one's proof holds. Run `state.mjs` calls one at a time, never in parallel.
 
 | # | Phase (`<name>`) | What happens | Done when |
 |---|---|---|---|
 | 1 | `intake` | Preflight, fingerprint, the one message | Answered, or defaults stand |
-| 2 | `capture` | Capture into `WORK`: capture, media, templates, assets, live shots, CSS coverage | `capture/README.md` written with Notes; every URL saved or recorded with its status |
-| 3 | `scaffold` | Repo, `init-site.mjs`, move `WORK` in, commit the capture on `astro-rebuild` | `npm run build` passes on the empty site; `main` holds one commit |
-| 4 | `plan` | `docs/plan.md`, `docs/DECISIONS.md`, `media-plan.mjs` | Every template, count, oddity and out-of-scope feature has a row |
-| 5 | `baseline` | `templates.mjs` already ran, then `npm run baseline` | `build-baseline.mjs --check` exits 0 |
-| 6 | `templates` | Layouts, header, nav, footer, one representative page per template, CSS pruned, media, fonts, forms, scripts, redirects | `npm run verify -- --paths <representatives>` exits 0 |
-| 7 | `design-lock` | Visual review of every template at 390, 768, 1440 | `review:diff` and `review:styles` exit 0 for the template set |
-| 8 | `rollout` | Every page from captured markup | `npm run verify` exits 0 on the full build |
-| 9 | `visual-all` | Every page at 390 and 1440 | `review:diff` exits 0 for the full set |
-| 10 | `components` | Optional, off by default (`references/components-optional.md`) | Gates and diffs still pass, one separate commit |
-| 11 | `prelaunch` | `pre-launch`, staging deploy, `verify-live`, `launch-audit`, one test submission | `pre-launch` exits 0 (or fails only on a needs-you placeholder); audit blockers fixed or listed |
-| 12 | `suggestions` | `suggest-improvements` with `gates.json` and `review/` | `docs/suggestions.md` with its "From the review" section |
-| 13 | `pr` | Runbook, push, PR, final report | The PR quotes gate output and every "Not covered" section |
+| 2 | `capture` | `capture-site` into `$SITE/capture/`, CSS coverage | Every URL saved or recorded with its status; Notes written |
+| 3 | `plan` | Decide hosting, URL form, media mode, templates; decisions in state; drafts under `.conversion/` | Every template, count, oddity and out-of-scope feature has a decision |
+| 4 | `scaffold` | Repo, `init-site.mjs` around the capture, then `docs/plan.md` and `docs/media-plan.json` | It builds empty; `main` holds the one scaffold commit |
+| 5 | `baseline` | `npm run baseline` (`templates.json` already exists) | `build-baseline.mjs --check` exits 0 |
+| 6 | `build` | Layouts and shared parts, one page per template, design lock on the templates, then every page | `npm run build` passes; template gates pass path by path |
+| 7 | `gates` | The full gates | `npm run verify` exits 0 |
+| 8 | `visual` | Every template at 390, 768, 1440; every page at 390 and 1440 | Every pair passes |
+| 9 | `components` | Optional, off by default (`references/components-optional.md`) | Gates and diffs still pass, one separate commit |
+| 10 | `prelaunch` | `pre-launch`, staging deploy, `verify-live`, `launch-audit`, one test submission | `pre-launch` exits 0 (or fails only on `placeholders.form-id`); audit blockers fixed or listed |
+| 11 | `suggestions` | `suggest-improvements` with `gates.json` and `review/` | `docs/suggestions.md` with its "From the review" section |
+| 12 | `pr` | Runbook, push, PR, final report | The PR quotes gate output and every "Not covered" section |
+| 13 | launch | The person's, from `docs/LAUNCH.md` | `post-launch` checks the cutover and watches 30 days |
 
-The skills each phase uses, with their own rules: `capture-site` (2), `parity-gates` (5 to 8),
-`visual-review` (7, 9), `pre-launch` and `launch-audit` (11), `suggest-improvements` (12),
+The skills each phase uses, with their own rules: `capture-site` (2), `parity-gates` (5 to 7),
+`visual-review` (6, 8), `pre-launch` and `launch-audit` (10), `suggest-improvements` (11),
 `post-launch` (in the runbook). Read each skill's SKILL.md before its phase.
 
 ## The build, in one paragraph
@@ -92,57 +102,64 @@ redirects:build`; never hand-edit the generated rules. The design is locked on t
 
 ## Decisions, exceptions, proposals
 
+This section is the rule; the references link here.
+
 - **Decision.** Anything the live site does oddly, and every default you apply, gets
-  `state.mjs decision '{"topic":…,"choice":…,"default":…,"reason":…,"costIfWrong":…}'` (it
-  prints the id) and a row in `docs/DECISIONS.md`, the ledger of every decision in the run: id,
-  date, topic, choice, default, reason, cost if wrong. Plan-phase decisions also go in
-  `docs/plan.md`'s Decisions table, same columns. The default is always "reproduce live".
+  `state.mjs decision '{"topic":…,"choice":…,"default":…,"reason":…,"costIfWrong":…}'`, which
+  prints its id (`d1`, `d2`, …). The one ledger is the Decisions table in `docs/plan.md`: id,
+  date, topic, choice, default, reason, cost if wrong. Before the scaffold the decisions live in
+  `.conversion/state.json`; the plan table is written from them right after `init-site`. The
+  default is always "reproduce live".
 - **Exception** (`exceptions.json`, `{ path, field, from, to, reason, approvedBy, date }`): a
-  difference the static build cannot avoid. `approvedBy` is `"default, <decision id>"` until a
-  person signs it off in the PR.
-- **Proposal** (`proposals.json`, the same shape, `approvedBy: "proposed"`): an improvement. It
-  ships only when `PROPOSALS=on`; `npm run verify:proposals` gates it. When a person approves
-  one, the entry moves to `exceptions.json` with their name in `approvedBy`.
+  difference the static build cannot avoid; the gates substitute `to` for `from` for that one
+  field on that one path. `approvedBy` is `"default, <decision id>"` until a person signs it off
+  in the PR. Forms, routes and scripts are not exception fields: they have their own flags.
+- **Proposal** (`proposals.json`, the same shape plus `id`, the decision id, and
+  `approvedBy: "proposed"`; several records may share one id): an improvement. Code switches it
+  with `proposalOn(id)`; it ships only in a `PROPOSALS=on` build, gated by `npm run
+  verify:proposals`. When a person approves it, the records move to `exceptions.json` with their
+  name in `approvedBy`.
 
 ## Hosting
 
 Vercel by default, Cloudflare Pages on request: `references/hosting-vercel.md` and
-`references/hosting-cloudflare.md`. Every non-release build is noindexed; only the launch build
-sets `PUBLIC_INDEXABLE=true`. The media decision comes from `media-plan.mjs`: `repo`, `store`
-(upload with `media-upload.mjs`), or `live-temporary` (staging only, with its warning, and the
-runbook item "create the store, upload, regenerate rewrites; live-temporary must be gone before
-DNS moves").
+`references/hosting-cloudflare.md`. Staging builds leave `PUBLIC_INDEXABLE` unset, so every page
+carries `noindex`; only the production build sets `PUBLIC_INDEXABLE=true`. The media decision
+comes from `media-plan.mjs`: `repo`, `store` (upload with `media-upload.mjs`), or
+`live-temporary` (staging only, with its warning, and the runbook item "create the store, upload,
+regenerate rewrites; live-temporary must be gone before DNS moves").
 
 ## Splitting the work
 
-If your agent can run subagents, use one implementer per template (phase 6), per template's
-rollout (phase 8) or per gate fix, never two on the same file. Every brief carries absolute paths
-(`KIT`, `SITE`, the capture files, the layout to write) and the rule set of `build-rules.md`;
-review their commits before the next phase. Without subagents, do the same work in the same order,
-one template at a time. Either way, `state.mjs` writes run one after another, never in parallel.
+If your agent can run subagents, use one implementer per template (phase 6) or per gate fix,
+never two on the same file. Every brief carries absolute paths (`KIT`, `SITE`, the capture files,
+the layout to write) and the rule set of `build-rules.md`; review their commits before the next
+phase. Without subagents, do the same work in the same order, one template at a time. Either way,
+`state.mjs` writes run one after another.
 
 ## The one message after the plan
 
-After phase 4, send one short status (not a question): platform, page and template counts, the
+After phase 3, send one short status (not a question): platform, page and template counts, the
 media decision, out-of-scope features and the options, the decisions taken by default, and the
 needs-you list so far. Then carry on without waiting.
 
-## The pull request (phase 13)
+## The pull request (phase 12)
 
-Push `main` (the scaffold) and `astro-rebuild`, then `gh pr create --base main --head
-astro-rebuild --title "Astro rebuild of <host>" --body-file .conversion/pr-body.md`. Without a
-`gh` login, the body stays in that file and "push and open the PR" goes on the needs-you list.
-The body, in this order:
+Push `astro-rebuild` (`main` was pushed at the scaffold), then `gh pr create --base main --head
+astro-rebuild --title "Astro rebuild of <host>" --body-file .conversion/pr-body.md`. While
+`pre-launch` fails `placeholders.form-id` (no form id yet), add `--draft`, and the final report
+names that as the blocker. Without a `gh` login, the body stays in that file and "push and open
+the PR" goes on the needs-you list. The body, in this order:
 
     ## What changed       one paragraph: platform, what was converted, host, media mode
     ## Counts             pages, templates, redirects, media files and size, forms, vendors kept/dropped
     ## Exceptions applied every exceptions.json entry: path, field, reason, decision id
-    ## Proposals open     every proposals.json entry: id, path, what, why (ships only with PROPOSALS=on)
-    ## Decisions          link to docs/DECISIONS.md, and every non-default choice
+    ## Proposals open     every proposals.json id: paths, what, why (ships only with PROPOSALS=on)
+    ## Decisions          the docs/plan.md Decisions table, and every non-default choice
     ## Gate output        `npm run verify` output, verbatim, in a code block, with every skip line
     ## Visual review      template and full-set results, every override with its reason,
-                          every bannerClosed and heightMismatch; the contact sheet is review/index.html
-                          and review/all.html (local, regenerate with npm run review:sheet)
+                          every bannerClosed and heightMismatch; the contact sheets are
+                          review/index.html and review/all.html (local; npm run review:sheet)
     ## Staging            the staging URL, verify-live result, the launch-audit blockers and their state
     ## Suggestions        counts per category, the medium and high risk items, the applyable ids
     ## Not covered        pre-launch's and launch-audit's "Not covered" sections, verbatim, each
@@ -151,17 +168,17 @@ The body, in this order:
 
 ## The final report (to the person)
 
-Lead with the PR link, then: what was converted (counts), gates and visual review in one line
-each, the staging URL, the needs-you list under **Waiting on you** read from
-`state.mjs --dir $SITE get needsYou` (each item with the exact command or click, in runbook
-order), then every "Not covered" section verbatim. Say "PR open, waiting on your merge", never
-"done" or "live". Then stop.
+Lead with the PR link (and "draft: waiting on the form id" when it is one), then: what was
+converted (counts), gates and visual review in one line each, the staging URL, the needs-you list
+under **Waiting on you** read from `state.mjs --dir $SITE get needsYou` (each item with the exact
+command or click, in runbook order), then every "Not covered" section verbatim. Say "PR open,
+waiting on your merge", never "done" or "live". Then stop.
 
 ## Resuming
 
-In a new session, read `node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE get` (or
-`--dir $WORK` before the scaffold) and continue from `phase`: rerun that phase's proof first; if
-it holds, start the next phase. The capture resumes with `--resume`. Never repeat the intake.
+In a new session, read `node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE get` and
+continue from `phase`: rerun that phase's proof first; if it holds, start the next phase. The
+capture resumes with `--resume`. Never repeat the intake.
 
 ## Applying a suggestion later
 
@@ -174,10 +191,10 @@ it holds, start the next phase. The capture resumes with `--resume`. Never repea
 | `references/intake.md` | The one message: questions, defaults, what is missing and what happens |
 | `references/phases.md` | Every phase: exact commands, the proof it is done, what to record |
 | `references/build-rules.md` | How layouts, content, CSS, media, fonts, lazy images and redirects are built |
-| `references/forms.md` | Formspree wiring, field names, honeypot, thank-you, the one test submission |
+| `references/forms.md` | Formspree wiring, field names, honeypot, thank-you, the form id, the one test submission |
 | `references/third-party.md` | The `keep` allowlist in `baseline/scripts.json` and `docs/third-party.md` |
 | `references/hosting-vercel.md` | Project, previews, indexing, Blob media, protection bypass |
 | `references/hosting-cloudflare.md` | Pages project, `_redirects`, `_headers`, R2 media function, query redirects |
 | `references/runbook.md` | `docs/LAUNCH.md`: A needs you, B closeout, C launch day, D 30-day watch |
 | `references/components-optional.md` | The optional component pass |
-| `references/apply-suggestion.md` | `--apply <id>`: proposal entry, branch commit, gates, sheet |
+| `references/apply-suggestion.md` | `--apply <id>`: proposal records, branch commit, gates, sheet |
