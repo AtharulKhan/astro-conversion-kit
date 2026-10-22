@@ -42,10 +42,12 @@ function startCdx() {
   });
 }
 
-async function capture(args, { wayback = cdx.endpoint } = {}) {
+// Runs capture.mjs with --no-wayback unless `wayback` names a CDX endpoint to use instead.
+async function capture(args, { wayback } = {}) {
   try {
-    const env = { ...process.env, CAPTURE_WAYBACK_CDX: wayback };
-    const { stdout, stderr } = await exec(process.execPath, [SCRIPT, ...args], { env });
+    const env = wayback ? { ...process.env, CAPTURE_WAYBACK_CDX: wayback } : process.env;
+    const flags = wayback || args.includes('--help') || args.includes('--no-wayback') ? [] : ['--no-wayback'];
+    const { stdout, stderr } = await exec(process.execPath, [SCRIPT, ...args, ...flags], { env });
     return { code: 0, stdout, stderr };
   } catch (err) {
     if (typeof err.code !== 'number') throw err;
@@ -61,7 +63,7 @@ before(async () => {
   cdx = await startCdx();
   fixture = await startFixture();
   full = tempDir();
-  fullRun = await capture([fixture.origin, '--out', full, '--delay', '0', '--seed', '/old-services']);
+  fullRun = await capture([fixture.origin, '--out', full, '--delay', '0', '--seed', '/old-services'], { wayback: cdx.endpoint });
   fullRequests = [...fixture.requests];
 });
 after(async () => {
@@ -395,6 +397,7 @@ test('usage errors exit 2 and --help prints usage', async () => {
   assert.equal(help.code, 0);
   assert.match(help.stdout, /Usage: node capture\.mjs <origin> --out <dir>/);
   assert.match(help.stdout, /--no-wayback/);
+  assert.match(help.stdout, /CAPTURE_WAYBACK_CDX/);
   assert.match(help.stdout, /media\.mjs/);
   assert.equal((await capture([fixture.origin])).code, 2, 'missing --out');
   assert.equal((await capture(['not-a-url', '--out', tempDir()])).code, 2);

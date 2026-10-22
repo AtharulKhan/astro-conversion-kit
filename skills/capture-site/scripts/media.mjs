@@ -9,7 +9,8 @@ import { gunzipSync } from 'node:zlib';
 import { parse } from 'parse5';
 import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
 import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced } from './lib/http.mjs';
-import { cssUrls, extensionOf, FONT_EXTENSIONS, IMAGE_EXTENSIONS } from './lib/css-urls.mjs';
+import { cssUrls, FONT_EXTENSIONS, IMAGE_EXTENSIONS } from './lib/css-urls.mjs';
+import { extensionOf } from './lib/page-rules.mjs';
 import { mediaUrlsOf } from './lib/wp-rest.mjs';
 
 const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--delay <ms>]
@@ -19,7 +20,11 @@ List every media file of a captured site in <capture>/media.json:
 source is where it was found: html (src, data-src, icons, preloads, links to files), srcset,
 css (stylesheets and style attributes), rest (the WordPress media list, every size), sitemap
 (image sitemaps), og (og:image, twitter:image). referencedBy lists the pages that use it.
-Each file is checked with one paced HEAD request (GET when HEAD is refused).
+Entries are keyed by path: references to the same path (another query string, http or https,
+www or not) are one entry, and the first URL found for it is the one listed and requested.
+Each file is checked with one paced HEAD request (GET when HEAD is refused). A file that times
+out, resets the connection or answers 403 after 3 tries is listed with that status (0 for a
+network error, with \`error\`); three such files in a row stop the run.
 
   --capture <dir>   the capture folder written by capture.mjs (reads inventory.json,
                     pages/, css/, wp-rest/media.json, sitemaps/)
@@ -48,6 +53,10 @@ const OG_KEYS = new Set([
 ]);
 const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
 const HEAD_REFUSED = new Set([400, 403, 405, 501]);
+// After its retries, one file's network error or 403 is its answer; a 429 or 503 means the site
+// wants us to stop.
+const GIVE_UP = new Set([0, 403]);
+const GET_TIMEOUT_MS = 120_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_MIN_MS = 500;
 
@@ -84,11 +93,31 @@ function readJson(file) {
 
 const attr = (node, name) => node.attrs?.find((a) => a.name === name)?.value ?? null;
 
-function srcsetUrls(srcset) {
-  return (srcset ?? '')
-    .split(/,\s+/)
-    .map((part) => part.trim().split(/\s+/)[0])
-    .filter(Boolean);
+// The candidate URLs of a srcset, as the HTML rules read it: skip spaces and commas, take a run
+// of non-spaces as the URL (trailing commas end it, with no descriptors), then skip descriptors up
+// to the next comma outside parentheses. A URL may itself contain commas (w_300,h_200).
+export function srcsetUrls(srcset) {
+  const text = String(srcset ?? '');
+  const space = (c) => /\s/.test(c);
+  const urls = [];
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && (space(text[i]) || text[i] === ',')) i += 1;
+    const start = i;
+    while (i < text.length && !space(text[i])) i += 1;
+    let url = text.slice(start, i);
+    if (url.endsWith(',')) url = url.replace(/,+$/, '');
+    else {
+      for (let depth = 0; i < text.length; i += 1) {
+        const c = text[i];
+        if (c === '(') depth += 1;
+        else if (c === ')') depth = Math.max(0, depth - 1);
+        else if (c === ',' && depth === 0) break;
+      }
+    }
+    if (url) urls.push(url);
+  }
+  return urls;
 }
 
 // Every media reference in one page's HTML: [{ href, source, needsExtension }]. A style
@@ -264,8 +293,9 @@ async function main() {
   const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua });
   const streak = new Set();
 
+  // Every entry carries the fields from the start, so a stopped run lists what is left as null.
+  for (const entry of media) Object.assign(entry, { status: null, contentType: null, bytes: null });
   for (const entry of media) {
-    Object.assign(entry, { status: null, contentType: null, bytes: null });
     const before = earlier.get(entry.path);
     const target = args.download ? downloadTarget(args.download, entry.path) : null;
     if (before && before.status !== null && !BLOCK_STATUSES.has(before.status)) {
@@ -286,29 +316,32 @@ async function main() {
         const length = res.headers?.['content-length'];
         viaGet = HEAD_REFUSED.has(res.status) || (res.status === 200 && length === undefined);
       }
-      if (viaGet) res = await request(entry.url, { raw: true });
+      if (viaGet) res = await request(entry.url, { raw: true, timeoutMs: GET_TIMEOUT_MS });
       if (!BLOCK_STATUSES.has(res.status)) break;
       if (attempt < MAX_ATTEMPTS) await sleep(Math.max(RETRY_MIN_MS, args.delayMs) * 2 ** (attempt - 1));
     }
 
-    if (BLOCK_STATUSES.has(res.status)) {
-      streak.add(entry.path);
-      if (res.status !== 403 || streak.size >= BLOCK_LIMIT) {
-        write();
-        console.error(
-          `Stopped: ${new URL(entry.url).origin} is blocking requests or cannot be reached. Wait a while, then run the same command again; files already checked are kept.`,
-        );
-        process.exit(3);
-      }
-    } else streak.clear();
+    const blocked = BLOCK_STATUSES.has(res.status);
+    const stop = () => {
+      write();
+      console.error(
+        `Stopped: ${new URL(entry.url).origin} is blocking requests or cannot be reached. Wait a while, then run the same command again; files already checked are kept.`,
+      );
+      process.exit(3);
+    };
+    if (blocked && !GIVE_UP.has(res.status)) stop();
+    if (blocked) streak.add(entry.path);
+    else streak.clear();
 
     entry.status = res.status;
     entry.contentType = res.headers?.['content-type'] ?? null;
     const length = Number(res.headers?.['content-length']);
-    entry.bytes = viaGet ? res.body.length : Number.isFinite(length) ? length : null;
+    entry.bytes = res.status === 0 ? null : viaGet ? res.body.length : Number.isFinite(length) ? length : null;
+    if (res.status === 0) entry.error = res.error ?? 'network error';
     if (res.status >= 300 && res.status < 400 && res.headers?.location) {
       entry.location = new URL(res.headers.location, entry.url).href;
     }
+    if (streak.size >= BLOCK_LIMIT) stop();
     if (args.download && res.status === 200 && target) {
       mkdirSync(resolve(target, '..'), { recursive: true });
       writeFileSync(target, res.body);

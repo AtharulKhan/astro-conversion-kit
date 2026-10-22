@@ -2,6 +2,7 @@
 // fetchPaced(url, { delayMs, ua, redirect, method, raw }) -> { status, headers, body, finalUrl, error? }
 // - body is a string for text types and a Buffer otherwise; `raw: true` always gives the Buffer;
 // - method defaults to GET (HEAD for a size check without the body);
+// - timeoutMs (default 30 s) bounds the whole request, body included;
 // - waits delayMs (default 2500) since the previous request to the same host;
 // - doubles that host's wait after a 429 or 503, back to normal after a success;
 // - counts consecutive 403/429/503/network errors in `blocked` (callers stop at 3);
@@ -12,7 +13,7 @@ export const DEFAULT_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 export const BLOCK_LIMIT = 3;
 
-const TIMEOUT_MS = 30_000;
+export const TIMEOUT_MS = 30_000;
 const MAX_BACKOFF = 32;
 const BLOCK_STATUSES = new Set([403, 429, 503]);
 const BACKOFF_STATUSES = new Set([429, 503]);
@@ -44,7 +45,7 @@ async function pace(host, delayMs) {
   return state;
 }
 
-export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT_UA, redirect = 'manual', method = 'GET', raw = false } = {}) {
+export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT_UA, redirect = 'manual', method = 'GET', raw = false, timeoutMs = TIMEOUT_MS } = {}) {
   const target = new URL(url);
   const state = await pace(target.host, delayMs);
   let res;
@@ -54,7 +55,7 @@ export async function fetchPaced(url, { delayMs = DEFAULT_DELAY_MS, ua = DEFAULT
       method,
       redirect,
       headers: { 'User-Agent': ua, Accept: '*/*' },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     // Inside the try: a reset or timeout partway through the body is a network error too.
     buffer = Buffer.from(await res.arrayBuffer());

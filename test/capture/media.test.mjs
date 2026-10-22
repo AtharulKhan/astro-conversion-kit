@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
 import { cssUrls } from '../../skills/capture-site/scripts/lib/css-urls.mjs';
+import { srcsetUrls } from '../../skills/capture-site/scripts/media.mjs';
 
 const exec = promisify(execFile);
 const CAPTURE = fileURLToPath(new URL('../../skills/capture-site/scripts/capture.mjs', import.meta.url));
@@ -243,10 +244,73 @@ test('a file that keeps answering 429 stops with exit 3, and a re-run only asks 
   }
 });
 
+test('srcset is parsed per the HTML rules: a URL is a run of non-spaces', () => {
+  assert.deepEqual(srcsetUrls('a.jpg 300w,b.jpg 1024w'), ['a.jpg', 'b.jpg']);
+  assert.deepEqual(srcsetUrls(' a.jpg,  b.jpg 2x , c.jpg'), ['a.jpg', 'b.jpg', 'c.jpg']);
+  const cloudinary = 'https://res.cloudinary.com/demo/image/upload/w_300,h_200,c_fill/a.jpg 300w, '
+    + 'https://res.cloudinary.com/demo/image/upload/w_1024,h_683,c_fill/a.jpg 1024w';
+  assert.deepEqual(srcsetUrls(cloudinary), [
+    'https://res.cloudinary.com/demo/image/upload/w_300,h_200,c_fill/a.jpg',
+    'https://res.cloudinary.com/demo/image/upload/w_1024,h_683,c_fill/a.jpg',
+  ]);
+  assert.deepEqual(srcsetUrls('x.jpg (min-width: 2, 3) 2x, y.jpg 3x'), ['x.jpg', 'y.jpg'], 'a comma inside parentheses');
+  assert.deepEqual(srcsetUrls(''), []);
+  assert.deepEqual(srcsetUrls(null), []);
+});
+
+// A server where the listed paths always reset the connection and the rest answer 200.
+function resetting(paths) {
+  return serve((req, res) => {
+    if (paths.includes(req.url)) {
+      req.socket.destroy();
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': 3 });
+    res.end(req.method === 'HEAD' ? undefined : 'png');
+  });
+}
+
+test('a file that always resets is recorded with status 0 and the run finishes', async () => {
+  const server = await resetting(['/dead.png']);
+  try {
+    const dir = tinyCapture(server.origin, '<html><body><img src="/a.png"><img src="/dead.png"><img src="/z.png"></body></html>');
+    const result = await run(MEDIA, ['--capture', dir, '--delay', '0']);
+    assert.equal(result.code, 0, result.stderr);
+    const media = readJson(join(dir, 'media.json'));
+    assert.deepEqual(media.map((m) => `${m.path}:${m.status}`), ['/a.png:200', '/dead.png:0', '/z.png:200']);
+    const dead = media.find((m) => m.path === '/dead.png');
+    assert.ok(dead.error, 'the network error is kept');
+    assert.equal(dead.bytes, null);
+    assert.equal(server.requests.filter((r) => r.endsWith('/dead.png')).length, 3, 'tried three times');
+  } finally {
+    await server.close();
+  }
+});
+
+test('three different files failing in a row stop the run with exit 3', async () => {
+  const server = await resetting(['/b1.png', '/b2.png', '/b3.png']);
+  try {
+    const dir = tinyCapture(
+      server.origin,
+      '<html><body><img src="/a.png"><img src="/b1.png"><img src="/b2.png"><img src="/b3.png"><img src="/c.png"></body></html>',
+    );
+    const result = await run(MEDIA, ['--capture', dir, '--delay', '0']);
+    assert.equal(result.code, 3, result.stderr);
+    assert.deepEqual(readJson(join(dir, 'media.json')).map((m) => `${m.path}:${m.status}`), [
+      '/a.png:200', '/b1.png:0', '/b2.png:0', '/b3.png:0', '/c.png:null',
+    ]);
+    assert.ok(!server.requests.some((r) => r.endsWith('/c.png')));
+  } finally {
+    await server.close();
+  }
+});
+
 test('media.mjs usage errors exit 2 and --help prints usage', async () => {
   const help = await run(MEDIA, ['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /Usage: node media\.mjs --capture <dir>/);
+  assert.match(help.stdout, /keyed by path/);
+  assert.match(help.stdout, /first URL/);
   assert.equal((await run(MEDIA, [])).code, 2);
   assert.equal((await run(MEDIA, ['--capture', join(work, 'missing')])).code, 2);
 });

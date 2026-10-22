@@ -53,6 +53,75 @@ test('dumpWpRest saves every type and returns page paths, post paths and every m
   assert.ok(requested.every((u) => u.startsWith('/wp-json/wp/v2/') && u.includes('per_page=100')), requested.join(' '));
 });
 
+// A stub REST API without X-WP-TotalPages: `counts` gives each type's item total; `afterLast`
+// is what a page past the end answers (WordPress answers 400).
+function headerless(counts, afterLast = 400) {
+  const calls = [];
+  const fetch = async (url) => {
+    calls.push(url);
+    const { pathname, searchParams } = new URL(url);
+    const type = pathname.split('/').filter(Boolean).pop();
+    const page = Number(searchParams.get('page'));
+    const perPage = Number(searchParams.get('per_page'));
+    const total = counts[type] ?? 0;
+    const start = (page - 1) * perPage;
+    if (start >= total && page > 1) {
+      return afterLast === 'empty' ? { status: 200, headers: {}, body: '[]' } : { status: afterLast, headers: {}, body: '{}' };
+    }
+    const items = Array.from({ length: Math.max(0, Math.min(perPage, total - start)) }, (_, i) => ({
+      link: `https://example.com/${type}-${start + i}/`,
+    }));
+    return { status: 200, headers: {}, body: JSON.stringify(items) };
+  };
+  return { fetch, calls };
+}
+
+test('without X-WP-TotalPages, paging goes on while pages are full and stops on a 400 or an empty page', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wp-rest-headerless-'));
+  try {
+    const short = headerless({ pages: 237, posts: 200 });
+    const result = await dumpWpRest('https://example.com', dir, { fetch: short.fetch });
+    assert.equal(result.pagePaths.length, 237);
+    assert.equal(result.postPaths.length, 200);
+    assert.equal(short.calls.filter((u) => u.includes('/pages?')).length, 3, '100 + 100 + 37: a short page is the last');
+    assert.equal(short.calls.filter((u) => u.includes('/posts?')).length, 3, '100 + 100, then the 400 past the end');
+    assert.deepEqual(result.errors, [], 'a 400 past the last page is the end, not an error');
+    assert.equal(JSON.parse(readFileSync(join(dir, 'wp-rest/posts.json'), 'utf8')).length, 200);
+
+    const empty = headerless({ posts: 100 }, 'empty');
+    const again = await dumpWpRest('https://example.com', dir, { fetch: empty.fetch });
+    assert.equal(again.postPaths.length, 100);
+    assert.equal(empty.calls.filter((u) => u.includes('/posts?')).length, 2, 'an empty page ends it');
+    assert.deepEqual(again.errors, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the page cap stops a list and is recorded as an error, with or without the header', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wp-rest-cap-'));
+  try {
+    const big = headerless({ pages: 1000 });
+    const result = await dumpWpRest('https://example.com', dir, { fetch: big.fetch, maxPages: 3 });
+    assert.equal(result.pagePaths.length, 300);
+    assert.equal(big.calls.filter((u) => u.includes('/pages?')).length, 3);
+    assert.deepEqual(result.errors, [
+      { url: 'https://example.com/wp-json/wp/v2/pages?per_page=100&page=4', status: null, error: 'stopped at the 3-page cap' },
+    ]);
+
+    const declared = async (url) => ({
+      status: 200,
+      headers: { 'x-wp-totalpages': url.includes('/pages?') ? '9' : '1' },
+      body: JSON.stringify(url.includes('/pages?') ? [{ link: `https://example.com/${url.length}-${Math.random()}/` }] : []),
+    });
+    const capped = await dumpWpRest('https://example.com', dir, { fetch: declared, maxPages: 2 });
+    assert.equal(capped.pagePaths.length, 2);
+    assert.deepEqual(capped.errors.map((e) => e.error), ['stopped at the 2-page cap']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('dumpWpRest follows X-WP-TotalPages and reports a type that fails', async () => {
   const calls = [];
   const fetch = async (url) => {

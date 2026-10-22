@@ -1,6 +1,8 @@
-// WordPress REST dump: dumpWpRest(origin, outDir, { fetch }) pages through wp/v2/{pages, posts,
-// media, categories, tags, users} with per_page=100 (following X-WP-TotalPages) and saves each
-// list as <outDir>/wp-rest/<type>.json. `users` is optional: many sites close it, and its absence
+// WordPress REST dump: dumpWpRest(origin, outDir, { fetch, maxPages }) pages through wp/v2/{pages,
+// posts, media, categories, tags, users} with per_page=100 and saves each list as
+// <outDir>/wp-rest/<type>.json. Paging follows X-WP-TotalPages; without that header it goes on
+// while a page comes back full and stops at a short or empty page or a 400 past the end. A list
+// cut short by the page cap (default 1000) is recorded in errors[] with `error` set. `users` is optional: many sites close it, and its absence
 // is not an error. Returns { pagePaths[], postPaths[], mediaUrls[], errors[{ url, status }] }:
 // page and post paths on this site (www or not), and every media URL, the original plus every
 // registered size in media_details.sizes.
@@ -10,7 +12,7 @@ import { join } from 'node:path';
 export const REST_TYPES = ['pages', 'posts', 'media', 'categories', 'tags', 'users'];
 const OPTIONAL = new Set(['users']);
 const PER_PAGE = 100;
-const MAX_PAGES = 1000;
+export const MAX_PAGES = 1000;
 
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
 
@@ -47,23 +49,32 @@ function parseList(res) {
   }
 }
 
-export async function dumpWpRest(origin, outDir, { fetch }) {
+export async function dumpWpRest(origin, outDir, { fetch, maxPages = MAX_PAGES }) {
   const lists = {};
   const errors = [];
+  const pageUrl = (type, page) => `${origin}/wp-json/wp/v2/${type}?per_page=${PER_PAGE}&page=${page}`;
   for (const type of REST_TYPES) {
     const items = [];
     let failed = false;
-    for (let page = 1, total = 1; page <= total; page += 1) {
-      const url = `${origin}/wp-json/wp/v2/${type}?per_page=${PER_PAGE}&page=${page}`;
+    for (let page = 1; ; page += 1) {
+      if (page > maxPages) {
+        errors.push({ url: pageUrl(type, page), status: null, error: `stopped at the ${maxPages}-page cap` });
+        break;
+      }
+      const url = pageUrl(type, page);
       const res = await fetch(url);
       const data = parseList(res);
+      const declared = Number(res.headers?.['x-wp-totalpages']);
       if (!data) {
+        // Without the header, a 400 past the first page is WordPress saying "no such page": the end.
+        if (page > 1 && res.status === 400) break;
         if (!OPTIONAL.has(type)) errors.push({ url, status: res.status });
         failed = true;
         break;
       }
       items.push(...data);
-      total = Math.min(Number(res.headers?.['x-wp-totalpages']) || 1, MAX_PAGES);
+      const more = Number.isFinite(declared) && declared > 0 ? page < declared : data.length >= PER_PAGE;
+      if (!more) break;
     }
     if (failed && items.length === 0) continue;
     lists[type] = items;

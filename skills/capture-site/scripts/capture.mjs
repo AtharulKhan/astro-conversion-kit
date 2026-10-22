@@ -21,6 +21,7 @@ import { slugFor } from './lib/slug.mjs';
 import { loadState, newState, saveState } from './lib/state.mjs';
 import { dumpWpRest } from './lib/wp-rest.mjs';
 import { CDX_ENDPOINT, WAYBACK_FILE, waybackPaths } from './lib/wayback.mjs';
+import { extensionOf, NEVER, NOT_PAGES, PAGE_EXTENSIONS } from './lib/page-rules.mjs';
 import { parse } from 'parse5';
 
 const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
@@ -50,6 +51,8 @@ to list and download the media.
 
 Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ only for the
 REST lists. A Wayback failure is noted in meta.json and never fails the capture.
+
+Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address.
 Exit codes: 0 done, 2 usage error, 3 stopped because the site is blocking requests or
 cannot be reached (wait, then run again with --resume).`;
 
@@ -62,9 +65,6 @@ const MAX_ATTEMPTS = 3;
 const RETRY_MIN_MS = 500;
 const SAVE_EVERY = 25;
 const SOURCE_ORDER = ['sitemap', 'rest', 'crawl', 'shortlink', 'seed'];
-const PAGE_EXTENSIONS = new Set(['', 'html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'shtml', 'cfm']);
-const NEVER = /(?:^|\/)(?:wp-admin|wp-login|xmlrpc\.php)(?:[/.?]|$)/i;
-const NOT_PAGES = /^\/wp-json(?:\/|$)/i;
 const HTML_TYPE = /^(text\/html|application\/xhtml\+xml)/i;
 const FEED_TYPE = /^(application\/(rss|atom)\+xml|application\/xml|text\/xml)/i;
 const FEED_ALTERNATE = /^application\/(rss|atom)\+xml$/;
@@ -126,12 +126,6 @@ function isShortlink(url) {
   if (url.pathname !== '/') return false;
   const keys = [...url.searchParams.keys()];
   return keys.length === 1 && ['p', 'page_id'].includes(keys[0]) && /^\d+$/.test(url.searchParams.get(keys[0]));
-}
-
-function extensionOf(pathname) {
-  const last = pathname.split('/').pop() ?? '';
-  const dot = last.lastIndexOf('.');
-  return dot === -1 ? '' : last.slice(dot + 1).toLowerCase();
 }
 
 // Never requested at all, whether linked or reached through a redirect.

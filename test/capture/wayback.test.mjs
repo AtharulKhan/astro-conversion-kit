@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { cdxUrl, waybackPaths } from '../../skills/capture-site/scripts/lib/wayback.mjs';
+import { fetchPaced } from '../../skills/capture-site/scripts/lib/http.mjs';
 
 // Never contacts web.archive.org: every test passes a stubbed fetch.
 const cdx = (originals, status = 200) => {
@@ -43,6 +45,36 @@ test('waybackPaths writes exactly the paths the inventory does not have', async 
     assert.equal(calls[0], cdxUrl('example.com'));
   } finally {
     rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('the CDX request follows a redirect and allows a slow answer', async () => {
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push(req.url);
+    if (req.url.startsWith('/cdx/search/cdx')) {
+      res.writeHead(301, { Location: req.url.replace('/cdx/search/cdx', '/listing') });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([['original'], ['http://example.com/'], ['http://example.com/gone/']]));
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const options = [];
+  const fetch = (url, opts) => {
+    options.push(opts);
+    return fetchPaced(url, { ...opts, delayMs: 0 });
+  };
+  try {
+    const endpoint = `http://127.0.0.1:${server.address().port}/cdx/search/cdx`;
+    assert.deepEqual(await waybackPaths('example.com', { fetch, endpoint, known: ['/'] }), ['/gone/']);
+    assert.equal(seen.length, 2);
+    assert.ok(seen[1].startsWith('/listing?url=example.com/*'));
+    assert.deepEqual(options, [{ redirect: 'follow', timeoutMs: 120_000 }]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((done) => server.close(done));
   }
 });
 

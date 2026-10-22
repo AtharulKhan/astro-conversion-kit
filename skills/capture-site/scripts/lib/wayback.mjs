@@ -6,13 +6,12 @@
 // Throws when the API cannot be reached or does not answer with JSON.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { extensionOf, NEVER, NOT_PAGES, PAGE_EXTENSIONS } from './page-rules.mjs';
 
 export const CDX_ENDPOINT = 'http://web.archive.org/cdx/search/cdx';
 export const WAYBACK_FILE = 'wayback-unverified.txt';
-// The crawl's notion of a page (kept in step with capture.mjs).
-const PAGE_EXTENSIONS = new Set(['', 'html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'shtml', 'cfm']);
-const NEVER = /(?:^|\/)(?:wp-admin|wp-login|xmlrpc\.php)(?:[/.?]|$)/i;
-const NOT_PAGES = /^\/wp-json(?:\/|$)/i;
+// The archive may redirect (http to https) and a large site's listing is slow to arrive.
+const CDX_OPTIONS = { redirect: 'follow', timeoutMs: 120_000 };
 
 const bareHost = (host) => host.toLowerCase().replace(/^www\./, '');
 
@@ -21,14 +20,11 @@ export function cdxUrl(host, endpoint = CDX_ENDPOINT) {
 }
 
 function isPage(pathname) {
-  const last = pathname.split('/').pop() ?? '';
-  const dot = last.lastIndexOf('.');
-  const extension = dot === -1 ? '' : last.slice(dot + 1).toLowerCase();
-  return PAGE_EXTENSIONS.has(extension) && !NEVER.test(pathname) && !NOT_PAGES.test(pathname);
+  return PAGE_EXTENSIONS.has(extensionOf(pathname)) && !NEVER.test(pathname) && !NOT_PAGES.test(pathname);
 }
 
 export async function waybackPaths(host, { fetch, known = [], out = null, endpoint = CDX_ENDPOINT } = {}) {
-  const res = await fetch(cdxUrl(host, endpoint));
+  const res = await fetch(cdxUrl(host, endpoint), { ...CDX_OPTIONS });
   if (res.status !== 200) {
     throw new Error(`the Wayback CDX API answered ${res.status || 'nothing'}${res.error ? ` (${res.error})` : ''}`);
   }
