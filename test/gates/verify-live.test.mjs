@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
 import { makeDist } from './fixtures/make-dist.mjs';
+import { createVerifier, REQUEST_TIMEOUT_MS } from '../../skills/parity-gates/scripts/verify-live.mjs';
 
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../skills/parity-gates/scripts/verify-live.mjs', import.meta.url));
@@ -213,6 +214,69 @@ test('--media-manifest checks each sampled object at its url against the manifes
   const json = JSON.parse(result.stdout);
   assert.equal(json.checked, 33);
   assert.deepEqual(json.failures, [{ check: 'media', path: '/wp-content/uploads/2026/01/team.jpg', field: 'bytes', expected: 1, actual: 13704 }]);
+});
+
+test('--media-manifest: a url that is a site path is requested at <base><path>', async () => {
+  const host = await serve(good);
+  const manifest = join(root, 'media-manifest-paths.json');
+  writeFileSync(manifest, JSON.stringify([
+    { path: '/wp-content/uploads/2026/01/hero.jpg', bytes: 13713, url: '/wp-content/uploads/2026/01/hero.jpg' },
+    { path: '/wp-content/uploads/2026/01/team.jpg', bytes: 13704, url: '/media/team.jpg' },
+  ]));
+  const result = await live(host.origin, ['--media-manifest', manifest, '--json']);
+  assert.equal(result.code, 1);
+  const json = JSON.parse(result.stdout);
+  assert.deepEqual(json.failures, [{ check: 'media', path: '/wp-content/uploads/2026/01/team.jpg', field: 'status', expected: 200, actual: 404 }]);
+});
+
+// A host that accepts every connection and never answers.
+function serveSilence() {
+  const server = createServer(() => {});
+  return new Promise((done) => {
+    server.listen(0, '127.0.0.1', () => {
+      const host = {
+        origin: `http://127.0.0.1:${server.address().port}`,
+        close: () => new Promise((closed) => {
+          server.closeAllConnections();
+          server.close(closed);
+        }),
+      };
+      servers.push(host);
+      done(host);
+    });
+  });
+}
+
+test('every request carries a 30 s timeout signal', async () => {
+  assert.equal(REQUEST_TIMEOUT_MS, 30_000);
+  const signals = [];
+  const fetchImpl = async (url, options) => {
+    signals.push(options.signal);
+    return new Response('<html></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  const verifier = createVerifier({ base: 'https://deploy.example.com', delay: 0, fetchImpl });
+  await verifier.route({ path: '/', kind: 'page' }, { expectNoindex: false });
+  await verifier.sitemap();
+  await verifier.media({ path: '/a.jpg', bytes: 13 });
+  assert.equal(signals.length, 3);
+  for (const signal of signals) assert.ok(signal instanceof AbortSignal);
+});
+
+test('a request that times out is a failure, not a block: the run goes on', async () => {
+  const silent = await serveSilence();
+  const lines = [];
+  const verifier = createVerifier({ base: silent.origin, delay: 0, timeout: 100, out: (line) => lines.push(line) });
+  for (const path of ['/', '/about/', '/contact/', '/blog/']) await verifier.route({ path, kind: 'page' }, { expectNoindex: false });
+  await verifier.redirect({ from: '/old', to: '/new/', status: 301 }, new Set());
+  await verifier.media({ path: '/a.jpg', bytes: 1 });
+  const results = verifier.results();
+  assert.equal(results.checked, 6);
+  assert.equal(results.failed, 6);
+  assert.deepEqual(results.failures[0], { check: 'route', path: '/', field: 'timeout', expected: 'a response within 0.1 s', actual: 'timed out' });
+  assert.deepEqual(results.failures.map((f) => `${f.check} ${f.path} ${f.field}`), [
+    'route / timeout', 'route /about/ timeout', 'route /contact/ timeout', 'route /blog/ timeout', 'redirect /old timeout', 'media /a.jpg timeout',
+  ]);
+  assert.match(lines.join('\n'), /^ {2}FAIL route \/about\/ timeout: expected "a response within 0\.1 s", got "timed out"$/m);
 });
 
 test("WordPress's /sitemap_index.xml counts as the sitemap", async () => {

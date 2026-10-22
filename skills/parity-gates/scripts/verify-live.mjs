@@ -35,13 +35,16 @@ Checks a deployed site against the baseline:
   --expect-noindex        the deploy is a preview or staging copy: pages must say noindex
   --sample <n>            check n of the routes at random, always / and one route per template
   --media-manifest <file> media-upload.mjs manifest ([{ path, bytes, url }]): sample its entries
-                          and check each one at its url against its bytes
+                          and check each one at its url against its bytes; a url that is a site
+                          path (starts with "/") is requested at <base><path>
   --delay <ms>            pause between requests (default: 500)
   --json                  print { checked, failed, failures[], skipped[] } as JSON
   --help                  show this help
 
 Requests carry a browser user agent and ask for identity encoding. A 403, 429, 503 or network
-error is retried after twice the delay, doubling each time; three in a row stop the run.
+error is retried after twice the delay, doubling each time; three in a row stop the run. A
+request with no full response within 30 s is that check's failure (field "timeout"), not a
+block: the run goes on.
 
 Exit codes: 0 every check passed, 1 a check failed, 2 usage or missing input, 3 stopped after
 three consecutive blocked responses (run it again later).`;
@@ -67,11 +70,13 @@ const MEDIA_SAMPLE = 20;
 const SITEMAPS = ['/sitemap-index.xml', '/sitemap_index.xml', '/sitemap.xml'];
 const PERMANENT = new Set([301, 308]);
 const TEMPORARY = new Set([302, 303, 307]);
+export const REQUEST_TIMEOUT_MS = 30_000;
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const show = (value) => JSON.stringify(value ?? null);
 
 class Stopped extends Error {}
+class TimedOut extends Error {}
 
 function usageError(message) {
   process.stderr.write(`verify-live: ${message}\n\n${USAGE}\n`);
@@ -118,7 +123,7 @@ function sameKind(expected, actual) {
   return expected === actual;
 }
 
-export function createVerifier({ base, bypass, delay = 500, fetchImpl = fetch, out = () => {} }) {
+export function createVerifier({ base, bypass, delay = 500, timeout = REQUEST_TIMEOUT_MS, fetchImpl = fetch, out = () => {} }) {
   const baseUrl = new URL(base);
   const prefix = baseUrl.href.replace(/\/+$/, '');
   let requests = 0;
@@ -135,15 +140,21 @@ export function createVerifier({ base, bypass, delay = 500, fetchImpl = fetch, o
       if (bypass && new URL(url).origin === baseUrl.origin) headers['x-vercel-protection-bypass'] = bypass;
       let response;
       let reason;
+      let body;
+      // The signal covers the body too: a host that stalls mid-response is a timeout as well.
       try {
-        response = await fetchImpl(url, { redirect: 'manual', headers });
+        response = await fetchImpl(url, { redirect: 'manual', headers, signal: AbortSignal.timeout(timeout) });
         if (BLOCKED.has(response.status)) reason = String(response.status);
+        else body = Buffer.from(await response.arrayBuffer());
       } catch (error) {
+        if (error?.name === 'TimeoutError' || error?.cause?.name === 'TimeoutError') {
+          blocks = 0;
+          throw new TimedOut(url);
+        }
         reason = `network error: ${error.cause?.code ?? error.message}`;
       }
       if (!reason) {
         blocks = 0;
-        const body = Buffer.from(await response.arrayBuffer());
         return { status: response.status, headers: response.headers, body };
       }
       await response?.body?.cancel().catch(() => {});
@@ -165,6 +176,16 @@ export function createVerifier({ base, bypass, delay = 500, fetchImpl = fetch, o
       failures.push({ check, path, field: p.field, expected: p.expected, actual: p.actual, ...extra });
     }
   }
+
+  // Runs one check; a request that timed out fails that check and the run goes on.
+  const guarded = (check, pathOf, fn) => async (...args) => {
+    try {
+      return await fn(...args);
+    } catch (error) {
+      if (!(error instanceof TimedOut)) throw error;
+      return record(check, pathOf(...args), [{ field: 'timeout', expected: `a response within ${timeout / 1000} s`, actual: 'timed out' }]);
+    }
+  };
 
   const relative = (location, from) => {
     const url = new URL(location, from);
@@ -229,8 +250,10 @@ export function createVerifier({ base, bypass, delay = 500, fetchImpl = fetch, o
     return record('sitemap', SITEMAPS[0], [{ field: 'status', expected: 200, actual: first.status }]);
   }
 
+  // A manifest url is absolute (the store object) or a site path served by the deploy.
   async function media(item) {
-    const res = await request(item.url ?? `${prefix}${item.path}`);
+    const url = item.url && !item.url.startsWith('/') ? item.url : `${prefix}${item.url ?? item.path}`;
+    const res = await request(url);
     if (res.status !== 200) return record('media', item.path, [{ field: 'status', expected: 200, actual: res.status }]);
     const length = res.headers.get('content-length');
     const bytes = length === null ? res.body.length : Number(length);
@@ -239,7 +262,15 @@ export function createVerifier({ base, bypass, delay = 500, fetchImpl = fetch, o
 
   const skip = (check, path, reason) => skipped.push({ check, path, reason });
   const results = () => ({ checked, failed: failures.length, failures, skipped });
-  return { route, redirect, noop, sitemap, media, skip, results };
+  return {
+    route: guarded('route', (r) => r.path, route),
+    redirect: guarded('redirect', (r) => r.from, redirect),
+    noop: guarded('redirect', (r) => r.from, noop),
+    sitemap: guarded('sitemap', () => SITEMAPS[0], sitemap),
+    media: guarded('media', (item) => item.path, media),
+    skip,
+    results,
+  };
 }
 
 function readJson(file, label) {

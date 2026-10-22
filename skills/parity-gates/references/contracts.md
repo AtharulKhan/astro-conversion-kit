@@ -145,7 +145,9 @@ skipped.
   it (theme fonts) is copied into the build and the media gate checks it in `dist/` in every
   mode. A plan without `prefix` covers every media path.
 - `media-manifest.json` (store mode): `[{ "path", "bytes", "url" }]`, one entry per file under
-  the prefix.
+  the prefix. `url` is either an absolute URL (the object in the store) or a site path starting
+  with `/` (the file as the site serves it, through its media route); `verify-live
+  --media-manifest` requests an absolute `url` as is and a site path at `<base><path>`.
 - `exceptions.json`, and `proposals.json` only when `PROPOSALS=on`: see `exceptions.md`.
 
 ## Gate output
@@ -165,6 +167,8 @@ exception the gate could not use; its `actual` says why.
 `verify-live.mjs --json` prints `{ "checked", "failed", "failures": [{ "check", "path", "field",
 "expected", "actual", "unverified"? }], "skipped": [{ "check", "path", "reason" }], "stopped"? }`,
 `check` being `route` (a noindex problem is a `route` failure with `field: "x-robots-tag"`),
-`redirect`, `sitemap` or `media`. `skipped` lists the routes
+`redirect`, `sitemap` or `media`. A request with no full response within 30 s fails its check
+with `field: "timeout"` (`actual: "timed out"`); it is not a block and never stops the run.
+`skipped` lists the routes
 and media files that were sampled out (`not sampled`): they were not checked. `stopped` is set
 when three blocked responses in a row ended the run (exit 3).

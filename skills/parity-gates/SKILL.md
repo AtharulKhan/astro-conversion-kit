@@ -117,7 +117,9 @@ environment, never pasted in chat). A release deploy is checked the same way wit
 
 It checks every baseline route at 200 (or a `--sample`), every redirect in one hop with the same
 kind of status, noindex on pages iff `--expect-noindex`, the sitemap, and 20 media files by
-bytes (or `--media-manifest`). Exit 3 means it was blocked: wait and rerun. A failure marked
+bytes (or `--media-manifest`, whose `url` may be the store's absolute URL or a site path checked
+at `<base><path>`). Every request times out after 30 s, a failure of that check rather than a
+block. Exit 3 means it was blocked: wait and rerun. A failure marked
 `unverified live` is a shortlink the capture never requested.
 
 ## Present the result
