@@ -63,8 +63,9 @@ REST lists. A Wayback failure is noted in meta.json and never fails the capture.
 Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address.
 Each URL is tried 3 times; one that still answers 403, 429, 503 or a network error is
 recorded with that status and its attempts, and the crawl moves on.
-Exit codes: 0 done, 2 usage error, 3 stopped because 3 different URLs in a row were blocked
-or the site cannot be reached (wait, then run again with --resume).`;
+Exit codes: 0 done, 2 usage error, 3 stopped because 3 different URLs in a row used up their
+tries or the site cannot be reached (wait, then run again with --resume; those URLs get one
+more set of tries and are recorded if they fail again).`;
 
 const BLOCK_STATUSES = new Set([0, 403, 429, 503]);
 // Same-site script files: larger ones are not saved, and redirects are followed at most this far.
@@ -673,33 +674,51 @@ class Crawler {
 
   // Work through a queue with per-URL retries and the block streak.
   // A URL still blocked (403, 429, 503 or a network error) after its retries is given up:
-  // recorded with that status and its attempts, and the run moves on. Three different URLs
-  // blocked in a row stop the run with the item back at the front of the queue.
+  // recorded with that status and its attempts, and the run moves on. A URL counts towards the
+  // streak only once its retries are used up: three different URLs used up in a row, with no
+  // success between them, stop the run with those three back at the front of the queue (fresh
+  // tries, `stops` counted). One that was already put back once is given up for good when it
+  // fails again and no longer counts, so URLs that are down for good cannot stop every resume.
   // Returns 'done', 'max' or 'blocked'.
   async drain(queue, visit, giveUp, max = null) {
     let sinceSave = 0;
+    let pending = []; // used up, given up once a success shows the site is still answering
+    const settle = () => {
+      for (const { item, status } of pending) giveUp(item, status);
+      pending = [];
+    };
     while (queue.length > 0) {
-      if (max && this.state.records.length >= max) return 'max';
+      if (max && this.state.records.length >= max) {
+        settle();
+        return 'max';
+      }
       const item = queue.shift();
       if (item.attempts > 0 && this.lastVisited === item.url) await sleep(this.retryWait(item.attempts));
       this.lastVisited = item.url;
       const result = await visit(item);
       if (result.blocked) {
         item.attempts += 1;
-        if (this.noteBlocked(item.url)) {
-          item.attempts = 0; // a resumed run gives it a fresh set of retries
-          queue.unshift(item);
-          return 'blocked';
+        if (item.attempts < MAX_ATTEMPTS) queue.push(item);
+        else if (item.stops) giveUp(item, result.status);
+        else {
+          pending.push({ item, status: result.status });
+          if (this.noteBlocked(item.url)) {
+            const back = pending.map((p) => ({ ...p.item, attempts: 0, stops: (p.item.stops ?? 0) + 1 }));
+            queue.splice(0, 0, ...back);
+            return 'blocked';
+          }
         }
-        if (item.attempts >= MAX_ATTEMPTS) giveUp(item, result.status);
-        else queue.push(item);
-      } else this.noteOk();
+      } else {
+        this.noteOk();
+        settle();
+      }
       sinceSave += 1;
       if (sinceSave >= SAVE_EVERY) {
         saveState(this.out, this.state);
         sinceSave = 0;
       }
     }
+    settle();
     return 'done';
   }
 

@@ -201,8 +201,17 @@ test('a URL that keeps answering 429 is given up; three different URLs failing i
     assert.equal(run.code, 3, run.stderr);
     const state = readJson(out, 'state.json');
     assert.equal(state.phase, 'crawl');
-    assert.deepEqual(state.queue.map((q) => new URL(q.url).pathname), ['/s3/', '/ok/', '/s1/', '/s2/']);
-    assert.ok(state.queue.every((q) => q.attempts <= 1));
+    // Each failing URL used up its 3 tries (the page that answered in between was captured)
+    // before it counted towards the streak; all three go back on the queue with fresh tries.
+    assert.deepEqual(state.queue.map((q) => `${new URL(q.url).pathname}:${q.attempts}`), ['/s1/:0', '/s2/:0', '/s3/:0']);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => r.path), ['/', '/ok/']);
+    for (const path of ['/s1/', '/s2/', '/s3/']) assert.equal(busy.requests.filter((u) => u === path).length, 3, path);
+
+    // Still failing on the resume: given up and recorded this time, so the resume finishes.
+    const resumed = await capture([busy.origin, '--out', out, '--delay', '0', '--resume']);
+    assert.equal(resumed.code, 0, resumed.stderr);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/ok/:200', '/s1/:503', '/s2/:503', '/s3/:503']);
+    assert.equal(readJson(out, 'state.json').phase, 'done');
   } finally {
     await busy.close();
   }

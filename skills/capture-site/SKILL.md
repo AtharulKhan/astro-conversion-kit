@@ -27,7 +27,8 @@ change `--ua` to get past a block.
 - `capture` doubles its wait after a 429 or 503 (up to 32 times) and tries each URL 3 times. A
   URL still blocked after that (403, 429, 503 or a network error) is recorded with its status and
   `attempts` in `inventory.json` (a sitemap or REST list in `meta.json` `discoveryErrors`) and
-  the crawl moves on; it stops only after **3 different URLs blocked in a row**, state saved.
+  the crawl moves on. It stops only after **3 different URLs in a row used up their tries**
+  with no success between them, state saved, those three queued again with fresh tries.
   It never requests `wp-admin`, `wp-login`, `xmlrpc.php` or `?s=` searches.
 - `media` tries each file 3 times: a persistent 429 or 503 stops it at once; a 403 or network
   error is recorded as that file's status, and 3 such files in a row stop it.
@@ -111,6 +112,9 @@ The site is blocking requests or cannot be reached. Wait (minutes, not seconds),
 - `fingerprint`: run it again.
 - `capture`: run the same command with `--resume`. The URLs still queued are retried with a fresh
   set of tries; a URL already recorded as still failing after its retries is not requested again.
+  The URLs that stopped the run get one more set of tries: if they fail again they are recorded
+  with their status, so URLs that are down for good stop the capture once, not on every resume.
+  After two stops on the same URLs, tell the person which ones (paths and status) and carry on.
 - `media`, `assets`: run the same command again; work already done is kept.
 - `shoot`: rerun with a longer `--delay`.
 
@@ -181,6 +185,7 @@ Repeat this list to the person verbatim. None of it was captured:
 - Classes and states added by JavaScript after load (open menus, sliders); coverage runs later.
 - A gzipped sitemap that decodes past 20 MB: not read, listed in `meta.json` `discoveryErrors`
   with status `too-large`.
+- CSS `@import` inside inline `<style>` blocks: not followed (only linked stylesheets' imports).
 - CSS `@import` more than 5 levels below a linked stylesheet (listed `too-deep` in
   `css/manifest.json`, never fetched).
 - Media on other hosts (platform CDNs, image services): not listed in `media.json`.
