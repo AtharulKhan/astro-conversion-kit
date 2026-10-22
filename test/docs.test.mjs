@@ -113,6 +113,15 @@ test('every kit script a doc names in code exists or ships in a later task', () 
   assert.deepEqual(missing, []);
 });
 
+test('AGENTS.md names every script that reads the live site, as convert-site/SKILL.md rule 2 does', () => {
+  const flat = (text) => text.replace(/\s+/g, ' ');
+  const rule = flat(/^- \*\*The live site is read-only\.\*\*[\s\S]*?(?=\n- \*\*)/m.exec(read('AGENTS.md'))?.[0] ?? '');
+  const skill = flat(/^2\. \*\*The live site is read-only\.\*\*[\s\S]*?(?=\n\d\. )/m.exec(read('skills/convert-site/SKILL.md'))?.[0] ?? '');
+  const readers = /Only these read it, paced: .+?\. Analytics are blocked on their live page loads, so no visit is counted\./;
+  assert.match(skill, readers);
+  assert.ok(rule.includes(readers.exec(skill)[0]), rule);
+});
+
 test('docs/dependencies.md justifies exactly the dependencies in package.json', () => {
   const deps = Object.keys(JSON.parse(read('package.json')).dependencies).sort();
   const headings = [...read('docs/dependencies.md').matchAll(/^## `?([\w@/.-]+)`?$/gm)].map((m) => m[1]).sort();

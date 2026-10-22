@@ -42,9 +42,12 @@ sites this kit did not build.
 
 ## The rules
 
-- **The live site is read-only.** Fetch it only through the capture scripts, which pace requests
-  (2.5 s by default), back off on 429 and 503, and stop after three consecutive blocks with state
-  saved so the crawl resumes. Never submit a form on it, never log in, never change anything.
+- **The live site is read-only.** Only these read it, paced: the capture scripts, `shoot.mjs`
+  and `styles.mjs` on live, `css-coverage.mjs`, `launch-audit --old-url` and `pre-launch
+  --predecessor-url`. Analytics are blocked on their live page loads, so no visit is counted.
+  They pace requests (2.5 s by default), back off on 429 and 503, and stop after three
+  consecutive blocks with state saved so a crawl resumes. Never submit a form on it, never log
+  in, never change anything.
 - **One intake message, then no stops.** Ask everything once, each question with a stated default.
   Anything that later needs an account or token you do not have goes into the runbook's "needs
   you" list, and the run carries on.
