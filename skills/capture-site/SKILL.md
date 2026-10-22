@@ -32,7 +32,7 @@ change `--ua` to get past a block.
   It never requests `wp-admin`, `wp-login`, `xmlrpc.php` or `?s=` searches.
 - `media` tries each file 3 times: a persistent 429 or 503 stops it at once; a 403 or network
   error is recorded as that file's status, and 3 such files in a row stop it.
-- `fingerprint` does not retry: a blocked home page is exit 3. `assets` and `shoot` back off and
+- `fingerprint` does not retry: a blocked home page, or one that is a bot challenge, is exit 3. `assets` and `shoot` back off and
   stop after 3 blocked responses in a row.
 
 ## The command sequence
@@ -46,12 +46,15 @@ source. Run each step as its own command, in this order:
 
        node <skill-dir>/scripts/fingerprint.mjs https://www.example.com
 
-2. **Capture.** Discovery is the sitemaps, the REST lists (WordPress, when the fingerprint finds
+2. **Capture.** Discovery is the sitemaps (every `Sitemap:` line in robots.txt, plus the
+   platform's default index), the REST lists (WordPress, when the fingerprint finds
    REST; `--no-rest` skips), the link crawl, and `--seed <path>` or `--seed-file <file>` (one
    path or URL per line, `#` comments) for paths the crawl cannot reach (old URLs, an old
    `.htaccess`). After the crawl, Wayback paths it did not find go to `wayback-unverified.txt`
    (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and never fetched unless you
-   pass `--verify-shortlinks`.
+   pass `--verify-shortlinks`. After the crawl it requests one path that cannot exist
+   (`/<32 hex>/`) once, so the site's own 404 page is saved as `pages/404.html` (`meta.json`
+   `notFound`; a site that answers 200 or redirects there is recorded with no page).
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
@@ -99,10 +102,12 @@ source. Run each step as its own command, in this order:
 
 | Script | Exit |
 |---|---|
-| `fingerprint` | 0 done, 2 usage or unreachable, 3 blocking |
-| `capture` | 0 done, 2 usage, 3 stopped on blocks or unreachable (resumable) |
-| `media`, `assets` | 0 done (missing files included), 2 usage or no capture, 3 stopped on blocks |
-| `templates`, `readme` | 0 done, 2 usage or no `inventory.json` |
+| `fingerprint` | 0 done, 2 usage or unreachable, 3 blocking or a bot challenge |
+| `capture` | 0 done, 2 usage, 3 stopped on blocks, unreachable, a bot challenge (all resumable), or no page answered 200 |
+| `media` | 0 done (missing files included), 2 usage, no capture or no page that answered 200, 3 stopped on blocks |
+| `assets` | 0 done (missing files included), 2 usage or no capture, 3 stopped on blocks |
+| `templates` | 0 done, 2 usage, no `inventory.json`, or "no captured pages" (none answered 200) |
+| `readme` | 0 done, 2 usage or no `inventory.json` |
 | `shoot` | 0 all shot, 1 a route failed, 2 usage, 3 stopped on blocks |
 
 ## On exit 3
@@ -119,6 +124,34 @@ The site is blocking requests or cannot be reached. Wait (minutes, not seconds),
 - `shoot`: rerun with a longer `--delay`.
 
 Never retry in a tight loop. After two stops in a row, tell the person and carry on with the rest.
+
+A `capture` that stops with **no page answered 200** has nothing to build from: never go on to
+templates, media or a baseline (they refuse it, exit 2). Read `inventory.json` for what each
+URL answered; it is usually a block or a challenge (below), or a wrong origin.
+
+## Protected sites
+
+Some hosts and firewalls answer a script with a bot challenge instead of the page: SiteGround
+answers `202` with a page of a few hundred bytes that refreshes to `/.well-known/sgcaptcha/`;
+Cloudflare answers `403` or `503` with `cf-mitigated: challenge` and a "Just a moment..." page
+loading `/cdn-cgi/challenge-platform/`; others send a tiny page with no title, or one that
+redirects to a captcha path. Every page then looks the same, so a capture of it is worthless.
+
+- `fingerprint` prints `blocked: <host> anti-bot challenge (<cause>)` and exits 3.
+- `capture` stops at the first challenge on the site (exit 3, state saved): the URL is in
+  `inventory.json` with status `"challenge"` (never counted as a page) and in `meta.json`
+  `challenge`, and the README's `## Notes` name the cause. It is never retried: waiting does not
+  get past a challenge.
+- Put this in the needs-you list and carry on with what does not need the capture: **"Allowlist
+  the capture machine's public IP on the host or in the WAF for the capture window, or send a URL list."**
+- A real-browser capture (a headless or headed browser that solves or waits out the challenge)
+  is not part of this kit. Do not improvise one, or change `--ua` to get past the challenge,
+  without the site owner's written consent; the read-only, paced rule above still holds.
+- Once the person confirms the allowlist, run the same command with `--resume`:
+
+      node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture --resume
+
+  The challenge row is dropped and that URL is asked again first.
 
 ## What lands in capture/
 
@@ -142,7 +175,9 @@ Never retry in a tight loop. After two stops in a row, tell the person and carry
     assets/               logo, icons, fonts, index.json
     screens/live/         live screenshots and manifest.json (gitignored)
     lighthouse-live/      Lighthouse reports, when run (gitignored)
-    sitemaps/ feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
+    pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)
+    sitemaps/             every sitemap robots.txt names, the default index, and their children
+    feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 
 ## What you write by hand
@@ -193,6 +228,8 @@ Repeat this list to the person verbatim. None of it was captured:
   and listed under `## Notes`; its content is not captured.
 - Indexing directives from `<meta name="robots">` only; `X-Robots-Tag` headers are not read.
 - Anything only a login, a form submission or a search reveals.
+- Any page behind an anti-bot challenge (SiteGround, Cloudflare and the like): the capture
+  stops there until the capture machine is allowed through.
 - A file over `--max-file-bytes` or a page or stylesheet over 20 MB (`"too-large"`), and
   anything on a host that resolves to a private address (`"blocked-address"`).
 - A host whose DNS answer changes between the address check and the request.
