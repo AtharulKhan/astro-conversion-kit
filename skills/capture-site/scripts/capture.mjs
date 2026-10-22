@@ -39,8 +39,10 @@ Crawl a live site, read-only and paced, into a capture folder: one record per pa
 inventory.json, the raw HTML in pages/<slug>.html, the visible text in text/<slug>.txt,
 redirects.json (chains collapsed, hops kept), links.json, scripts.json (third-party vendors),
 meta.json (notFound: the site's 404 page, from one request for a path that cannot exist, saved
-as pages/404.html and text/404.txt), sitemaps/ (every sitemap robots.txt names, and their
-children), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
+as pages/404.html and text/404.txt; icons: the status /favicon.ico and /apple-touch-icon.png
+answered, one request each), sitemaps/ (every sitemap robots.txt names, and their children;
+index.json lists every sitemap URL asked for with its status and file, and one robots.txt
+names that did not answer 200 is also in meta.json discoveryErrors), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
 on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
 wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
@@ -91,6 +93,10 @@ const IMPORT_MAX_DEPTH = 5;
 // REST list closed for good is that URL's answer, not a sign the site is blocking the crawl).
 const PERMANENT_BLOCK = 403;
 const MAX_HOPS = 10;
+// A discovery URL that is a sitemap (saved under sitemaps/ and listed in sitemaps/index.json).
+const SITEMAP_PATH = /sitemap|\.xml(\.gz)?$/i;
+// The root icons a launch needs, asked for once so a missing one is evidence live lacked it.
+const ROOT_ICONS = ['/favicon.ico', '/apple-touch-icon.png'];
 // HTML responses in a row matching only the tiny-page heuristic that stop the run.
 const SUSPECT_LIMIT = 3;
 const MAX_ATTEMPTS = 3;
@@ -307,8 +313,13 @@ class Crawler {
           this.noteOk();
           const path = new URL(url).pathname;
           if (path === '/' && !this.homeRes) this.homeRes = res;
-          else if (res.status === 200 && /sitemap|\.xml(\.gz)?$/i.test(path)) {
-            writeText(join(this.out, 'sitemaps', sitemapFileName(url)), res.body);
+          else if (SITEMAP_PATH.test(path)) {
+            let file = null;
+            if (res.status === 200) {
+              file = `sitemaps/${sitemapFileName(url)}`;
+              writeText(join(this.out, file), res.body);
+            }
+            this.noteSitemap(url, res.status, file);
           }
           return res;
         }
@@ -316,11 +327,28 @@ class Crawler {
         if (attempt >= MAX_ATTEMPTS) {
           const errors = (this.state.discoveryErrors ??= []);
           if (!errors.some((e) => e.url === url)) errors.push({ url, status: res.status });
+          if (SITEMAP_PATH.test(new URL(url).pathname)) this.noteSitemap(url, res.status, null);
           return res;
         }
         await sleep(this.retryWait(attempt));
       }
     };
+  }
+
+  // Every sitemap the capture asked for, with its answer: sitemaps/index.json.
+  noteSitemap(url, status, file) {
+    const log = (this.state.sitemapLog ??= {});
+    log[url] = { status, file };
+  }
+
+  // A sitemap robots.txt names (or a sitemap index lists) that did not answer 200 is a
+  // discoveryErrors entry with its status, never dropped silently.
+  noteMissingSitemaps(urls) {
+    const errors = (this.state.discoveryErrors ??= []);
+    for (const url of urls) {
+      const seen = this.state.sitemapLog?.[url];
+      if (seen && seen.status !== 200 && !errors.some((e) => e.url === url)) errors.push({ url, status: seen.status });
+    }
   }
 
   // Discovery in resumable steps: fingerprint (home, robots, sitemap index), then each sitemap.
@@ -338,6 +366,7 @@ class Crawler {
         const { robots, ...rest } = fp;
         this.state.fingerprint = rest;
         this.state.sitemapsDone = [];
+        this.noteMissingSitemaps(rest.robotsSitemaps ?? []);
         this.enqueue('/', 'crawl');
         for (const seed of this.state.options.seeds ?? []) this.enqueue(seed, 'seed');
         saveState(this.out, this.state);
@@ -350,6 +379,7 @@ class Crawler {
         };
         const entries = await expandSitemaps([sitemap], { fetch, onError });
         for (const entry of entries) this.enqueue(entry.loc, 'sitemap');
+        this.noteMissingSitemaps([sitemap]);
         this.state.sitemapsDone.push(sitemap);
         saveState(this.out, this.state);
       }
@@ -461,6 +491,26 @@ class Crawler {
       writeText(join(this.out, entry.text), `${extractPage(body, url).text}\n`);
     }
     this.state.notFound = entry;
+    return 'done';
+  }
+
+  // /favicon.ico and /apple-touch-icon.png, one request each per capture (redirects followed),
+  // their status in meta.json `icons`: proof of what live served at the root, whatever the pages
+  // link. A blocked answer is left unset, so the next run asks again.
+  async probeIcons() {
+    this.state.icons ??= {};
+    for (const path of ROOT_ICONS) {
+      if (this.state.icons[path] !== undefined) continue;
+      const url = new URL(path, this.state.canonicalOrigin).href;
+      const res = await this.fetch(url, { redirect: 'follow' });
+      const verdict = this.judge(res, url);
+      if (verdict?.stop) {
+        this.noteChallenge(url, verdict.stop, { row: false });
+        return 'challenge';
+      }
+      if (BLOCK_STATUSES.has(res.status)) continue;
+      this.state.icons[path] = res.status;
+    }
     return 'done';
   }
 
@@ -935,7 +985,11 @@ class Crawler {
       wayback: this.state.wayback ?? (this.state.options.noWayback ? { status: 'skipped' } : null),
       challenge: this.state.challenge ?? null,
       notFound: this.state.notFound ?? null,
+      icons: this.state.icons ?? {},
     });
+    json('sitemaps/index.json', Object.entries(this.state.sitemapLog ?? {})
+      .map(([url, { status, file }]) => ({ url, status, file }))
+      .sort(byKey('url')));
     json('css/manifest.json', this.cssManifest());
     json('js/manifest.json', this.jsManifest());
 
@@ -1062,6 +1116,7 @@ async function main() {
   if (args.verifyShortlinks) state.options.verifyShortlinks = true;
   const verify = state.options.verifyShortlinks || (state.verifyQueue?.length ?? 0) > 0;
   if (outcome === 'done') outcome = await crawler.probeNotFound();
+  if (outcome === 'done') outcome = await crawler.probeIcons();
   if (outcome === 'done') outcome = await crawler.fetchCss();
   if (outcome === 'done') outcome = await crawler.fetchJs();
   if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();

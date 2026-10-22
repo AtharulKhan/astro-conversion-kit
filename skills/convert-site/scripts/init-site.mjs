@@ -194,7 +194,7 @@ function readKitPackage(kit) {
 
 // The sitemap the runbook submits, from what the capture saved (the same names
 // baseline/sitemaps.json freezes): the first one capture/robots.txt names, else the index, else
-// its one sitemap, else /sitemap.xml.
+// its one sitemap, else the sitemap-index.xml the build ships when live had none.
 export function sitemapUrl(dir, origin) {
   const saved = join(dir, 'capture', 'sitemaps');
   const names = existsSync(saved) ? readdirSync(saved).filter((f) => /\.xml$/i.test(f)).sort() : [];
@@ -204,7 +204,7 @@ export function sitemapUrl(dir, origin) {
     .map((m) => { try { return new URL(m[1]).pathname.split('/').pop(); } catch { return null; } })
     .find((n) => n && names.includes(n));
   const name = named ?? ['sitemap_index.xml', 'sitemap-index.xml', 'sitemap.xml'].find((n) => names.includes(n))
-    ?? names.find((n) => /index/i.test(n)) ?? names[0] ?? 'sitemap.xml';
+    ?? names.find((n) => /index/i.test(n)) ?? names[0] ?? 'sitemap-index.xml';
   return `${origin}/${name}`;
 }
 

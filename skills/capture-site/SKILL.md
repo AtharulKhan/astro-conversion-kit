@@ -54,7 +54,10 @@ source. Run each step as its own command, in this order:
    (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and never fetched unless you
    pass `--verify-shortlinks`. After the crawl it requests one path that cannot exist
    (`/<32 hex>/`) once, so the site's own 404 page is saved as `pages/404.html` (`meta.json`
-   `notFound`; a site that answers 200 or redirects there is recorded with no page).
+   `notFound`; a site that answers 200 or redirects there is recorded with no page), and asks
+   for `/favicon.ico` and `/apple-touch-icon.png` once each (`meta.json` `icons`: path to
+   status). A sitemap robots.txt names that answers 404 (or any non-200) is listed in
+   `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`.
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
@@ -183,7 +186,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     screens/live/         live screenshots and manifest.json (gitignored)
     lighthouse-live/      Lighthouse reports, when run (gitignored)
     pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)
-    sitemaps/             every sitemap robots.txt names, the default index, and their children
+    sitemaps/             every sitemap robots.txt names, the default index, and their children;
+                          index.json: every sitemap URL asked for { url, status, file }
     feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 

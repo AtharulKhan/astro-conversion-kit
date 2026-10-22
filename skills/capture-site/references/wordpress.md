@@ -78,5 +78,6 @@ on every builder; per-page classes like `elementor-page-12` are ignored. What di
 
 `/feed/`, category feeds, core `wp-sitemap.xml` and plugin sitemaps (`sitemap_index.xml`,
 `post-sitemap.xml`) are captured under `feeds/` and `sitemaps/`. A sitemap URL that 404s is a
-record with status 404, not dropped. Plugin forms post to `admin-ajax.php` or a REST route; the
+record with status 404 in `sitemaps/index.json` (and, when robots.txt names it, in `meta.json`
+`discoveryErrors`), not dropped. Plugin forms post to `admin-ajax.php` or a REST route; the
 inventory records each form's action and field names, which the conversion rewires.

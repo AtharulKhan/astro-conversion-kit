@@ -380,8 +380,8 @@ test('docs/LAUNCH.md submits the sitemap robots.txt names when the capture saved
   assert.ok(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8').includes('`https://www.fixture-roofing.test/wp-sitemap.xml`'));
 });
 
-test('docs/LAUNCH.md names sitemap.xml when the capture saved no sitemap', (t) => {
+test('docs/LAUNCH.md names the sitemap-index.xml the build ships when the capture saved no sitemap', (t) => {
   const dir = tempDir(t, 'site-');
   assert.equal(run(baseArgs(dir, bareKit(t))).status, 0);
-  assert.ok(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8').includes('`https://www.fixture-roofing.test/sitemap.xml`'));
+  assert.ok(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8').includes('`https://www.fixture-roofing.test/sitemap-index.xml`'));
 });

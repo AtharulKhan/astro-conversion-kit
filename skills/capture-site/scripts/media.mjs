@@ -145,6 +145,7 @@ function sitemapImages(dir) {
   if (!existsSync(dir)) return [];
   const urls = [];
   for (const name of readdirSync(dir).sort()) {
+    if (name === 'index.json') continue; // the capture's list of sitemaps asked for, not a sitemap
     let buffer = readFileSync(join(dir, name));
     if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
       try {

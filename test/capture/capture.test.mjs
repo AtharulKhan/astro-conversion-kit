@@ -252,6 +252,45 @@ test('a sitemap that keeps answering 503 is noted in discoveryErrors, not fatal'
   }
 });
 
+test('a sitemap robots.txt names that answers 404 is recorded in sitemaps/index.json and discoveryErrors', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
+    '/robots.txt': { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'Sitemap: /wp-sitemap.xml\n' },
+    '/wp-sitemap.xml': { status: 404, body: 'not found' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const errors = readJson(out, 'meta.json').discoveryErrors.map((e) => `${new URL(e.url).pathname}:${e.status}`);
+    assert.deepEqual(errors, ['/wp-sitemap.xml:404']);
+    const index = readJson(out, 'sitemaps/index.json');
+    assert.deepEqual(index.find((e) => e.url === `${stub.origin}/wp-sitemap.xml`), { url: `${stub.origin}/wp-sitemap.xml`, status: 404, file: null });
+  } finally {
+    await stub.close();
+  }
+});
+
+test('the capture asks for /favicon.ico and /apple-touch-icon.png once and records their status in meta.json icons', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
+    '/favicon.ico': { status: 200, headers: { 'Content-Type': 'image/x-icon' }, body: 'ico' },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual(readJson(out, 'meta.json').icons, { '/favicon.ico': 200, '/apple-touch-icon.png': 404 });
+    const asked = stub.requests.filter((u) => u === '/favicon.ico' || u === '/apple-touch-icon.png');
+    assert.deepEqual(asked.sort(), ['/apple-touch-icon.png', '/favicon.ico']);
+    const again = await capture([stub.origin, '--out', out, '--delay', '0', '--resume']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(stub.requests.filter((u) => u === '/favicon.ico').length, 1, 'asked once per capture');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('robots.txt and sitemaps that always answer 403 are noted, not fatal', async () => {
   const stub = await startStub({
     '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
@@ -346,6 +385,9 @@ test('snapshots, text, robots, sitemaps, feeds, links and scripts are written', 
   for (const name of ['sitemap_index.xml', 'page-sitemap.xml', 'post-sitemap.xml', 'category-sitemap.xml']) {
     assert.ok(existsSync(join(full, 'sitemaps', name)), name);
   }
+  const index = readJson(full, 'sitemaps/index.json');
+  assert.deepEqual(index.find((e) => e.url.endsWith('/page-sitemap.xml')), { url: `${fixture.origin}/page-sitemap.xml`, status: 200, file: 'sitemaps/page-sitemap.xml' });
+  assert.deepEqual(readJson(full, 'meta.json').icons, { '/favicon.ico': 404, '/apple-touch-icon.png': 404 });
   assert.match(readFileSync(join(full, 'feeds/feed.xml'), 'utf8'), /<rss/);
   assert.deepEqual(readJson(full, 'feeds/index.json').map((f) => f.path), ['/feed/']);
 
