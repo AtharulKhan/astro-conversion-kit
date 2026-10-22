@@ -1,0 +1,223 @@
+#!/usr/bin/env node
+// Capture README: one page a person (or the next agent) reads before planning the build.
+// Everything in it is counted from the capture's own files; a file the capture does not have
+// is reported as "not captured", never as zero. The ## Notes heading is left for the agent.
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { assertNodeVersion } from '../../../scripts/lib/node-version.mjs';
+
+const USAGE = `Usage: node readme.mjs --capture <dir>
+
+Write <dir>/README.md summarising the capture: platform and theme, pages per template,
+pages per discovery source, redirects by source, media totals, third-party vendors with ids
+and page counts, forms, noindex pages, feeds, iframes, the Wayback unverified count, and an
+empty ## Notes heading. Run it after templates.mjs, assets.mjs and the media step; anything
+missing is reported as not captured.
+
+  --capture <dir>   the capture folder written by capture.mjs
+  --help            show this help
+
+Exit codes: 0 done, 2 usage error or no inventory.json in the capture.`;
+
+const SOURCES = ['sitemap', 'rest', 'crawl', 'shortlink', 'seed'];
+const LIST_LIMIT = 10;
+
+function readJson(dir, file) {
+  const path = join(dir, file);
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+}
+
+export function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+const cell = (value) => String(value ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+const table = (head, rows) => [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map((r) => `| ${r.map(cell).join(' | ')} |`)];
+function someOf(paths) {
+  const shown = paths.slice(0, LIST_LIMIT).join(', ');
+  return paths.length > LIST_LIMIT ? `${shown} and ${paths.length - LIST_LIMIT} more` : shown;
+}
+
+function siteSection(meta, fingerprint, inventory) {
+  const lines = ['## Site', ''];
+  if (fingerprint) {
+    const platform = [fingerprint.platform ?? 'unknown', fingerprint.platformVersion].filter(Boolean).join(' ');
+    lines.push(`- Platform: ${platform}`, `- Theme: ${fingerprint.theme ?? 'unknown'}`);
+    if (fingerprint.plugins?.length) lines.push(`- Plugins seen: ${fingerprint.plugins.join(', ')}`);
+  } else {
+    lines.push('- Platform and theme: not captured (no fingerprint in state.json)');
+  }
+  const byStatus = {};
+  for (const r of inventory) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
+  const statuses = Object.keys(byStatus).sort().map((s) => `${byStatus[s]} × ${s}`).join(', ');
+  lines.push(`- Pages: ${inventory.length} (${statuses || 'none'})`);
+  if (meta?.finishedAt) lines.push(`- Captured: ${meta.startedAt ?? '?'} to ${meta.finishedAt}`);
+  for (const e of meta?.discoveryErrors ?? []) lines.push(`- Discovery error: ${e.url} returned ${e.status}`);
+  return lines;
+}
+
+function templatesSection(templates) {
+  const lines = ['## Templates', ''];
+  if (!templates) return [...lines, 'Templates: not captured (run templates.mjs)'];
+  return [...lines, ...table(['Template', 'Pages', 'Representative'], templates.map((t) => [t.name, t.count, t.representative]))];
+}
+
+function discoverySection(inventory) {
+  const counts = {};
+  for (const r of inventory) for (const s of r.foundBy ?? []) counts[s] = (counts[s] ?? 0) + 1;
+  const order = [...SOURCES, ...Object.keys(counts).filter((s) => !SOURCES.includes(s)).sort()];
+  const rows = order.filter((s) => counts[s]).map((s) => [s, counts[s]]);
+  return ['## Discovery', '', 'Pages per source (a page found several ways counts under each).', '', ...table(['Source', 'Pages'], rows)];
+}
+
+function redirectsSection(redirects) {
+  const lines = ['## Redirects', ''];
+  if (!redirects) return [...lines, 'Redirects: not captured'];
+  if (redirects.length === 0) return [...lines, 'Redirects: none'];
+  const groups = {};
+  for (const r of redirects) (groups[r.source ?? 'crawl'] ??= []).push(r);
+  const order = [...SOURCES, ...Object.keys(groups).filter((s) => !SOURCES.includes(s)).sort()].filter((s) => groups[s]);
+  const rows = order.map((s) => {
+    const list = groups[s];
+    const notes = [];
+    const unverified = list.filter((r) => r.verified === false).length;
+    const chains = list.filter((r) => r.hops?.length).length;
+    const errors = list.filter((r) => r.error).length;
+    if (unverified) notes.push(`${unverified} unverified`);
+    if (chains) notes.push(`${chains} chains`);
+    if (errors) notes.push(`${errors} errors`);
+    return [s, list.length, notes.join(', ') || '-'];
+  });
+  return [...lines, ...table(['Source', 'Redirects', 'Notes'], rows)];
+}
+
+function mediaSection(media) {
+  const lines = ['## Media', ''];
+  if (!media) return [...lines, 'Media: not captured (no media.json; run the media step)'];
+  const ok = media.filter((m) => m.status === 200);
+  const total = ok.reduce((sum, m) => sum + (m.bytes ?? 0), 0);
+  lines.push(`- Media files: ${media.length}, ${formatBytes(total)} answering 200`);
+  const largest = ok.reduce((big, m) => ((m.bytes ?? 0) > (big?.bytes ?? -1) ? m : big), null);
+  if (largest) lines.push(`- Largest: ${largest.path ?? largest.url} (${formatBytes(largest.bytes ?? 0)})`);
+  const broken = media.filter((m) => m.status !== 200);
+  if (broken.length) lines.push(`- Not 200: ${broken.length} (${someOf(broken.map((m) => `${m.path ?? m.url} ${m.status}`))})`);
+  return lines;
+}
+
+function vendorsSection(scripts) {
+  const lines = ['## Third-party scripts', ''];
+  if (!scripts) return [...lines, 'Third-party scripts: not captured'];
+  const names = Object.keys(scripts);
+  if (names.length === 0) return [...lines, 'Third-party scripts: none'];
+  const rows = names.map((n) => [n, (scripts[n].ids?.length ? scripts[n].ids : [scripts[n].id]).filter(Boolean).join(', ') || '-', scripts[n].pages?.length ?? 0]);
+  return [...lines, ...table(['Vendor', 'IDs', 'Pages'], rows)];
+}
+
+function formsSection(inventory) {
+  const lines = ['## Forms', ''];
+  const groups = new Map();
+  for (const r of inventory) {
+    for (const f of r.forms ?? []) {
+      const fields = (f.fields ?? []).map((x) => x.name).filter(Boolean).join(', ');
+      const key = `${f.action}|${f.method}|${fields}`;
+      const group = groups.get(key) ?? { action: f.action, method: f.method, fields, pages: [] };
+      group.pages.push(r.path);
+      groups.set(key, group);
+    }
+  }
+  if (groups.size === 0) return [...lines, 'Forms: none'];
+  const rows = [...groups.values()].map((g) => [g.action ?? '-', g.method ?? 'get', g.fields || '-', `${g.pages.length}: ${someOf(g.pages)}`]);
+  return [...lines, ...table(['Action', 'Method', 'Fields', 'Pages'], rows)];
+}
+
+function indexingSection(inventory) {
+  const noindex = inventory.filter((r) => /noindex/i.test(r.robots ?? '')).map((r) => r.path);
+  const lines = ['## Indexing', '', `- noindex: ${noindex.length}`];
+  if (noindex.length) lines.push(`- noindex pages: ${someOf(noindex)}`);
+  return lines;
+}
+
+function feedsSection(feeds) {
+  const lines = ['## Feeds', ''];
+  if (!feeds) return [...lines, 'Feeds: not captured'];
+  if (feeds.length === 0) return [...lines, 'Feeds: none'];
+  return [...lines, ...feeds.map((f) => `- ${f.path} (${f.status}, ${f.contentType ?? 'unknown type'})`)];
+}
+
+function iframesSection(inventory) {
+  const lines = ['## Iframes', ''];
+  const pages = {};
+  for (const r of inventory) for (const src of r.iframes ?? []) (pages[src] ??= []).push(r.path);
+  const srcs = Object.keys(pages).sort();
+  if (srcs.length === 0) return [...lines, 'Iframes: none'];
+  return [...lines, ...table(['Source', 'Pages'], srcs.map((s) => [s, `${pages[s].length}: ${someOf(pages[s])}`]))];
+}
+
+function waybackSection(dir) {
+  const lines = ['## Wayback', ''];
+  const file = join(dir, 'wayback-unverified.txt');
+  if (!existsSync(file)) return [...lines, 'Wayback unverified: not captured'];
+  const paths = readFileSync(file, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+  lines.push(`Wayback unverified: ${paths.length}`);
+  if (paths.length) lines.push('', 'Archived paths the crawl did not find (check each for a redirect):', '', ...paths.slice(0, 50).map((p) => `- ${p}`));
+  if (paths.length > 50) lines.push(`- and ${paths.length - 50} more in wayback-unverified.txt`);
+  return lines;
+}
+
+export function buildReadme(dir) {
+  const inventory = readJson(dir, 'inventory.json');
+  const meta = readJson(dir, 'meta.json');
+  const fingerprint = readJson(dir, 'state.json')?.fingerprint ?? null;
+  const origin = meta?.canonicalOrigin ?? meta?.origin ?? 'the site';
+  const sections = [
+    [`# Capture of ${origin}`, '', 'Generated by readme.mjs from the files in this folder. Re-run it after re-capturing.'],
+    siteSection(meta, fingerprint, inventory),
+    templatesSection(readJson(dir, 'templates.json')),
+    discoverySection(inventory),
+    redirectsSection(readJson(dir, 'redirects.json')),
+    mediaSection(readJson(dir, 'media.json')),
+    vendorsSection(readJson(dir, 'scripts.json')),
+    formsSection(inventory),
+    indexingSection(inventory),
+    feedsSection(readJson(dir, 'feeds/index.json')),
+    iframesSection(inventory),
+    waybackSection(dir),
+    ['## Notes', ''],
+  ];
+  return `${sections.map((s) => s.join('\n')).join('\n\n')}\n`;
+}
+
+function main() {
+  assertNodeVersion();
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(USAGE);
+    return;
+  }
+  const at = argv.indexOf('--capture');
+  const capture = at === -1 ? null : argv[at + 1];
+  if (!capture || capture.startsWith('--') || argv.length !== 2) {
+    console.error(`--capture <dir> is required, and it is the only option\n\n${USAGE}`);
+    process.exit(2);
+  }
+  const dir = resolve(capture);
+  if (!existsSync(join(dir, 'inventory.json'))) {
+    console.error(`No inventory.json in ${dir}. Run capture.mjs first.`);
+    process.exit(2);
+  }
+  writeFileSync(join(dir, 'README.md'), buildReadme(dir));
+  console.log(`Wrote ${join(dir, 'README.md')}.`);
+}
+
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
