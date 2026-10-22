@@ -4,8 +4,9 @@
 // needs an account (a GitHub repo, a Vercel deploy) the stand-ins are named at the function.
 // Scripts run as child processes so the in-process fixture keeps answering.
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import {
   appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
@@ -24,7 +25,6 @@ export const ASTRO_VERSION = '7.4.2';
 export const WIDTHS = [390, 768, 1440];
 export const PHASES = ['intake', 'capture', 'plan', 'scaffold', 'baseline', 'build', 'gates', 'visual', 'components', 'prelaunch', 'suggestions', 'pr'];
 const OLD_URLS = ['/old-services', '/about'];
-const PREVIEW_PORT = 4683;
 const SKILLS = join(KIT, 'skills');
 const NODE_BIN = dirname(process.execPath);
 const GIT_ENV = {
@@ -90,10 +90,17 @@ const VERIFY_FLAGS = [...FORM_FLAGS, '--allow-extra', '/thank-you/'];
 // ---------------------------------------------------------------------------------------------
 // 1. intake
 
+// Every folder a run writes beside SITE (removed with it by cleanUp).
+const besides = (site) => [`${site}-empty`, `${site}-remote.git`];
+
+export function cleanUp(site) {
+  for (const dir of [site, ...besides(site)]) rmSync(dir, { recursive: true, force: true });
+}
+
 // No CLI on PATH and an empty home for the preflight, so the run takes the "not logged in" paths
 // whatever this machine has: nothing is ever deployed or pushed to a real account.
 export async function intake({ site, live }) {
-  rmSync(site, { recursive: true, force: true });
+  cleanUp(site);
   mkdirSync(site, { recursive: true });
   await S(site, 'phase', 'intake');
   const empty = `${site}-empty`;
@@ -159,7 +166,7 @@ const DECISIONS = [
   { topic: 'theme script reveal.js (lazy image, scroll reveal)', choice: 'copy to its live path', default: 'copy', reason: 'build-rules.md: scripts that drive visible behaviour are copied', costIfWrong: 'none' },
   { topic: 'WordPress REST and shortlink head links', choice: 'dropped', default: 'dropped', reason: 'they point at WordPress endpoints the static site does not have', costIfWrong: 'none' },
   { topic: 'no thank-you page on live', choice: 'build /thank-you/ from the page template, noindex, with its canonical', default: 'build it', reason: 'forms.md', costIfWrong: 'one extra page' },
-  { topic: '/deleted-post/ (404 on live, listed in post-sitemap.xml)', choice: 'redirect to /blog/ (301)', default: 'reproduce live', reason: 'pre-launch predecessor.coverage needs a destination for every old URL', costIfWrong: 'one old URL lands on the blog instead of a 404' },
+  { topic: '/deleted-post/ (404 on live, listed in post-sitemap.xml)', choice: 'redirect to /blog/ (301), the posts archive', default: 'redirect to the nearest live parent, or the posts archive for a post', reason: 'build-rules.md: pre-launch requires every predecessor URL to resolve', costIfWrong: 'one old URL lands on the blog instead of a 404' },
   { topic: 'favicon.ico, apple-touch-icon.png and a web manifest', choice: 'generated from the captured favicon.svg', default: 'generate', reason: 'pre-launch blocks without them; live had only an SVG icon', costIfWrong: 'icons look different from live in a bookmark' },
 ];
 
@@ -256,7 +263,13 @@ export async function scaffold({ site, live, trailingSlash }) {
   const init = expectCode(await node(dirname(site), kit('convert-site', 'init-site.mjs'), installed ? args : [...args, '--no-install']));
   if (installed) {
     mkdirSync(dirname(cache), { recursive: true });
-    renameSync(join(site, 'node_modules'), cache);
+    try {
+      renameSync(join(site, 'node_modules'), cache);
+    } catch (error) {
+      // Another run filled the cache first: use that one.
+      if (!existsSync(cache)) throw error;
+      rmSync(join(site, 'node_modules'), { recursive: true, force: true });
+    }
   }
   symlinkSync(cache, join(site, 'node_modules'), 'dir');
 
@@ -758,18 +771,38 @@ export async function pr({ site, results }) {
 // ---------------------------------------------------------------------------------------------
 // Serving the build.
 
-// npm run preview, which backgrounds the Astro preview server (as Astro 7 does with no terminal);
-// close() runs astro preview stop.
-export async function astroPreview(site, port = PREVIEW_PORT) {
+// A port nothing listens on right now (the OS picks it).
+function freePort() {
+  return new Promise((done, fail) => {
+    const server = createNetServer();
+    server.once('error', fail);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => done(port));
+    });
+  });
+}
+
+// npm run preview on a free port, which backgrounds the Astro preview server (as Astro 7 does
+// with no terminal). Ready only when it serves a sentinel file written into this run's dist/, so
+// another run's server or a leftover one is never shot. close() runs astro preview stop.
+export async function astroPreview(site) {
+  const port = await freePort();
+  const token = randomUUID();
+  const sentinel = `e2e-preview-${process.pid}.txt`;
+  writeFileSync(join(site, 'dist', sentinel), token);
   const started = expectCode(await npm(site, ['run', 'preview', '--', '--background', '--port', String(port), '--host', '127.0.0.1']));
   const origin = `http://127.0.0.1:${port}`;
-  const close = () => sh('npx', ['astro', 'preview', 'stop'], { cwd: site });
+  const close = async () => {
+    rmSync(join(site, 'dist', sentinel), { force: true });
+    return sh('npx', ['astro', 'preview', 'stop'], { cwd: site });
+  };
   const deadline = Date.now() + 60_000;
   for (;;) {
     try {
-      const res = await fetch(`${origin}/`);
-      await res.arrayBuffer();
-      if (res.ok) return { origin, close };
+      const res = await fetch(`${origin}/${sentinel}`);
+      const body = await res.text();
+      if (res.ok && body === token) return { origin, close };
     } catch {
       // not listening yet
     }

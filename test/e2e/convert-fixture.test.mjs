@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { startFixture } from '../fixture/serve.mjs';
 import * as R from './lib/run.mjs';
 
-const SITE = join(R.TMP, 'e2e', 'site');
+// One site folder per process, so two runs (two worktrees, or a run and a rebase) never share one.
+const SITE = join(R.TMP, 'e2e', `site-${process.pid}`);
 const results = {};
 let fixture;
 
@@ -31,6 +32,7 @@ before(async () => {
 
 after(async () => {
   await fixture?.close();
+  R.cleanUp(SITE);
 });
 
 const shown = (result) => `${result.command} exited ${result.code}\n${result.stdout}\n${result.stderr}`;
