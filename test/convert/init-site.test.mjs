@@ -168,7 +168,7 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.equal(pkg.scripts['verify:release'], 'PUBLIC_INDEXABLE=true node scripts/verify/run-all.mjs');
   assert.equal(pkg.scripts.baseline, 'node scripts/build-baseline.mjs --capture capture --out baseline');
   assert.equal(pkg.scripts['redirects:build'],
-    'node scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json --trailing-slash always');
+    'node scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json --trailing-slash always --routes baseline/routes.json');
   assert.equal(pkg.scripts['verify:live'], 'node scripts/verify-live.mjs');
   for (const name of ['shoot', 'diff', 'styles', 'sheet']) {
     assert.equal(pkg.scripts[`review:${name}`], `node scripts/review/${name}.mjs`);
@@ -220,7 +220,7 @@ test('cloudflare host and --trailing-slash never shape the scaffold', (t) => {
   assert.match(config, /trailingSlash: 'never'/);
   assert.match(config, /format: 'file'/);
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-  assert.match(pkg.scripts['redirects:build'], /--host cloudflare --out public\/_redirects --trailing-slash never$/);
+  assert.match(pkg.scripts['redirects:build'], /--host cloudflare --out public\/_redirects --trailing-slash never --routes baseline\/routes\.json$/);
   const launch = readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8');
   assert.ok(launch.includes('`npm run build && npx wrangler pages deploy dist --branch astro-rebuild`'));
   assert.ok(launch.includes('`PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main`'));

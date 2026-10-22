@@ -154,9 +154,60 @@ test('cloudflare: more than 2,000 static or 100 dynamic rules warns', async () =
   assert.doesNotMatch(few.stderr, /static rules|dynamic rules/);
 });
 
+const ROUTES = [
+  { path: '/', status: 200, kind: 'page' },
+  { path: '/feed/', status: 200, kind: 'feed' },
+  { path: '/blog/feed/', status: 200, kind: 'feed' },
+  { path: '/old-feed/', status: 404, kind: 'feed' },
+];
+function routesFile(name) {
+  const file = join(root, name);
+  writeFileSync(file, JSON.stringify(ROUTES));
+  return file;
+}
+
+test('vercel: --routes adds a rewrite per feed route to its index.xml, merged by source', async () => {
+  const out = join(root, 'feeds-vercel.json');
+  writeFileSync(out, JSON.stringify({
+    ...JSON.parse(readFileSync(TEMPLATE, 'utf8')),
+    rewrites: [{ source: '/media/:path*', destination: 'https://store.example.com/:path*' }, { source: '/feed/', destination: '/stale.xml' }],
+  }));
+  const result = await compile(['--csv', csv('feeds.csv', ROWS.slice(0, 1)), '--host', 'vercel', '--out', out, '--routes', routesFile('routes.json')]);
+  assert.equal(result.code, 0, result.stderr);
+  const config = JSON.parse(readFileSync(out, 'utf8'));
+  assert.deepEqual(config.rewrites, [
+    { source: '/media/:path*', destination: 'https://store.example.com/:path*' },
+    { source: '/feed/', destination: '/feed/index.xml' },
+    { source: '/blog/feed/', destination: '/blog/feed/index.xml' },
+  ]);
+  assert.match(result.stdout, /2 feed rewrite\(s\)/);
+  const csvAfter = readFileSync(join(root, 'feeds.csv'), 'utf8');
+  assert.ok(!csvAfter.includes('feed'), 'redirects.csv stays redirect-only');
+});
+
+test('vercel: feed rewrites count toward the 2,048-route warning', async () => {
+  const many = Array.from({ length: 1800 }, (_, i) => ({ path: `/f${i}/feed/`, status: 200, kind: 'feed' }));
+  const file = join(root, 'many-routes.json');
+  writeFileSync(file, JSON.stringify(many));
+  const result = await compile(['--csv', csv('few.csv', ROWS.slice(0, 1)), '--host', 'vercel', '--out', join(root, 'many-vercel.json'), '--routes', file]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stderr, /warning: 18\d\d routes/);
+});
+
+test('cloudflare: --routes writes a 200 rewrite line per feed, which the resolver serves', async () => {
+  const out = join(root, 'feeds', '_redirects');
+  const result = await compile(['--csv', csv('cf-feeds.csv', ROWS.slice(0, 1)), '--host', 'cloudflare', '--out', out, '--routes', routesFile('cf-routes.json')]);
+  assert.equal(result.code, 0, result.stderr);
+  const text = readFileSync(out, 'utf8');
+  assert.match(text, /^\/feed\/ \/feed\/index\.xml 200$/m);
+  assert.match(text, /^\/blog\/feed\/ \/blog\/feed\/index\.xml 200$/m);
+  assert.doesNotMatch(text, /old-feed/);
+});
+
 test('usage errors exit 2; --help exits 0 and notes static-file precedence', async () => {
   assert.equal((await compile(['--host', 'netlify', '--csv', csv('u.csv', ROWS)])).code, 2);
   assert.equal((await compile(['--host', 'vercel', '--csv', join(root, 'nope.csv')])).code, 2);
+  assert.equal((await compile(['--host', 'vercel', '--csv', csv('ok.csv', ROWS.slice(0, 1)), '--out', join(root, 'x.json'), '--routes', join(root, 'missing-routes.json')])).code, 2);
   const badStatus = csv('bad-status.csv', ['/a,/b/,200,decision,']);
   assert.equal((await compile(['--host', 'vercel', '--csv', badStatus, '--out', join(root, 'x.json')])).code, 2);
   assert.ok(!existsSync(join(root, 'x.json')));

@@ -9,6 +9,8 @@
 //                      `:name+`, `:name?`, `:name(regex)`), strict and case-sensitive, with
 //                      `has`/`missing` query conditions
 //   4. the filesystem  dist/
+//   5. rewrites        an exact source (no parameters) serves its destination's file when no file
+//                      answered at step 4
 // Each redirect is a hop; the next request starts again at step 1.
 import { existsSync, statSync } from 'node:fs';
 import { distFiles } from './dist.mjs';
@@ -200,7 +202,15 @@ export function vercelResolver({ config = {}, dist, origins = [] }) {
     return { path, status: candidates.some((c) => files.has(c)) ? 200 : 404 };
   }
 
-  return (url) => follow(url, (path, search) => urlRules(path) ?? redirect(path, search) ?? serve(path), origins);
+  // Exact rewrites only: a source with parameters or a destination off the site is not followed.
+  const rewrites = new Map((config.rewrites ?? []).filter((r) => !/[:(*]/.test(r.source) && !isExternal(r.destination)).map((r) => [r.source, r.destination]));
+  function rewrite(path) {
+    const answer = serve(path);
+    if (answer.status === 200 || !rewrites.has(path)) return answer;
+    return { path, status: serve(rewrites.get(path)).status };
+  }
+
+  return (url) => follow(url, (path, search) => urlRules(path) ?? redirect(path, search) ?? rewrite(path), origins);
 }
 
 export const resolveVercel = (url, options) => vercelResolver(options)(url);

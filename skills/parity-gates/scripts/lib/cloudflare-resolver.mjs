@@ -1,6 +1,7 @@
 // What Cloudflare Pages answers for a URL, from _redirects and dist/. No side effects on import.
 //
-// _redirects: "from to [status]" lines (status 302 when left out), `#` comments. Static rules (no
+// _redirects: "from to [status]" lines (status 302 when left out; 200 rewrites to `to` without a
+// hop), `#` comments. Static rules (no
 // splat, no placeholder) are tried before dynamic ones, each group in file order, first match
 // wins. `*` matches anything and fills `:splat`; `:name` matches one path segment. Matching is on
 // the path only (a rule cannot match a query string) and case-sensitive.
@@ -57,6 +58,7 @@ export function cloudflareResolver({ rules = [], dist, origins = [] }) {
       if (!m) continue;
       const params = Object.fromEntries(rule.names.map((name, i) => [name, m[i + 1]]));
       const to = rule.to.replace(/:(\w+)/g, (match, name) => (name in params ? params[name] : match));
+      if (rule.status === 200) return { path, status: serve(to).status };
       return { to, status: rule.status };
     }
     return null;

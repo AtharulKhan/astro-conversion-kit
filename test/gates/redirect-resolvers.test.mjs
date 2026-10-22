@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { resolveVercel } from '../../skills/parity-gates/scripts/lib/vercel-resolver.mjs';
 import { parseRedirectsFile, resolveCloudflare } from '../../skills/parity-gates/scripts/lib/cloudflare-resolver.mjs';
 
-const FILES = ['index.html', 'about/index.html', 'news/index.html', 'news/a/index.html', 'kept/index.html', 'people/ann/index.html', 'y/index.html'];
+const FILES = ['index.html', 'feed/index.xml', 'about/index.html', 'news/index.html', 'news/a/index.html', 'kept/index.html', 'people/ann/index.html', 'y/index.html'];
 let dist;
 before(() => {
   dist = mkdtempSync(join(tmpdir(), 'resolvers-'));
@@ -41,6 +41,19 @@ test('cloudflare: the query is carried; Pages slash handling counts as a hop', (
   assert.deepEqual(cf('/x /y/ 301\n', '/x?utm=1').hops, [hop('/x?utm=1', '/y/?utm=1')]);
   assert.deepEqual(cf('', '/about').hops, [hop('/about', '/about/', 308)]);
   assert.deepEqual(cf('', '/about/index.html').hops, [hop('/about/index.html', '/about/', 308)]);
+});
+
+test('vercel: an exact rewrite serves its destination when no file answers; a file wins over it', () => {
+  const config = { rewrites: [{ source: '/feed/', destination: '/feed/index.xml' }, { source: '/about/', destination: '/missing.xml' }] };
+  assert.deepEqual(vc(config, '/feed/'), { hops: [], final: { path: '/feed/', status: 200 } });
+  assert.deepEqual(vc({}, '/feed/'), { hops: [], final: { path: '/feed/', status: 404 } });
+  assert.deepEqual(vc(config, '/about/'), { hops: [], final: { path: '/about/', status: 200 } });
+  assert.deepEqual(vc({ rewrites: [{ source: '/gone/', destination: '/nothing.xml' }] }, '/gone/').final.status, 404);
+});
+
+test('cloudflare: a 200 line rewrites to its target without a hop', () => {
+  assert.deepEqual(cf('/feed/ /feed/index.xml 200\n', '/feed/'), { hops: [], final: { path: '/feed/', status: 200 } });
+  assert.deepEqual(cf('/x/ /nothing.xml 200\n', '/x/'), { hops: [], final: { path: '/x/', status: 404 } });
 });
 
 test('vercel: has and missing query conditions', () => {

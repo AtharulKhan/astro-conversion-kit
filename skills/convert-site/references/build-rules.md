@@ -82,7 +82,9 @@ parity and this file is wrong: say so and fix this file.
   writes it from the capture; a redirect you add (a duplicate slug, a `.html` form, an old URL
   from the intake) is a row with `source` `decision` and the decision id in `note`.
 - `npm run redirects:build` writes `vercel.json` `redirects` or `public/_redirects`. Never edit
-  the generated rules by hand. Every chain becomes one hop to the final target.
+  the generated rules by hand. Every chain becomes one hop to the final target. It also writes a
+  rewrite per feed (`/feed/` to `/feed/index.xml`, from `baseline/routes.json`), since neither
+  host serves `index.xml` for a directory path.
 - A static page at a redirect source fails the redirects gate: delete the page or the row.
 
 ## Sitemaps, feeds, robots, 404
