@@ -40,7 +40,9 @@ one says "[unverified live]".
 Every built page and file is also requested at its own URL (a baseline route at its baseline
 path, any other page in the site's slash form, any other file at its path); one the rules
 redirect away fails as "built page redirected by rule <rule>" (a slash rule that took
-/upgrade-guide/3.5/ for a file, say). Redirect sources are left to the collision check.
+/upgrade-guide/3.5/ for a file, say). Redirect sources are left to the collision check. A
+"redirected" failure cannot be excepted: fix the rule (recompile with build-redirects.mjs, or
+correct the redirects.csv row that catches the page) instead.
 A redirect exception (field "redirect", path = the source, from = the baseline target, to = the
 new target) approves a changed target. Write the host config with build-redirects.mjs first.
 `;

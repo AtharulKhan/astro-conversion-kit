@@ -9,7 +9,8 @@ import { parseRedirectsFile, resolveCloudflare } from '../../skills/parity-gates
 import { SLASH_RULES, vercelRules } from '../../skills/parity-gates/scripts/build-redirects.mjs';
 
 const FILES = ['index.html', 'feed/index.xml', 'about/index.html', 'news/index.html', 'news/a/index.html', 'kept/index.html', 'people/ann/index.html', 'y/index.html',
-  'upgrade-guide/3.5/index.html', 'files/guide.pdf', 'files/Photo.JPG'];
+  'upgrade-guide/3.5/index.html', 'files/guide.pdf', 'files/Photo.JPG',
+  'files/report.docx', 'files/Photo.Jpg', 'files/data.Qxz'];
 let dist;
 before(() => {
   dist = mkdtempSync(join(tmpdir(), 'resolvers-'));
@@ -143,4 +144,14 @@ test('cloudflare: Pages serves a dotted page at its slashed URL without a hop', 
   assert.deepEqual(cf('', '/upgrade-guide/3.5/'), { hops: [], final: { path: '/upgrade-guide/3.5/', status: 200 } });
   assert.deepEqual(cf('', '/upgrade-guide/3.5').hops, [hop('/upgrade-guide/3.5', '/upgrade-guide/3.5/', 308)]);
   assert.deepEqual(cf('', '/files/guide.pdf').hops, []);
+});
+
+test('vercel: office, media and archive types count as files in any letter case; a found extension is added', () => {
+  const always = { redirects: vercelRules([], 'always') };
+  for (const file of ['/files/report.docx', '/files/Photo.Jpg']) assert.deepEqual(vc(always, file).hops, [], file);
+  // Not in the base list: redirected unless the compiler found the extension in the site's files.
+  assert.deepEqual(vc(always, '/files/data.Qxz').hops, [hop('/files/data.Qxz', '/files/data.Qxz/', 308)]);
+  const found = { redirects: vercelRules([], 'always', ['Qxz']) };
+  assert.deepEqual(vc(found, '/files/data.Qxz').hops, []);
+  assert.deepEqual(vc(found, '/upgrade-guide/3.5').hops, [hop('/upgrade-guide/3.5', '/upgrade-guide/3.5/', 308)]);
 });

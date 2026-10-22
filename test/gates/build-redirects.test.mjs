@@ -1,12 +1,13 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { parseRedirectsFile, resolveCloudflare } from '../../skills/parity-gates/scripts/lib/cloudflare-resolver.mjs';
+import { resolveVercel } from '../../skills/parity-gates/scripts/lib/vercel-resolver.mjs';
 
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../skills/parity-gates/scripts/build-redirects.mjs', import.meta.url));
@@ -204,6 +205,29 @@ test('cloudflare: --routes writes a 200 rewrite line per feed, which the resolve
   assert.doesNotMatch(text, /old-feed/);
 });
 
+test('vercel: every file extension in dist/ (else public/) joins the slash rules, so the site\'s own files keep their URL', async () => {
+  const site = join(root, 'scan');
+  const put = (rel) => {
+    mkdirSync(join(site, rel, '..'), { recursive: true });
+    writeFileSync(join(site, rel), 'x');
+  };
+  put('public/files/data.Qxz');
+  writeFileSync(join(site, 'redirects.csv'), `${HEADER}\n`);
+  const run = async () => {
+    const { stdout, stderr } = await exec(process.execPath, [SCRIPT, '--host', 'vercel'], { cwd: site });
+    return { stdout, stderr, config: JSON.parse(readFileSync(join(site, 'vercel.json'), 'utf8')) };
+  };
+  const fromPublic = await run();
+  assert.match(fromPublic.stdout, /1 extension\(s\) found in public/);
+  assert.deepEqual(resolveVercel('/files/data.Qxz', { config: fromPublic.config, dist: join(site, 'public') }).hops, []);
+  put('dist/files/data.Qxz');
+  put('dist/files/sheet.zzk');
+  const fromDist = await run();
+  assert.match(fromDist.stdout, /2 extension\(s\) found in dist/);
+  assert.match(fromDist.stdout, /trailing slash always/, 'the mode is read back from rules that hold found extensions');
+  assert.deepEqual(resolveVercel('/files/sheet.zzk', { config: fromDist.config, dist: join(site, 'dist') }).hops, []);
+});
+
 test('usage errors exit 2; --help exits 0 and notes static-file precedence', async () => {
   assert.equal((await compile(['--host', 'netlify', '--csv', csv('u.csv', ROWS)])).code, 2);
   assert.equal((await compile(['--host', 'vercel', '--csv', join(root, 'nope.csv')])).code, 2);
@@ -213,5 +237,6 @@ test('usage errors exit 2; --help exits 0 and notes static-file precedence', asy
   assert.ok(!existsSync(join(root, 'x.json')));
   const help = await compile(['--help']);
   assert.equal(help.code, 0);
+  assert.match(help.stdout, /dist\/ when it exists, else public\//);
   assert.match(help.stdout, /static file/i);
 });

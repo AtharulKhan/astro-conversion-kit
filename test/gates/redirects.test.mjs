@@ -264,6 +264,14 @@ test('every built page and file is requested through the rules: one the rules re
   assert.match(failed.stdout, /^ {2}\d+ built pages and files requested through the rules: 1 redirected$/m);
 });
 
+test('a built file whose extension the compiler never saw is caught as redirected', async () => {
+  const dist = makeDist(join(root, 'dist-unknown-ext'));
+  writeFileSync(join(dist, 'wp-content', 'uploads', '2026', '01', 'data.Qxz'), 'x');
+  const result = await gate(vercelDir, dist);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/wp-content\/uploads\/2026\/01\/data\.Qxz redirected: expected "no redirect", got "built file redirected by rule [^"]+: 308 \/wp-content\/uploads\/2026\/01\/data\.Qxz\/"$/m);
+});
+
 test('usage and missing inputs exit 2; --help exits 0', async () => {
   assert.equal((await gate(vercelDir, good, ['--bogus'])).code, 2);
   assert.equal((await gate(vercelDir, join(root, 'nope'))).code, 2);
@@ -272,4 +280,5 @@ test('usage and missing inputs exit 2; --help exits 0', async () => {
   const help = await runGate('redirects', ['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /--host/);
+  assert.match(help.stdout, /cannot be excepted/);
 });
