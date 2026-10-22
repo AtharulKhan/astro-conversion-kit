@@ -138,6 +138,10 @@ loading `/cdn-cgi/challenge-platform/`; others send a tiny page with no title, o
 redirects to a captcha path. Every page then looks the same, so a capture of it is worthless.
 
 - `fingerprint` prints `blocked: <host> anti-bot challenge (<cause>)` and exits 3.
+- A tiny untitled page alone (no known signature) stops a run only as the capture's first HTML
+  answer or the third in a row; a single one mid-crawl (a stub, an empty archive) is recorded
+  with status `"suspect-challenge"`, listed under `## Notes`, and the crawl goes on. Open each
+  in a browser and note whether it is a real page.
 - `capture` stops at the first challenge on the site (exit 3, state saved): the URL is in
   `inventory.json` with status `"challenge"` (never counted as a page) and in `meta.json`
   `challenge`, and the README's `## Notes` name the cause. It is never retried: waiting does not

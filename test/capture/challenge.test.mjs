@@ -66,3 +66,9 @@ test('ordinary answers are not challenges', () => {
   assert.equal(detectChallenge({ status: 0, headers: {}, body: '' }), null);
   assert.equal(detectChallenge({ status: 'too-large', headers: html, body: '' }), null);
 });
+
+test('known signatures are "signature"; the tiny-page rule alone is "heuristic"', () => {
+  assert.equal(detectChallenge({ status: 202, headers: html, body: SITEGROUND }).kind, 'signature');
+  assert.equal(detectChallenge({ status: 403, headers: { ...html, 'cf-mitigated': 'challenge' }, body: '' }).kind, 'signature');
+  assert.equal(detectChallenge({ status: 200, headers: html, body: '<html><body></body></html>' }).kind, 'heuristic');
+});

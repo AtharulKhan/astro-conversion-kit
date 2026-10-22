@@ -11,6 +11,8 @@
 // CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
 // A bot challenge (lib/challenge.mjs) on any page or discovery request stops the run at once:
 // the URL is recorded with status "challenge" (never a page) and queued again for --resume.
+// The tiny-untitled-page rule alone stops it only on the capture's first HTML response or on
+// SUSPECT_LIMIT such responses in a row; a single one mid-crawl is a "suspect-challenge" row.
 // After the crawl one path that cannot exist (/<32 hex>/) is requested once, so the site's own
 // 404 page lands in pages/404.html and meta.json `notFound` (it is not a route).
 import { createHash, randomBytes } from 'node:crypto';
@@ -28,7 +30,7 @@ import { dumpWpRest } from './lib/wp-rest.mjs';
 import { CDX_ENDPOINT, WAYBACK_FILE, waybackPaths } from './lib/wayback.mjs';
 import { extensionOf, NEVER, NOT_PAGES, PAGE_EXTENSIONS } from './lib/page-rules.mjs';
 import { cssImports } from './lib/css-urls.mjs';
-import { CHALLENGE, detectChallenge } from './lib/challenge.mjs';
+import { CHALLENGE, SUSPECT, detectChallenge } from './lib/challenge.mjs';
 import { parse } from 'parse5';
 
 const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
@@ -72,7 +74,8 @@ Each URL is tried 3 times; one that still answers 403, 429, 503 or a network err
 recorded with that status and its attempts, and the crawl moves on.
 An anti-bot challenge (SiteGround's /.well-known/sgcaptcha/, Cloudflare's challenge page, a
 tiny page with no title) is never retried and never counted as a page: the run stops at the
-first one with "blocked: <host> anti-bot challenge (<cause>)", the URL recorded with status
+first one (a tiny untitled page only when it is the first HTML answer or the third in a row;
+a single one mid-crawl is recorded "suspect-challenge" and the crawl goes on) with "blocked: <host> anti-bot challenge (<cause>)", the URL recorded with status
 "challenge" in inventory.json and meta.json, and queued again for --resume.
 Exit codes: 0 done, 2 usage error, 3 stopped because 3 different URLs in a row used up their
 tries, the site cannot be reached, it answered with a bot challenge (resume with --resume
@@ -88,6 +91,8 @@ const IMPORT_MAX_DEPTH = 5;
 // REST list closed for good is that URL's answer, not a sign the site is blocking the crawl).
 const PERMANENT_BLOCK = 403;
 const MAX_HOPS = 10;
+// HTML responses in a row matching only the tiny-page heuristic that stop the run.
+const SUSPECT_LIMIT = 3;
 const MAX_ATTEMPTS = 3;
 const RETRY_MIN_MS = 500;
 const SAVE_EVERY = 25;
@@ -242,7 +247,9 @@ class Crawler {
     // A challenge row only marks where the last run stopped: that URL is asked again.
     state.records = state.records.filter((r) => r.status !== CHALLENGE);
     delete state.challenge;
+    state.firstHtmlSeen ??= state.records.some((r) => r.status === 200);
     this.state = state;
+    this.suspects = []; // items whose HTML answers in a row matched the tiny-page heuristic only
     this.out = out;
     this.fetch = fetch;
     this.delayMs = delayMs;
@@ -294,8 +301,8 @@ class Crawler {
     return async (url, options) => {
       for (let attempt = 1; ; attempt += 1) {
         const res = await this.fetch(url, options);
-        const found = detectChallenge(res);
-        if (found) throw new Challenged(url, found);
+        const verdict = this.judge(res);
+        if (verdict?.stop) throw new Challenged(url, verdict.stop);
         if (!BLOCK_STATUSES.has(res.status)) {
           this.noteOk();
           const path = new URL(url).pathname;
@@ -371,10 +378,37 @@ class Crawler {
     saveState(this.out, this.state);
   }
 
+  // How much a challenge match weighs. A signature (SiteGround, Cloudflare, a redirect to a
+  // captcha path) stops the run at once. The tiny-page heuristic stops it only on the capture's
+  // first HTML response, or on the SUSPECT_LIMIT-th such response in a row (the earlier ones are
+  // queued again with it); otherwise it is a suspect. Any other HTML answer resets the streak.
+  // Returns null, { stop, requeue[] } or { suspect }.
+  judge(res, item = null) {
+    const found = detectChallenge(res);
+    if (!found) {
+      if (HTML_TYPE.test(res.headers?.['content-type'] ?? '')) {
+        this.state.firstHtmlSeen = true;
+        this.suspects = [];
+      }
+      return null;
+    }
+    if (found.kind === 'signature' || !this.state.firstHtmlSeen) return { stop: found, requeue: [] };
+    this.suspects.push(item);
+    if (this.suspects.length < SUSPECT_LIMIT) return { suspect: found };
+    const requeue = this.suspects.slice(0, -1).filter(Boolean).map((i) => ({ url: i.url, attempts: 0, kind: i.kind }));
+    this.suspects = [];
+    return { stop: found, requeue };
+  }
+
   // Where the run stopped on a challenge: state.challenge for meta.json, and (for a page) an
-  // inventory row with status "challenge" and no snapshot.
-  noteChallenge(url, found, { row = true } = {}) {
+  // inventory row with status "challenge" and no snapshot. Suspect rows queued again with it
+  // become "challenge" rows too, so a resume asks for them again.
+  noteChallenge(url, found, { row = true, requeue = [] } = {}) {
     this.state.challenge = { url, path: pathOf(url), provider: found.provider, cause: found.cause };
+    for (const { url: again } of requeue) {
+      for (const r of [this.state.records.find((x) => x.url === again), this.full.get(again)]) if (r) r.status = CHALLENGE;
+      this.recorded.delete(again);
+    }
     if (row) this.addRecord({ ...extractPage('', url, { status: CHALLENGE, finalUrl: url }), challenge: found.cause });
   }
 
@@ -385,12 +419,12 @@ class Crawler {
     const path = `/${randomBytes(16).toString('hex')}/`;
     const url = new URL(path, this.state.canonicalOrigin).href;
     const res = await this.fetch(url, { redirect: 'manual' });
-    const found = detectChallenge(res);
-    if (found) {
-      this.noteChallenge(url, found, { row: false });
+    const verdict = this.judge(res);
+    if (verdict?.stop) {
+      this.noteChallenge(url, verdict.stop, { row: false });
       return 'challenge';
     }
-    const entry = { path, status: res.status, snapshot: null, text: null };
+    const entry = { path, status: verdict?.suspect ? SUSPECT : res.status, snapshot: null, text: null };
     const location = res.headers?.location;
     if (res.status >= 300 && res.status < 400 && location) {
       const to = new URL(location, url);
@@ -410,16 +444,17 @@ class Crawler {
     return 'done';
   }
 
-  // Follow one URL's redirects by hand. Returns { blocked, status }, { challenge } or
-  // { res, finalUrl, chain[] }.
+  // Follow one URL's redirects by hand. Returns { blocked, status }, { challenge, requeue[] } or
+  // { res, finalUrl, chain[] } (res.suspect set when the page is a suspected challenge).
   // A hop to another site, a forbidden path, a file or a loop ends the chain without a request.
-  async fetchChain(start) {
+  async fetchChain(start, item = null) {
     const chain = [];
     let current = start;
     for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
       const res = await this.fetch(current, { redirect: 'manual' });
-      const found = detectChallenge(res);
-      if (found) return { challenge: found };
+      const verdict = this.judge(res, item);
+      if (verdict?.stop) return { challenge: verdict.stop, requeue: verdict.requeue };
+      if (verdict?.suspect) res.suspect = verdict.suspect;
       if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
       const location = res.headers?.location;
       if (res.status < 300 || res.status >= 400 || !location) return { res, finalUrl: current, chain };
@@ -451,6 +486,10 @@ class Crawler {
 
   record(key, res, kind = 'page', extra = {}) {
     this.recorded.add(key);
+    if (res.suspect) {
+      this.addRecord({ ...extractPage('', key, { status: SUSPECT, finalUrl: key }), challenge: res.suspect.cause });
+      return;
+    }
     const type = res.headers?.['content-type'] ?? '';
     const body = typeof res.body === 'string' ? res.body : '';
     if (res.status === 200 && (FEED_TYPE.test(type) || (kind === 'feed' && !HTML_TYPE.test(type)))) {
@@ -678,8 +717,8 @@ class Crawler {
   }
 
   async visit(item) {
-    const result = await this.fetchChain(item.url);
-    if (result.challenge) this.noteChallenge(item.url, result.challenge);
+    const result = await this.fetchChain(item.url, item);
+    if (result.challenge) this.noteChallenge(item.url, result.challenge, { requeue: result.requeue });
     if (result.blocked || result.challenge) return result;
     const { res, chain } = result;
     if (chain.length === 0) {
@@ -769,7 +808,7 @@ class Crawler {
       this.lastVisited = item.url;
       const result = await visit(item);
       if (result.challenge) {
-        queue.unshift(item);
+        queue.unshift(...(result.requeue ?? []), item);
         settle();
         return 'challenge';
       }

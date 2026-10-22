@@ -868,3 +868,63 @@ test('every sitemap robots.txt names is fetched, saved under sitemaps/ and crawl
     await stub.close();
   }
 });
+
+const untitled = { body: '<html><body><p>tiny</p></body></html>' };
+const titledPage = (title, links = '') => ({ body: `<html><head><title>${title}</title></head><body>${links}</body></html>` });
+
+test('a tiny untitled page as the first HTML response stops the capture as a challenge', async () => {
+  const stub = await startStub({ '/': untitled });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 3, run.stderr);
+    assert.match(run.stderr, /^blocked: 127\.0\.0\.1 anti-bot challenge \(200 with a \d+-byte page and no title\)/m);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:challenge']);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a single tiny untitled page mid-crawl is recorded "suspect-challenge" with a README note, and the crawl goes on', async () => {
+  const stub = await startStub({
+    '/': titledPage('Home', '<a href="/empty/">e</a> <a href="/b/">b</a>'),
+    '/empty/': untitled,
+    '/b/': titledPage('B'),
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const inventory = readJson(out, 'inventory.json');
+    assert.deepEqual(inventory.map((r) => `${r.path}:${r.status}`), ['/:200', '/b/:200', '/empty/:suspect-challenge']);
+    const suspect = inventory.find((r) => r.path === '/empty/');
+    assert.equal(suspect.snapshot, null);
+    assert.match(suspect.challenge, /no title/);
+    assert.equal(readJson(out, 'meta.json').challenge, null);
+    assert.match(await readme(out), /^- Suspected bot challenge, not captured: \/empty\/ \(200 with a \d+-byte page and no title\)/m);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('three tiny untitled pages in a row stop the capture; all three are queued again for --resume', async () => {
+  const stub = await startStub({
+    '/': titledPage('Home', '<a href="/a/">a</a> <a href="/b/">b</a> <a href="/c/">c</a> <a href="/d/">d</a>'),
+    '/a/': untitled,
+    '/b/': untitled,
+    '/c/': untitled,
+    '/d/': titledPage('D'),
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 3, run.stderr);
+    assert.match(run.stderr, /^blocked: 127\.0\.0\.1 anti-bot challenge \(/m);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/a/:challenge', '/b/:challenge', '/c/:challenge']);
+    const state = readJson(out, 'state.json');
+    assert.deepEqual(state.queue.slice(0, 3).map((q) => new URL(q.url).pathname), ['/a/', '/b/', '/c/']);
+    assert.ok(!stub.requests.includes('/d/'), 'the crawl stopped');
+  } finally {
+    await stub.close();
+  }
+});
