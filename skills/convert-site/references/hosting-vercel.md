@@ -21,9 +21,11 @@ protection file below:
 
 **Scope.** The CLI runs non-interactively for an agent: `link` without `--scope` exits 1 with a
 JSON `missing_scope` answer and creates nothing, and it never picks a team for you. The scope is
-a team slug from `npx vercel teams ls`. A personal account's scope is its own team slug (for
-example `ethans-projects-xxxx`), not the username: `--scope <username>` is rejected ("You cannot
-set your Personal Account as the scope").
+`intake.vercelScope`: preflight's `vercel.scope` (the default team's slug, read with `vercel
+teams ls --json` and the user's `defaultTeamId`) unless the person named another. A personal
+account's scope is its own team slug (for example `<name>s-projects-xxxx`), never the username:
+`--scope <username>` is rejected ("You cannot set your Personal Account as the scope"). When
+`intake.vercelScope` is null, do not link; the link is a needs-you line.
 
 **Link.** `link --yes` creates the project when it does not exist, writes `.vercel/`, connects
 the GitHub repository from the local git remote (production branch `main`, so the person's merge

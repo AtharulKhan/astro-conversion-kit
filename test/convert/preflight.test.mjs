@@ -78,7 +78,7 @@ test('fake gh is logged in, missing vercel is not present', (t) => {
   assert.equal(report.node.version, process.versions.node);
   assert.equal(report.node.ok, true);
   assert.deepEqual(report.tools.gh, { present: true, version: '2.70.0', loggedIn: true });
-  assert.deepEqual(report.tools.vercel, { present: false, version: null, loggedIn: false, via: null });
+  assert.deepEqual(report.tools.vercel, { present: false, version: null, loggedIn: false, via: null, scope: null });
   assert.equal(report.tools.wrangler.present, false);
   assert.equal(report.tools.git.present, false);
   assert.equal(typeof report.playwright.chromium, 'boolean');
@@ -108,7 +108,7 @@ test('a CLI that says it is not authenticated is not logged in', (t) => {
   ].join('\n'));
   const report = runJson(['--home', home, '--path-env', bin]);
   assert.deepEqual(report.tools.wrangler, { present: true, version: '4.20.1', loggedIn: false, via: 'path' });
-  assert.deepEqual(report.tools.vercel, { present: true, version: '44.2.0', loggedIn: false, via: 'path' });
+  assert.deepEqual(report.tools.vercel, { present: true, version: '44.2.0', loggedIn: false, via: 'path', scope: null });
 });
 
 // A fake npx that runs an installed vercel (not on PATH) and knows no wrangler, as
@@ -133,11 +133,65 @@ test('vercel and wrangler are found through npx --no-install, then on PATH', (t)
     'echo "you@example.com"; exit 0',
   ].join('\n'));
   const report = runJson(['--home', home, '--path-env', bin]);
-  assert.deepEqual(report.tools.vercel, { present: true, version: '50.1.0', loggedIn: true, via: 'npx' });
+  assert.deepEqual(report.tools.vercel, { present: true, version: '50.1.0', loggedIn: true, via: 'npx', scope: null });
   assert.deepEqual(report.tools.wrangler, { present: true, version: '4.20.1', loggedIn: true, via: 'path' });
   const calls = readFileSync(log, 'utf8').trim().split('\n');
   assert.ok(calls.includes('--no-install vercel whoami'), calls.join('\n'));
   assert.ok(calls.every((c) => c.startsWith('--no-install ')), 'never lets npx install');
+});
+
+// A logged-in Vercel CLI 65 on an account in several teams, as the jquery.com runs met it:
+// `teams ls --json` marks none current, `api /v2/user` without --scope answers missing_scope, and
+// with any team's scope it returns the user and its defaultTeamId (the personal team).
+function fakeTeamsNpx(dir, log, { current = false, teams = 'ok' } = {}) {
+  const list = JSON.stringify({ teams: [
+    { id: 'team_other', slug: 'agency-team', name: 'Agency', current: false },
+    { id: 'team_personal', slug: 'fixture-users-projects-1a2b', name: 'Fixture projects', current },
+  ], pagination: { count: 2, next: null } });
+  fakeBin(dir, 'npx', [
+    `echo "$@" >> "${log}"`,
+    'if [ "$2" = "vercel" ] && [ "$3" = "--version" ]; then echo "Vercel CLI 65.1.0"; exit 0; fi',
+    'if [ "$2" = "vercel" ] && [ "$3" = "whoami" ]; then echo "fixture-user"; exit 0; fi',
+    teams === 'ok'
+      ? `if [ "$2" = "vercel" ] && [ "$3" = "teams" ] && [ "$4" = "ls" ] && [ "$5" = "--json" ]; then echo '${list}'; exit 0; fi`
+      : 'if [ "$2" = "vercel" ] && [ "$3" = "teams" ]; then echo "Error: offline" >&2; exit 1; fi',
+    'if [ "$2" = "vercel" ] && [ "$3" = "api" ] && [ "$4" = "/v2/user" ] && [ "$5" = "--scope" ]; then',
+    `  echo '{"user":{"id":"u1","username":"fixture-user","email":"user@example.com","defaultTeamId":"team_personal"}}'; exit 0`,
+    'fi',
+    `if [ "$2" = "vercel" ] && [ "$3" = "api" ]; then echo '{"status":"action_required","reason":"missing_scope"}'; exit 1; fi`,
+    'echo "npm error could not determine executable to run" >&2; exit 1',
+  ].join('\n'));
+}
+
+test('vercel.scope is the default team slug: from teams ls when one is current, else the user\'s defaultTeamId', (t) => {
+  const bin = tempDir(t, 'preflight-bin-');
+  const home = tempDir(t, 'preflight-home-');
+  const log = join(home, 'npx.log');
+  fakeTeamsNpx(bin, log);
+  const report = runJson(['--home', home, '--path-env', bin]);
+  assert.deepEqual(report.tools.vercel, { present: true, version: '65.1.0', loggedIn: true, via: 'npx', scope: 'fixture-users-projects-1a2b' });
+  const calls = readFileSync(log, 'utf8').trim().split('\n');
+  assert.ok(calls.includes('--no-install vercel teams ls --json'), calls.join('\n'));
+  assert.ok(calls.includes('--no-install vercel api /v2/user --scope agency-team'), calls.join('\n'));
+  assert.ok(!calls.some((c) => /--scope fixture-user\b/.test(c)), 'the username is never a scope');
+  assert.ok(!readFileSync(log, 'utf8').includes('example.com'), 'nothing the API returns is logged');
+
+  const current = tempDir(t, 'preflight-bin-');
+  const currentLog = join(home, 'npx-current.log');
+  fakeTeamsNpx(current, currentLog, { current: true });
+  assert.equal(runJson(['--home', home, '--path-env', current]).tools.vercel.scope, 'fixture-users-projects-1a2b');
+  assert.ok(!readFileSync(currentLog, 'utf8').includes('/v2/user'), 'a current team needs no second call');
+});
+
+test('vercel.scope is null when the team list cannot be read, and the human report names the scope', (t) => {
+  const bin = tempDir(t, 'preflight-bin-');
+  const home = tempDir(t, 'preflight-home-');
+  fakeTeamsNpx(bin, join(home, 'npx.log'), { teams: 'offline' });
+  assert.equal(runJson(['--home', home, '--path-env', bin]).tools.vercel.scope, null);
+  const ok = tempDir(t, 'preflight-bin-');
+  fakeTeamsNpx(ok, join(home, 'npx-ok.log'));
+  const human = run(['--home', home, '--path-env', ok]);
+  assert.match(human.stdout, /vercel\s+65\.1\.0\s+logged in\s+scope fixture-users-projects-1a2b/);
 });
 
 // Vercel CLI 65 logged out, as the live proof recorded it: `whoami` prints "> Logged out." and a
@@ -162,7 +216,7 @@ test('a logged-out vercel (exit 1, "> Logged out.") is present and not logged in
   const log = join(home, 'npx.log');
   fakeLoggedOutNpx(bin, log, 1);
   const report = runJson(['--home', home, '--path-env', bin], { HOME: '/home/fixture-real' });
-  assert.deepEqual(report.tools.vercel, { present: true, version: '65.1.0', loggedIn: false, via: 'npx' });
+  assert.deepEqual(report.tools.vercel, { present: true, version: '65.1.0', loggedIn: false, via: 'npx', scope: null });
   const calls = readFileSync(log, 'utf8').trim().split('\n');
   // The npx cache lives under HOME: the probe keeps the person's HOME, never --home or an empty one.
   assert.ok(calls.every((c) => c.endsWith(' HOME=/home/fixture-real')), calls.join('\n'));

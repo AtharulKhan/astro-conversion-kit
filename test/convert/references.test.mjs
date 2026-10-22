@@ -43,7 +43,8 @@ test('build-rules.md copies media outside the prefix; SKILL.md names routes as a
 
 test('intake.md: the message asks only what the owner knows, the Vercel team included', () => {
   const template = read('references/intake.md').split('## The template')[1].split('\n## ')[0];
-  assert.match(template.replace(/\s+/g, ' '), /Default: the team `npx vercel teams ls` marks as current/);
+  assert.match(template.replace(/\s+/g, ' '), /Default: your default team \(<preflight.s vercel\.scope>\)/);
+  assert.match(read('references/intake.md').replace(/\s+/g, ' '), /`intake\.vercelScope` is preflight.s `vercel\.scope`/);
   assert.match(template.replace(/\s+/g, ' '), /May the staging deployments be public before launch\? Default: no/);
   assert.match(read('references/intake.md'), /"publicStaging":false/);
   for (const asked of [/Repository\./, /Hosting\./, /Vercel team/, /`npx vercel teams ls`/, /Domain\./, /Test address\./, /Search Console\./, /Consent/]) {
@@ -64,7 +65,8 @@ test('hosting-vercel.md: link with the team slug, protect every deployment, depl
   const at = steps.map((s) => vercel.indexOf(`    ${s}\n`));
   assert.ok(at.every((i) => i > 0) && at.every((i, n) => n === 0 || at[n - 1] < i), 'the four steps in order');
   const flat = vercel.replace(/\s+/g, ' ');
-  assert.match(flat, /not the username/);
+  assert.match(flat, /never the username/);
+  assert.match(flat, /preflight.s `vercel\.scope`/);
   assert.match(flat, /`npx vercel teams ls`/);
   assert.match(flat, /`\.env\.local` holding a `VERCEL_OIDC_TOKEN`/);
   assert.match(flat, /`vercel git connect` is not needed after `link`/);

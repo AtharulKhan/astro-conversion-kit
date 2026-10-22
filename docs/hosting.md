@@ -19,8 +19,8 @@ whatever the host's protection settings are, so a leaked staging link does not g
 
 **Project.** A static project with no framework adapter. `npx vercel link --yes --project <name>
 --scope <team slug>` creates it: an agent's CLI never picks a team, and a personal account's scope
-is its team slug from `npx vercel teams ls` (for example `ethans-projects-xxxx`), not the
-username. `link` also connects the GitHub repository and writes `.env.local` with a
+is its team slug (for example `<name>s-projects-xxxx`), not the username. `preflight.mjs` reports
+the default team's slug as `vercel.scope`, and the intake records it as `intake.vercelScope`. `link` also connects the GitHub repository and writes `.env.local` with a
 `VERCEL_OIDC_TOKEN`, so `.vercel` and `.env*` stay in `.gitignore`. The CLI does not read
 `.gitignore` when it uploads; the scaffold's `.vercelignore` keeps `dist/`, run state, review
 output and screenshots out, while `capture/` is uploaded because the build reads it.

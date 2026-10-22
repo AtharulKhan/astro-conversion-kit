@@ -34,9 +34,10 @@ opening explaining what a repository, a staging deploy and a pull request are.
        I'll create a project and a noindexed staging deploy." Not logged in: "Run `npx vercel
        login` (or `npx wrangler login`) if you want a staging deploy; otherwise you get a local
        preview and the deploy is on your list.">
-       <Vercel: "Which Vercel team should the project live in? Default: the team `npx vercel teams ls`
-       marks as current (<current slug>). A personal account is its own team slug there, not
-       your username." And: "May the staging deployments be public before launch? Default: no;
+       <Vercel: "Which Vercel team should the project live in? Default: your default team
+       (<preflight's vercel.scope>). A personal account is its own team slug, not your
+       username." When preflight's `vercel.scope` is null: "Default: none; name the team slug
+       from `npx vercel teams ls`, or the deploy goes on your list." And: "May the staging deployments be public before launch? Default: no;
        every deployment stays behind Vercel's login, and you create a bypass secret so I can
        check it. Yes: anyone with the link can open it (it stays noindexed).">
     3. Domain. Default: <host of LIVE> stays the domain; the new site replaces the old one there
@@ -89,8 +90,10 @@ lives in `$SITE/.conversion/` from the start; `init-site.mjs` scaffolds around i
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set repo '"<owner>/<slug>"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":"<team slug>","publicStaging":false,"consent":[],"keepPages":[],"components":false}'
 
-`vercelScope` is always a slug from `npx vercel teams ls` (the current one by default): the CLI
-refuses a link without one, and refuses the username. `publicStaging` is the staging-protection
+`intake.vercelScope` is preflight's `vercel.scope` (the default team's slug) unless the person
+named another team slug; never the username, which the CLI refuses ("You cannot set your
+Personal Account as the scope"), and never a team you picked yourself. With no scope from
+either, it is `null` and the link goes on the needs-you list. `publicStaging` is the staging-protection
 answer (`false` unless the person said yes); record it as a decision too (topic "staging
 protection"), so `docs/plan.md` and the PR show it.
 

@@ -20,6 +20,12 @@ Reports the tools a conversion needs and whether each CLI is logged in:
             probed as \`npx --no-install <cli> --version\` and \`... whoami\` (never
             installing anything), then as a binary on PATH; via says which
             answered ("npx", "path", or null when neither did)
+            vercel also reports scope: the default team's slug, the value every
+            \`--scope\` takes (a personal account's is its own team slug, never the
+            username), or null when it cannot be read. It is the team \`vercel
+            teams ls --json\` marks current, else the one whose id is the user's
+            defaultTeamId (\`vercel api /v2/user --scope <any listed team>\`;
+            without a scope the CLI refuses to pick one). Read-only calls.
   playwright chromium installed or not
   experience new | some | experienced, from two signals: at least 10 git
             repositories directly under the parent of the current directory,
@@ -146,12 +152,53 @@ async function checkNpxTool(name, loginArgs, pathEnv) {
       const version = versionRun.output.match(/\d+\.\d+\.\d+/)?.[0] ?? null;
       const login = await probe(npx, ['--no-install', name, ...loginArgs], pathEnv);
       const loggedIn = login.code === 0 && !NOT_LOGGED_IN_RE.test(login.output);
-      return { present: true, version, loggedIn, via: 'npx' };
+      return { present: true, version, loggedIn, via: 'npx', run: (args) => probe(npx, ['--no-install', name, ...args], pathEnv) };
     }
   }
   const onPath = await checkTool(name, loginArgs, pathEnv);
-  return { ...onPath, via: onPath.present ? 'path' : null };
+  const file = onPath.present ? findBinary(name, pathEnv) : null;
+  return { ...onPath, via: onPath.present ? 'path' : null, run: (args) => probe(file, args, pathEnv) };
 }
+
+// The JSON object in a CLI's output (stderr progress lines around it are ignored), or null.
+function jsonIn(output) {
+  const start = output.indexOf('{');
+  const end = output.lastIndexOf('}');
+  if (start === -1 || end < start) return null;
+  try {
+    return JSON.parse(output.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+// The default Vercel team's slug: the current one in `teams ls --json`, else the team whose id is
+// the user's defaultTeamId. /v2/user needs some --scope in a non-interactive run; any listed team
+// answers it. Only the slug leaves this function.
+async function vercelScope(run) {
+  const listed = await run(['teams', 'ls', '--json']);
+  const teams = listed.code === 0 ? jsonIn(listed.output)?.teams : null;
+  if (!Array.isArray(teams) || teams.length === 0) return null;
+  const current = teams.find((team) => team?.current === true);
+  if (typeof current?.slug === 'string') return current.slug;
+  const asked = await run(['api', '/v2/user', '--scope', teams[0].slug]);
+  const id = asked.code === 0 ? jsonIn(asked.output)?.user?.defaultTeamId : null;
+  const slug = teams.find((team) => id && team?.id === id)?.slug;
+  return typeof slug === 'string' ? slug : null;
+}
+
+async function checkVercel(name, loginArgs, pathEnv) {
+  const { run, ...tool } = await checkNpxTool(name, loginArgs, pathEnv);
+  return { ...tool, scope: tool.loggedIn ? await vercelScope(run) : null };
+}
+
+async function checkNpx(name, loginArgs, pathEnv) {
+  const tool = await checkNpxTool(name, loginArgs, pathEnv);
+  delete tool.run;
+  return tool;
+}
+
+const CHECKS = { vercel: checkVercel, wrangler: checkNpx };
 
 async function hasChromium() {
   try {
@@ -180,7 +227,7 @@ function countDotfiles(home) {
 export async function preflight({ home = null, pathEnv = process.env.PATH ?? '' } = {}) {
   const names = Object.keys(TOOLS);
   const [results, chromium] = await Promise.all([
-    Promise.all(names.map((name) => (VIA_NPX.has(name) ? checkNpxTool : checkTool)(name, TOOLS[name], pathEnv))),
+    Promise.all(names.map((name) => (CHECKS[name] ?? checkTool)(name, TOOLS[name], pathEnv))),
     hasChromium(),
   ]);
   const tools = Object.fromEntries(names.map((name, i) => [name, results[i]]));
@@ -208,7 +255,8 @@ function formatReport(report) {
     let login = '';
     if (tool.loggedIn === true) login = 'logged in';
     else if (tool.loggedIn === false) login = 'not logged in';
-    const detail = tool.present ? `${tool.version ?? 'unknown'}  ${login}`.trim() : 'missing';
+    const scope = tool.scope ? `  scope ${tool.scope}` : '';
+    const detail = tool.present ? `${tool.version ?? 'unknown'}  ${login}${scope}`.trim() : 'missing';
     lines.push(`${name.padEnd(10)}${detail}`);
   }
   lines.push(`Playwright chromium: ${report.playwright.chromium ? 'installed' : 'missing'}`);
