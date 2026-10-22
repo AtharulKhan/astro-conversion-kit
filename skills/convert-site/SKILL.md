@@ -80,7 +80,7 @@ until the previous one's proof holds. Run `state.mjs` calls one at a time, never
 | 7 | `gates` | The full gates | `npm run verify` exits 0 |
 | 8 | `visual` | Every template at 390, 768, 1440; every page at 390 and 1440 | Every pair passes |
 | 9 | `components` | Optional, off by default (`references/components-optional.md`) | Gates and diffs still pass, one separate commit |
-| 10 | `prelaunch` | `pre-launch`, staging deploy, `verify-live`, `launch-audit`, one test submission | `pre-launch` exits 0 (or fails only on `placeholders.form-id`); audit blockers fixed or listed |
+| 10 | `prelaunch` | `pre-launch`, staging deploy, `verify-live`, `launch-audit`, one test submission | `pre-launch` exits 0, or fails only on what `references/phases.md` §10 accepts (`placeholders.form-id`, and the known slash-rule limitation); audit blockers fixed or listed |
 | 11 | `suggestions` | `suggest-improvements` with `gates.json` and `review/` | `docs/suggestions.md` with its "From the review" section |
 | 12 | `pr` | Runbook, push, PR, final report | The PR quotes gate output and every "Not covered" section |
 | 13 | launch | The person's, from `docs/LAUNCH.md` | `post-launch` checks the cutover and watches 30 days |
