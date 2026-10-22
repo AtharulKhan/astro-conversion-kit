@@ -713,7 +713,7 @@ export async function prelaunch({ site, live }) {
   try {
     await setState(site, 'staging', staging.origin);
     stagingLive = await npm(site, ['run', 'verify:live', '--', '--base', staging.origin, '--baseline', 'baseline', '--expect-noindex', '--delay', '0']);
-    audit = await node(site, kit('launch-audit', 'launch-audit.mjs'), ['--url', staging.origin, '--staging', '--old-url', live, '--out', join(site, 'review', 'launch-audit')], { timeout: 600_000 });
+    audit = await node(site, kit('launch-audit', 'launch-audit.mjs'), ['--url', staging.origin, '--staging', '--ignore-robots', '--old-url', live, '--out', join(site, 'review', 'launch-audit')], { timeout: 600_000 });
   } finally {
     await staging.close();
   }

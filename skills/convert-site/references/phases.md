@@ -307,8 +307,13 @@ accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`for
 Then the staging deploy (host file), and:
 
     npm run verify:live -- --base <staging url> --expect-noindex
-    node $KIT/skills/launch-audit/scripts/launch-audit.mjs --url <staging url> --staging --old-url $LIVE --out $SITE/review/launch-audit
+    node $KIT/skills/launch-audit/scripts/launch-audit.mjs --url <staging url> --staging --ignore-robots --old-url $LIVE --out $SITE/review/launch-audit
 
+`--ignore-robots` is a bare flag (`--ignore-robots true` prints the help): staging's robots.txt
+blocks everything, and without it the audit crawls no page. Links the captured content writes
+absolute to the live origin (as WordPress does) are off-origin on staging, so the audit crawls
+only what is linked relatively and lists the rest as dropped: copy that line into the PR's Not
+covered.
 On Vercel add `--bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"` to `verify:live` when that variable is
 set in your environment; with media in a store add `--media-manifest media-manifest.json`. Copy
 the audit's `baseline.json` and `redirects.csv` to `docs/launch/audit-baseline.json` and

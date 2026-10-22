@@ -132,6 +132,12 @@ test('10 prelaunch: prelaunch-reconcile exits 0, accepting only the two slash-ru
   assert.match(results.prelaunch.stagingLive.stdout, /^verify-live: \d+ checked, 0 failed$/m);
   ok(results.prelaunch.releaseLive);
   assert.equal(results.prelaunch.audit.code, 0, shown(results.prelaunch.audit));
+  // Staging's robots.txt blocks everything, so the audit crawls only with --ignore-robots. The
+  // fixture's content links are absolute to the live origin (as WordPress writes them), so on
+  // staging they are off-origin and dropped: the crawl reaches the pages linked relatively.
+  const crawl = R.readJson(file('review', 'launch-audit', 'crawl.json'));
+  assert.ok(crawl.pages.some((p) => p.status === 200 && new URL(p.url).pathname === '/'), JSON.stringify(crawl.pages));
+  assert.ok(crawl.dropped.some((d) => d.reason === 'off-origin'), 'absolute live links are named as dropped');
   assert.ok(existsSync(file('docs', 'launch', 'audit-baseline.json')));
 });
 
