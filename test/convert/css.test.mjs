@@ -168,7 +168,7 @@ test('pruning removes the unused rules, keeps pseudo rules and @font-face, and c
   assert.deepEqual(errors, []);
 
   const summary = readJson(report);
-  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'removedRules', 'uncoveredInline', 'unmatched']);
+  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'removedRules', 'uncoveredInline', 'unmatched', 'unresolvedImports']);
   assert.deepEqual(Object.keys(summary.keptBecause).sort(), ['atRule', 'pseudo', 'untestedMedia']);
   assert.deepEqual(summary.unmatched, []);
   assert.ok(summary.removedRules >= 20, `removedRules ${summary.removedRules}`);
@@ -262,6 +262,64 @@ test('an inline file no coverage saw is kept whole and listed, without failing t
   assert.ok(readFileSync(out, 'utf8').includes('/* inline <style> blocks of /about/ (inline-about.css) */\n.about-only { color: red; }'));
   assert.deepEqual(readJson(report).unmatched, []);
   assert.deepEqual(readJson(report).uncoveredInline, ['inline-about.css']);
+});
+
+test('an @import of a captured sheet is replaced by that sheet\'s pruned rules, in place and once; an uncaptured one is kept and reported', async () => {
+  const origin = 'https://www.example.com';
+  const dir = join(TMP, 'capture-imports');
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const files = {
+    // /old.css redirected to /new/main.css, so its relative imports resolve under /new/.
+    '1.css': '@import "part.css";\n@import url("print.css") print;\n@import url("https://cdn.example.com/blocked.css");\n@import "missing.css";\n'
+      + '.main { margin: 0; }\n.main-unused { margin: 1px; }\n',
+    '2.css': '@import "deep.css" layer(base);\n.part { padding: 0; }\n.part-unused { padding: 1px; }\n',
+    '3.css': '.print-only { display: none; }\n',
+    '4.css': '.deep { color: red; }\n.deep-unused { color: blue; }\n',
+  };
+  for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text);
+  const main = `${origin}/old.css`;
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify([
+    { file: '1.css', href: main, finalUrl: `${origin}/new/main.css`, pages: ['/'] },
+    { file: '2.css', href: `${origin}/new/part.css`, pages: ['/'], importedBy: [main] },
+    { file: '3.css', href: `${origin}/new/print.css`, pages: ['/'], importedBy: [main] },
+    { file: null, href: 'https://cdn.example.com/blocked.css', pages: ['/'], status: 'blocked-address', importedBy: [main] },
+    { file: null, href: `${origin}/new/missing.css`, pages: ['/'], status: 404, importedBy: [main] },
+    { file: '4.css', href: `${origin}/new/deep.css`, pages: ['/'], importedBy: [`${origin}/new/part.css`] },
+  ]));
+  const used = (text, selector) => {
+    const at = text.indexOf(selector);
+    return { text, usedRanges: [[at, text.indexOf('}', at) + 1]] };
+  };
+  // Coverage names a redirected sheet by where it ended up; the print sheet was never applied.
+  const coverageFile = join(TMP, 'imports-coverage.json');
+  writeFileSync(coverageFile, JSON.stringify({
+    [`${origin}/new/main.css`]: used(files['1.css'], '.main {'),
+    [`${origin}/new/part.css`]: used(files['2.css'], '.part {'),
+    [`${origin}/new/print.css`]: { text: files['3.css'], usedRanges: [] },
+    [`${origin}/new/deep.css`]: used(files['4.css'], '.deep {'),
+  }));
+  const out = join(TMP, 'imports.css');
+  const report = join(TMP, 'imports-report.json');
+  const result = await pruneCli(['--css', dir, '--coverage', coverageFile, '--out', out, '--report', report]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(readFileSync(out, 'utf8'), [
+    '@import url("https://cdn.example.com/blocked.css");',
+    '@import "/new/missing.css";',
+    '@layer base {\n.deep { color: red; }\n}',
+    '.part { padding: 0; }',
+    '@media print {\n.print-only { display: none; }\n}',
+    '.main { margin: 0; }',
+    '',
+  ].join('\n'));
+  const summary = readJson(report);
+  assert.deepEqual(summary.unresolvedImports, [
+    { file: '1.css', href: 'https://cdn.example.com/blocked.css', reason: 'blocked-address' },
+    { file: '1.css', href: `${origin}/new/missing.css`, reason: '404' },
+  ]);
+  assert.deepEqual(summary.unmatched, []);
+  assert.equal(summary.keptBecause.untestedMedia, 1, 'the print sheet is kept whole: no width tests it');
+  assert.match(result.stderr, /unresolved import in 1\.css: https:\/\/cdn\.example\.com\/blocked\.css \(blocked-address\)/);
 });
 
 test('rewriteRef makes same-origin references root-relative and leaves the rest alone', () => {

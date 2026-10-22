@@ -32,7 +32,13 @@ parity and this file is wrong: say so and fix this file.
 
 - Coverage first, then prune: `capture/css-coverage.json` (phase 2) and `css-prune.mjs` into
   `src/styles/site.css`, imported once by `Base.astro`. The pruned file is the stylesheet; it is
-  never rewritten, reformatted or "cleaned up".
+  never rewritten, reformatted or "cleaned up". The used rules of the head's `<style>` blocks
+  (WordPress emits several per page) are in it, each page's set under a comment naming its pages.
+  A captured `@import` is replaced by the imported sheet's pruned rules in place; one whose
+  target was not captured stays an `@import` and is listed under `unresolvedImports` in
+  `.conversion/css-prune-report.json`: check each one loads from the new site or restore its
+  rules. Exit 1 means a stylesheet file (`unmatched`) never appeared in coverage and was kept
+  whole: re-run coverage on the pages that link it.
 - **One stylesheet for every template** is the v0.1 default, recorded as a decision in the plan
   (topic "one pruned site.css", default "one file", cost if wrong "each page loads rules other
   templates use"). Splitting it per template is an improvement the suggestions report may

@@ -16,7 +16,8 @@ const HELP = `Usage: node css-prune.mjs --css <capture/css dir> --coverage cover
 Reads every .css file in --css (in capture/css/manifest.json order when present,
 [{ file, href|inline, pages[] }]), matches each to its coverage from
 css-coverage.mjs and writes one stylesheet in source order. Coverage URLs match
-a manifest href on path and query, ignoring the origin (then on path alone);
+a manifest href or finalUrl on path and query, ignoring the origin (then on
+path alone);
 without a manifest they match a file of the same basename. inline:<n> entries
 (one <style> block each) match every inline file (inline-<slug>.css, a page's
 blocks) that contains their text, trimmed, and serves one of their pages; an
@@ -27,7 +28,7 @@ Kept:
   - every rule whose selector contains :hover :focus :active :visited :target
     :checked ::before ::after :nth or :not( and, beyond those, ::selection
     ::placeholder :disabled :invalid :focus-visible :focus-within
-  - every @font-face, @keyframes, @import, @namespace, @layer statement and
+  - every @font-face, @keyframes, @namespace, @layer statement and
     @supports block, and everything inside @media (prefers-*)
   - every @media block that none of --widths satisfies (print, very wide or
     narrow queries, features this script cannot evaluate): no evidence, no removal
@@ -38,14 +39,25 @@ uncoveredInline, and does not change the exit code.
 
 Kept rules are copied from the source as written (comments inside them too);
 a pruned @media block is its original prelude around the kept rules.
-@import and @namespace rules, and @layer statements that come before a file's
-first style rule, are moved to the top of the output (layer statements first,
-in source order, then imports, then namespaces), because CSS only allows them
-there. This can change cascade order for an @import that sat between rules in
-a later file. @charset is dropped.
+
+An @import whose target is a captured file (its manifest href or finalUrl,
+resolved against the importing sheet's finalUrl or href) is dropped, and the
+target's pruned rules take its place, before the importer's own rules, inside
+the import's conditions (layer(x) as @layer x { }, supports() as @supports,
+a media list as @media). A sheet is emitted once, at the first place it is
+reached; a later import of it or its own place in the manifest adds nothing.
+A sheet imported under a media list none of --widths satisfies is kept whole.
+An @import whose target was not captured (blocked-address, too-deep, 404, or
+not in the manifest) is kept and listed in unresolvedImports.
+
+Kept @import and @namespace rules, and @layer statements that come before a
+file's first style rule, are moved to the top of the output (layer statements
+first, in source order, then imports, then namespaces), because CSS only allows
+them there. This can change cascade order for a kept @import that sat after
+an inlined one or in a later file. @charset is dropped.
 
 Relative url() and @import references are rewritten against the stylesheet's
-manifest href (inline blocks: the first of their pages): same-origin targets
+manifest finalUrl or href (inline blocks: the first of their pages): same-origin targets
 become root-relative paths, other origins stay absolute; data:, # and
 root-relative references are left alone. --origin is the site's origin; it
 defaults to the most common origin among the manifest's hrefs and pages
@@ -53,9 +65,10 @@ defaults to the most common origin among the manifest's hrefs and pages
 
 The report is { before: bytes, after: bytes, removedRules: n,
 keptBecause: { pseudo: n, atRule: n, untestedMedia: n }, unmatched: [file],
-uncoveredInline: [file] },
+uncoveredInline: [file], unresolvedImports: [{ file, href, reason }] },
 where keptBecause counts rules and blocks no page used that were kept by the
-exceptions above.
+exceptions above (untestedMedia also counts sheets imported under an untested
+media list).
 
   --widths  the viewport widths the coverage run used (default 390,768,1440)
 
@@ -208,6 +221,49 @@ function sliceWith(text, start, end, replacements) {
   return out + text.slice(at, end);
 }
 
+// --- @import -------------------------------------------------------------------
+
+// What an @import rule asks for: { href, layer, supports, media }. href is the target resolved
+// against the sheet's base (null when it cannot be), layer is null, '' (anonymous) or a name,
+// supports and media are the condition texts or null.
+function importParts(node, { text, base, siteOrigin }) {
+  const children = node.prelude?.children?.toArray() ?? [];
+  const at = children.findIndex((child) => child.type === 'Url' || child.type === 'String');
+  const parts = { href: null, layer: null, supports: null, media: null };
+  if (at === -1) return parts;
+  try {
+    const url = new URL(String(children[at].value).trim(), new URL(base ?? '/', siteOrigin ?? PLACEHOLDER));
+    if (/^https?:$/.test(url.protocol)) {
+      url.hash = '';
+      parts.href = url.href;
+    }
+  } catch {
+    // left unresolved
+  }
+  for (const child of children.slice(at + 1)) {
+    if (child.type === 'WhiteSpace') continue;
+    const fn = child.type === 'Function' ? child.name.toLowerCase() : null;
+    const inner = () => sourceOf(text, child).slice(child.name.length + 1, -1).trim();
+    if (parts.layer === null && child.type === 'Identifier' && child.name.toLowerCase() === 'layer') parts.layer = '';
+    else if (parts.layer === null && fn === 'layer') parts.layer = inner();
+    else if (parts.supports === null && fn === 'supports') parts.supports = inner();
+    else {
+      parts.media = text.slice(child.loc.start.offset, node.prelude.loc.end.offset).trim() || null;
+      break;
+    }
+  }
+  return parts;
+}
+
+// An imported sheet's kept text inside the conditions its @import put on it.
+function wrapImport(css, { layer, supports, media }) {
+  let out = css;
+  if (media) out = `@media ${media} {\n${out}\n}`;
+  if (supports) out = `@supports ${/^(\(|not\b|selector\()/i.test(supports) ? supports : `(${supports})`} {\n${out}\n}`;
+  if (layer !== null) out = `@layer${layer ? ` ${layer}` : ''} {\n${out}\n}`;
+  return out;
+}
+
 // --- pruning -------------------------------------------------------------------
 
 // Walks a list of rules and at-rules; returns the kept source text of each kept node.
@@ -241,6 +297,7 @@ function pruneList(list, ctx, header) {
     if (header && (HEADER.has(name) || (name === 'layer' && !node.block && preamble))) {
       if (!covered) counts.atRule += 1;
       header[name === 'layer' ? 'layers' : `${name}s`].push(emit(node));
+      if (name === 'import') ctx.importRefs.push(importParts(node, ctx));
       return;
     }
     preamble = false;
@@ -272,18 +329,22 @@ function pruneList(list, ctx, header) {
 }
 
 // Prunes one stylesheet's text against used [start, end] ranges into that text.
-// options: { base, siteOrigin, widths }. Returns { css, header, removedRules,
+// options: { base, siteOrigin, widths }. Returns { css, header, imports, removedRules,
 // keptBecause }; css holds the kept body, header the @layer statements, @import
-// and @namespace rules that a combined file must put first.
+// and @namespace rules that a combined file must put first, and imports what each
+// of header.imports asks for ({ href, layer, supports, media }, same order).
 export function pruneCss(text, usedRanges, { base, siteOrigin, widths = DEFAULT_WIDTHS } = {}) {
   const ast = csstree.parse(text, { positions: true });
   const counts = { pseudo: 0, atRule: 0, untestedMedia: 0, removedRules: 0 };
   const header = { layers: [], imports: [], namespaces: [] };
-  const ctx = { text, used: usedRanges, counts, widths, replacements: urlReplacements(ast, text, base, siteOrigin) };
+  const ctx = {
+    text, used: usedRanges, counts, widths, base, siteOrigin, importRefs: [], replacements: urlReplacements(ast, text, base, siteOrigin),
+  };
   const body = pruneList(ast.children, ctx, header);
   return {
     css: body.join('\n'),
     header,
+    imports: ctx.importRefs,
     removedRules: counts.removedRules,
     keptBecause: { pseudo: counts.pseudo, atRule: counts.atRule, untestedMedia: counts.untestedMedia },
   };
@@ -356,7 +417,7 @@ function listFiles(dir) {
   const byFile = new Map(manifest.filter((entry) => entry && names.includes(entry.file)).map((entry) => [entry.file, entry]));
   const ordered = [...byFile.keys(), ...names.filter((name) => !byFile.has(name))];
   const files = ordered.map((name) => ({ name, text: readFileSync(join(dir, name), 'utf8'), entry: byFile.get(name) }));
-  return { files, hasManifest };
+  return { files, hasManifest, manifest };
 }
 
 // The most common http(s) origin among the manifest's hrefs and pages, or
@@ -371,11 +432,14 @@ function guessOrigin(files, coverage) {
   return [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
+// A sheet is known by its href and, when it redirected, by where it ended up.
+const hrefsOf = (file) => [file.entry?.href, file.entry?.finalUrl].filter(Boolean);
+
 function findFileForUrl(files, key) {
   const withHref = files.filter((f) => f.entry?.href);
-  const exact = withHref.filter((f) => pathKey(f.entry.href, true) === pathKey(key, true));
+  const exact = withHref.filter((f) => hrefsOf(f).some((href) => pathKey(href, true) === pathKey(key, true)));
   if (exact.length) return exact[0];
-  const byPath = withHref.filter((f) => pathKey(f.entry.href, false) === pathKey(key, false));
+  const byPath = withHref.filter((f) => hrefsOf(f).some((href) => pathKey(href, false) === pathKey(key, false)));
   if (byPath.length === 1) return byPath[0];
   const byName = files.filter((f) => !f.entry?.href && f.name === urlBasename(key));
   return byName.length === 1 ? byName[0] : null;
@@ -433,7 +497,7 @@ function inlineComment(file) {
 }
 
 export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
-  const { files, hasManifest } = listFiles(css);
+  const { files, hasManifest, manifest } = listFiles(css);
   if (!files.length) throw new UsageError(`--css ${css} holds no .css files`);
   if (!hasManifest) console.error(`warning: no manifest.json in ${css}; relative url() references are resolved against the matched coverage URLs`);
   const siteOrigin = origin ?? guessOrigin(files, coverage);
@@ -441,14 +505,31 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
   const header = { layers: [], imports: [], namespaces: [] };
   const bodies = [];
   const report = {
-    before: 0, after: 0, removedRules: 0, keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0 }, unmatched: [], uncoveredInline: [],
+    before: 0,
+    after: 0,
+    removedRules: 0,
+    keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0 },
+    unmatched: [],
+    uncoveredInline: [],
+    unresolvedImports: [],
   };
-  for (const file of files) {
+  const emitted = new Set();
+
+  // Why an @import target is not among the captured files.
+  const unresolvedReason = (href) => {
+    const entry = href && manifest.find((e) => e?.href === href || e?.finalUrl === href);
+    if (!entry) return 'not captured';
+    return entry.file ? 'file missing' : String(entry.status ?? 'not saved');
+  };
+
+  // One file's kept text: the sheets it imports (each in place, inside the import's
+  // conditions, pruned in turn) and then its own rules. Each file is emitted once.
+  const render = (file, whole = false) => {
+    emitted.add(file.name);
     const slot = assigned.get(file.name);
     const inline = isInline(file);
     let used = slot.ranges;
     if (!slot.matched) {
-      used = [[0, file.text.length]];
       if (inline) {
         report.uncoveredInline.push(file.name);
         console.error(`no coverage saw the <style> blocks in ${file.name}${file.entry?.pages?.length ? ` (${file.entry.pages.join(', ')})` : ''}; kept them whole`);
@@ -457,13 +538,40 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
         console.error(`no coverage matched ${file.name}${file.entry?.href ? ` (${file.entry.href})` : ''}; kept it whole`);
       }
     }
-    const base = file.entry?.href ?? file.entry?.pages?.[0] ?? slot.url;
+    if (!slot.matched || whole) used = [[0, file.text.length]];
+    const base = file.entry?.finalUrl ?? file.entry?.href ?? file.entry?.pages?.[0] ?? slot.url;
     const result = pruneCss(file.text, used, { base, siteOrigin, widths });
-    for (const part of ['layers', 'imports', 'namespaces']) header[part].push(...result.header[part]);
-    if (result.css) bodies.push(inline ? `${inlineComment(file)}\n${result.css}` : result.css);
     report.before += Buffer.byteLength(file.text);
     report.removedRules += result.removedRules;
     for (const reason of Object.keys(report.keptBecause)) report.keptBecause[reason] += result.keptBecause[reason];
+    header.layers.push(...result.header.layers);
+    header.namespaces.push(...result.header.namespaces);
+    const parts = [];
+    result.imports.forEach((ref, i) => {
+      const target = ref.href && files.find((f) => !isInline(f) && hrefsOf(f).includes(ref.href));
+      if (!target) {
+        const reason = unresolvedReason(ref.href);
+        const href = ref.href ?? result.header.imports[i];
+        header.imports.push(result.header.imports[i]);
+        report.unresolvedImports.push({ file: file.name, href, reason });
+        console.error(`css-prune: unresolved import in ${file.name}: ${href} (${reason}); kept as an @import`);
+        return;
+      }
+      if (emitted.has(target.name)) return;
+      // A sheet imported under a media query no tested width satisfies has no evidence against any rule.
+      const untested = ref.media !== null && !mediaTested(ref.media, widths);
+      if (untested) report.keptBecause.untestedMedia += 1;
+      const inner = render(target, whole || untested);
+      if (inner) parts.push(wrapImport(inner, ref));
+    });
+    if (result.css) parts.push(inline ? `${inlineComment(file)}\n${result.css}` : result.css);
+    return parts.join('\n');
+  };
+
+  for (const file of files) {
+    if (emitted.has(file.name)) continue;
+    const text = render(file);
+    if (text) bodies.push(text);
   }
   const output = `${[...header.layers, ...header.imports, ...header.namespaces, ...bodies].join('\n')}\n`;
   report.after = Buffer.byteLength(output);
