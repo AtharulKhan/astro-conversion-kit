@@ -99,7 +99,10 @@ The runbook spells out the steps:
    to `functions/<prefix>/[[path]].js` in the site repository, with the prefix's leading slash
    dropped (for example `functions/wp-content/uploads/[[path]].js`). It answers GET and HEAD, looks
    the path up in the bucket, returns 404 when it is missing, and otherwise returns the file with
-   its stored content type, its etag and `cache-control: public, max-age=31536000, immutable`.
+   its stored content type, its etag, `x-content-type-options: nosniff` and
+   `cache-control: public, max-age=31536000, immutable`; a path that does not decode is a 404.
+   `_redirects` and `_headers` do not apply on a Pages Function route, so a redirect row under the
+   media prefix needs handling in the function or a step in the runbook.
 2. Bind the bucket to the Pages project as `MEDIA`: in the dashboard (the project's settings,
    Bindings, R2 bucket), or in `wrangler.toml` with `[[r2_buckets]]`, `binding = "MEDIA"` and
    `bucket_name = "<bucket>"`. `wrangler pages deploy` uploads `functions/` along with `dist/`.

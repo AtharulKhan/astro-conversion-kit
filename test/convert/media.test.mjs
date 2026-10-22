@@ -527,7 +527,7 @@ test('files outside an explicit --prefix are listed in reasons without changing 
   assert.equal(root.code, 2);
 });
 
-test('r2 media function: serves the object at the site path with type, etag and a long cache, 404 when missing', async () => {
+test('r2 media function: serves the object at the site path with type, etag, nosniff and a long cache, 404 when missing or malformed', async () => {
   const { onRequest } = await import('../../skills/convert-site/templates/cloudflare/r2-media-function.js');
   const objects = new Map([
     ['wp-content/uploads/2026/01/a b.jpg', { body: 'JPEGDATA', size: 8, httpEtag: '"abc"', httpMetadata: { contentType: 'image/jpeg' } }],
@@ -541,6 +541,7 @@ test('r2 media function: serves the object at the site path with type, etag and 
   assert.equal(hit.headers.get('content-type'), 'image/jpeg');
   assert.equal(hit.headers.get('etag'), '"abc"');
   assert.equal(hit.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  assert.equal(hit.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(await hit.text(), 'JPEGDATA');
   assert.equal(asked[0], 'wp-content/uploads/2026/01/a b.jpg');
 
@@ -551,6 +552,11 @@ test('r2 media function: serves the object at the site path with type, etag and 
 
   const miss = await call('GET', 'https://site.example.com/wp-content/uploads/2026/01/none.jpg');
   assert.equal(miss.status, 404);
+  assert.equal(miss.headers.get('x-content-type-options'), 'nosniff');
+
+  const malformed = await call('GET', 'https://site.example.com/wp-content/uploads/2026/01/bad%E0%A4%A.jpg');
+  assert.equal(malformed.status, 404, 'a malformed percent-encoding is a 404, not a thrown URIError');
+  assert.equal(asked.length, 3, 'the bucket is not asked for a path that does not decode');
 
   const post = await call('POST', 'https://site.example.com/wp-content/uploads/2026/01/a%20b.jpg');
   assert.equal(post.status, 405);
