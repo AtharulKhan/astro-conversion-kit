@@ -5,8 +5,10 @@
 Rebuild anything that needs a server: site search, comments, carts and checkout, memberships and
 logins, user-generated content. It reports them at intake with the options (a third-party embed,
 keeping that part on the old platform under a subdomain, or a separate project). It also refuses
-to run on end-of-life Node, to commit to your `main`, to log in to or submit forms on the live
-site, to touch DNS, or to convert more than one site per run.
+to run on end-of-life Node, to log in to or submit forms on the live site, to touch DNS, or to
+convert more than one site per run. Apart from the scaffold commit that init-site makes on a new
+or empty repository, nothing is committed to `main`; all work goes on `astro-rebuild` and reaches
+`main` through a pull request you merge.
 
 ## How long does it take?
 

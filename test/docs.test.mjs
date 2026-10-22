@@ -26,6 +26,23 @@ function fencedBlocks(markdown) {
   return [...markdown.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].map((match) => match[1]);
 }
 
+// Fenced blocks plus inline code spans: where docs name commands and paths.
+function codeTexts(markdown) {
+  const prose = markdown.replace(/^```[^\n]*\n[\s\S]*?^```/gm, '');
+  return [...fencedBlocks(markdown), ...[...prose.matchAll(/`([^`\n]+)`/g)].map((match) => match[1])];
+}
+
+// scripts/ paths that belong to a converted site repository, not to the kit: the ones the site
+// template's package.json runs, and anything in their folders below scripts/.
+const SITE_SCRIPTS = Object.values(
+  JSON.parse(read('skills/convert-site/templates/site/package.json')).scripts,
+).flatMap((command) => [...command.matchAll(/scripts\/[\w./-]+\.m?js/g)].map((match) => match[0]));
+const SITE_SCRIPT_DIRS = [...new Set(SITE_SCRIPTS.map((path) => dirname(path)).filter((dir) => dir !== 'scripts'))];
+
+function isSiteRepoScript(path) {
+  return SITE_SCRIPTS.includes(path) || SITE_SCRIPT_DIRS.some((dir) => path.startsWith(`${dir}/`));
+}
+
 // Inline links and images, outside fenced blocks, that point inside the repository.
 function relativeLinks(markdown) {
   const prose = markdown.replace(/^```[^\n]*\n[\s\S]*?^```/gm, '');
@@ -83,11 +100,14 @@ test('every relative link in the docs resolves', () => {
   assert.deepEqual(broken, []);
 });
 
-test('every kit script a README command names exists or ships in a later task', () => {
+test('every kit script a doc names in code exists or ships in a later task', () => {
   const missing = [];
-  for (const block of fencedBlocks(read('README.md'))) {
-    for (const [path] of block.matchAll(/(?:skills|scripts)\/[\w./-]+\.mjs/g)) {
-      if (!existsSync(join(ROOT, path)) && !SHIPS_IN_A_LATER_TASK.has(path)) missing.push(path);
+  for (const doc of DOCS) {
+    for (const code of codeTexts(read(doc))) {
+      for (const [, path] of code.matchAll(/(?<![\w./-])((?:skills|scripts)\/[\w./-]+\.m?js)/g)) {
+        if (isSiteRepoScript(path)) continue;
+        if (!existsSync(join(ROOT, path)) && !SHIPS_IN_A_LATER_TASK.has(path)) missing.push(`${doc}: ${path}`);
+      }
     }
   }
   assert.deepEqual(missing, []);

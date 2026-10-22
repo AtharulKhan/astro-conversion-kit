@@ -6,7 +6,7 @@ results live in `.conversion/state.json` in the site repository, so a run can st
 
 | Phase | Produces | Done when |
 |---|---|---|
-| 1. Intake | Platform fingerprint, tool check, one message of questions with defaults | The person has answered, or the defaults stand |
+| 1. Intake | Platform fingerprint (at most four requests), tool check, one message of questions with defaults | The person has answered, or the defaults stand |
 | 2. Capture | `capture/` | Every URL from sitemaps, platform APIs and the link crawl is saved or recorded with its status |
 | 3. Plan | `docs/plan.md` | Every template, count, oddity and out-of-scope feature has a row and a decision |
 | 4. Scaffold | The site repository on `astro-rebuild` | It builds empty, and the hosting config is generated |
@@ -22,8 +22,8 @@ results live in `.conversion/state.json` in the site repository, so a run can st
 
 ## 1. Intake
 
-Two requests to the live site (home page and robots.txt, plus sitemaps found there) identify the
-platform. `preflight.mjs` reports Node, git, gh, the hosting CLI, the Playwright browser and which
+At most four requests to the live site (the home page, robots.txt and the sitemaps found there)
+identify the platform. `preflight.mjs` reports Node, git, gh, the hosting CLI, the Playwright browser and which
 CLIs are logged in. Then one message asks for anything the agent could not detect: where the new
 repository lives, Vercel or Cloudflare Pages, the form endpoint, the address for the one test
 submission, analytics IDs, pages that must not change. Each question has a default. Out-of-scope
@@ -50,8 +50,8 @@ and a decisions table. Every oddity on the live site (a missing H1, a dead tag, 
 a row that says "reproduce live by default" and what the fix would be.
 
 Media stays in the repository when the total is under 300 MB, no file is over 25 MB and there are
-fewer than 10,000 files. Otherwise it goes to Vercel Blob or Cloudflare R2 behind a rewrite, so the
-public URLs do not change. See [hosting.md](hosting.md).
+fewer than 10,000 files. Otherwise it goes to Vercel Blob (behind a `vercel.json` rewrite) or
+Cloudflare R2 (served by a small Pages Function), so the public URLs do not change. See [hosting.md](hosting.md).
 
 ## 4. Scaffold
 
@@ -59,8 +59,9 @@ public URLs do not change. See [hosting.md](hosting.md).
 `trailingSlash` and the build format matching the majority of live URLs, `.nvmrc`, the gate and
 review scripts, hosting config (`vercel.json`, or `_redirects` and `_headers`), and the
 `PUBLIC_INDEXABLE` switch. Every build is `noindex, nofollow` with a blocking robots.txt until a
-release build sets `PUBLIC_INDEXABLE=true`. The first commit goes on `main`; all work after that
-is on `astro-rebuild`.
+release build sets `PUBLIC_INDEXABLE=true`. Apart from the scaffold commit that init-site makes on
+a new or empty repository, nothing is committed to `main`; all work goes on `astro-rebuild` and
+reaches `main` through a pull request the person merges.
 
 ## 5. Baseline
 
@@ -106,7 +107,7 @@ commit, so it can be dropped.
 ## 10. Pre-launch and staging
 
 `pre-launch` gates the repository and the production build and must exit 0. The branch is deployed
-as a noindexed preview, and `launch-audit --staging --old-url <live>` audits it. Blockers are fixed
+as a noindexed preview, and `launch-audit --url <staging> --staging --old-url <live>` audits it. Blockers are fixed
 on the branch. The audit's `baseline.json` and `redirects.csv` are kept for the cutover. One test
 form submission goes to the address given at intake.
 

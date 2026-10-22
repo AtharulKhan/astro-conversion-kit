@@ -58,7 +58,8 @@ The first-class case.
 - **JSON:API.** When the `jsonapi` module is enabled, `/jsonapi` lists nodes and files and is used
   as an extra source. Most sites do not enable it, and the capture does not need it.
 - **Paged sitemaps.** Sitemap modules split large sitemaps as `sitemap.xml?page=2`. The capture
-  follows every page; the new site's sitemap is a plain file at the same path.
+  follows every page; the new site's sitemap is a single plain file at `sitemap.xml`. A static
+  host ignores the query string, so the old paged URLs all resolve to that one sitemap.
 - **End-of-life versions.** Drupal 7 sites convert the same way. Converting one is a good reason
   to: it removes the unpatched PHP.
 
@@ -67,10 +68,10 @@ The first-class case.
 These render on the platform's servers and host assets on the platform's CDN.
 
 - **Media off the site's domain.** Images come from the platform CDN, not the site's own origin.
-  The capture lists them; the plan records whether they are mirrored under a local prefix (which
-  changes their URLs and is an exception) or left on the CDN while the account lasts. When the
-  account closes, CDN media disappears, so mirroring is the safer default for a site leaving the
-  platform.
+  The capture lists them, and by default the build keeps pointing at the CDN, exactly as live.
+  When the account closes, CDN media disappears, so the agent proposes mirroring it under a local
+  prefix. Mirroring changes every one of those URLs, so it is a logged exception that a person
+  approves, never a silent default.
 - **Script-driven layout.** Webflow interactions, Squarespace blocks and most of a Wix page are
   built or animated by script. The capture saves the rendered DOM and screenshots with animations
   disabled. Interactions that matter (menus, sliders, accordions) are rebuilt with a small script

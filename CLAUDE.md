@@ -55,8 +55,9 @@ sites this kit did not build.
   make a gate pass. If a gate is wrong about a site, say so and fix the gate.
 - **A skip is not a pass, and "Not covered" is never a pass.** Repeat every "Not covered" section
   to the person verbatim, in the PR and in your report.
-- **Never commit to the site's `main`.** All work goes on `astro-rebuild` and ends in a pull
-  request a person merges. Never force-push.
+- **Nothing is committed to the site's `main` but the scaffold.** Apart from the scaffold commit
+  that init-site makes on a new or empty repository, nothing is committed to `main`; all work goes
+  on `astro-rebuild` and reaches `main` through a pull request the person merges. Never force-push.
 - **Never touch DNS, the old host, or a hosting dashboard setting** beyond the deploys the runbook
   names. The person launches.
 - **Test submissions go only to the address the person gave at intake**, never to an address found

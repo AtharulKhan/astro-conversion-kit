@@ -128,12 +128,17 @@ export function planMedia(entries, { host, maxTotal = DEFAULTS.maxTotal, maxFile
 
 // How the built site reaches media that is not in the repo.
 // Vercel (store "blob"): a vercel.json rewrites entry. Cloudflare (store "r2"):
-// an instruction block for the runbook. "store" mode needs the store named.
+// an instruction block for the runbook. Pages cannot rewrite to another origin,
+// so a Pages Function (R2_FUNCTION_TEMPLATE) bound to the bucket as MEDIA serves
+// the media prefix. "store" mode needs the store named; { bucket } names the R2
+// bucket in the instructions.
 // live-temporary (staging only) points at the live origin given as baseUrl and
 // carries LIVE_TEMPORARY_WARNING: on the rewrite object as a non-enumerable
 // "warning" property (so JSON.stringify leaves vercel.json valid), and as the
-// first line of the Cloudflare block.
-export function rewriteConfig(mode, baseUrl, prefix, { store } = {}) {
+// first line of the Cloudflare block, which is a _redirects line to the live origin.
+export const R2_FUNCTION_TEMPLATE = 'skills/convert-site/templates/cloudflare/r2-media-function.js';
+
+export function rewriteConfig(mode, baseUrl, prefix, { store, bucket } = {}) {
   if (mode === 'repo') return null;
   if (mode !== 'store' && mode !== 'live-temporary') throw new Error(`unknown media mode "${mode}"`);
   if (mode === 'store' && !store) throw new Error('rewriteConfig: store mode needs { store: "blob" | "r2" }');
@@ -149,23 +154,24 @@ export function rewriteConfig(mode, baseUrl, prefix, { store } = {}) {
     return rewrite;
   }
 
-  const host = new URL(base).host;
   if (live) {
     return [
       LIVE_TEMPORARY_WARNING,
-      `Media under ${pre} is served from the live origin (${base}) until a store is set up.`,
-      `1. In the site's Cloudflare zone, add a proxied DNS record (for example media-origin.<zone>) pointing at ${host}.`,
-      `2. Add an Origin Rule: when starts_with(http.request.uri.path, "${pre}"),`,
-      `   override the DNS record and the Host header to ${host} (via the record from step 1).`,
-      `3. Test: request a file under ${pre} on the new site and confirm it returns 200 with the right content type.`,
+      `Media under ${pre} redirects to the live origin (${base}) until a store is set up.`,
+      'Add this line to _redirects, before any other rule that matches the prefix:',
+      `${pre}* ${base}${pre}:splat 302`,
+      `Test: request a file under ${pre} on the preview and confirm it redirects to the live file.`,
     ].join('\n');
   }
+  const name = bucket ?? '<bucket>';
   return [
-    `Media under ${pre} is served from the R2 bucket at ${base}.`,
-    `1. In R2, open the bucket's settings and connect the custom domain ${host} (it must be in the site's zone).`,
-    `2. In the site's zone, add an Origin Rule: when starts_with(http.request.uri.path, "${pre}"),`,
-    `   override the DNS record and the Host header to ${host}.`,
-    `3. Test: request a file under ${pre} on the new site and confirm it returns 200 from R2.`,
+    `Media under ${pre} is served from the R2 bucket ${name} by a Pages Function.`,
+    'This is the only code that runs at the edge, and only because media is over the repository threshold.',
+    `1. Copy ${R2_FUNCTION_TEMPLATE} from the kit to functions${pre}[[path]].js in this repository.`,
+    `2. Add an R2 bucket binding named MEDIA for bucket ${name} to the Pages project, in the dashboard`,
+    `   (Settings, Bindings) or in wrangler.toml ([[r2_buckets]] binding = "MEDIA", bucket_name = "${name}").`,
+    `3. Deploy, then request one file under ${pre} on the new site and confirm it returns 200`,
+    '   with the right content type and size.',
   ].join('\n');
 }
 

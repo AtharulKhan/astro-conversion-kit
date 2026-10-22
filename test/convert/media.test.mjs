@@ -178,16 +178,25 @@ test('rewriteConfig: Vercel rewrite, Cloudflare block, and live-temporary at the
     destination: 'https://abc.public.blob.vercel-storage.com/wp-content/uploads/:path*',
   });
 
-  const r2 = rewriteConfig('store', 'https://media.example.com', '/wp-content/uploads/', { store: 'r2' });
+  const r2 = rewriteConfig('store', '', '/wp-content/uploads/', { store: 'r2', bucket: 'site-media' });
   assert.equal(typeof r2, 'string');
-  assert.match(r2, /custom domain/i);
-  assert.match(r2, /media\.example\.com/);
+  assert.match(r2, /skills\/convert-site\/templates\/cloudflare\/r2-media-function\.js/);
+  assert.match(r2, /functions\/wp-content\/uploads\/\[\[path\]\]\.js/);
+  assert.match(r2, /binding.*MEDIA/i);
+  assert.match(r2, /site-media/);
   assert.match(r2, /\/wp-content\/uploads\//);
+  assert.doesNotMatch(r2, /origin rule|host header|custom domain/i);
+  assert.match(
+    rewriteConfig('store', '', '/sites/default/files/', { store: 'r2' }),
+    /functions\/sites\/default\/files\/\[\[path\]\]\.js/,
+  );
 
   const liveCf = rewriteConfig('live-temporary', 'https://live.example.com', '/wp-content/uploads/', { store: 'r2' });
   assert.equal(typeof liveCf, 'string');
   assert.match(liveCf, /live\.example\.com/);
   assert.equal(liveCf.split('\n')[0], LIVE_TEMPORARY_WARNING);
+  assert.match(liveCf, /^\/wp-content\/uploads\/\* https:\/\/live\.example\.com\/wp-content\/uploads\/:splat 302$/m);
+  assert.doesNotMatch(liveCf, /origin rule|host header/i);
   assert.doesNotMatch(r2, /staging only/);
   assert.equal(blob.warning, undefined);
 
@@ -516,4 +525,33 @@ test('files outside an explicit --prefix are listed in reasons without changing 
   assert.match(plan.reasons[0], /outside the prefix \/wp-content\/uploads\/.*\/images\/b\.jpg/);
   const root = await run(PLAN, ['--media', media, '--host', 'vercel', '--prefix', '/', '--out', out]);
   assert.equal(root.code, 2);
+});
+
+test('r2 media function: serves the object at the site path with type, etag and a long cache, 404 when missing', async () => {
+  const { onRequest } = await import('../../skills/convert-site/templates/cloudflare/r2-media-function.js');
+  const objects = new Map([
+    ['wp-content/uploads/2026/01/a b.jpg', { body: 'JPEGDATA', size: 8, httpEtag: '"abc"', httpMetadata: { contentType: 'image/jpeg' } }],
+  ]);
+  const asked = [];
+  const env = { MEDIA: { async get(key) { asked.push(key); return objects.get(key) ?? null; } } };
+  const call = (method, url) => onRequest({ request: new Request(url, { method }), env });
+
+  const hit = await call('GET', 'https://site.example.com/wp-content/uploads/2026/01/a%20b.jpg');
+  assert.equal(hit.status, 200);
+  assert.equal(hit.headers.get('content-type'), 'image/jpeg');
+  assert.equal(hit.headers.get('etag'), '"abc"');
+  assert.equal(hit.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  assert.equal(await hit.text(), 'JPEGDATA');
+  assert.equal(asked[0], 'wp-content/uploads/2026/01/a b.jpg');
+
+  const head = await call('HEAD', 'https://site.example.com/wp-content/uploads/2026/01/a%20b.jpg');
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), '8');
+  assert.equal(await head.text(), '');
+
+  const miss = await call('GET', 'https://site.example.com/wp-content/uploads/2026/01/none.jpg');
+  assert.equal(miss.status, 404);
+
+  const post = await call('POST', 'https://site.example.com/wp-content/uploads/2026/01/a%20b.jpg');
+  assert.equal(post.status, 405);
 });

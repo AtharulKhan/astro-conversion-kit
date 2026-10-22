@@ -32,7 +32,7 @@ Or in Claude Code, from its plugin marketplace:
 /plugin install astro-conversion@astro-conversion-kit
 ```
 
-Or use the skills straight from a clone; nothing else is needed:
+Or use the skills straight from a clone:
 
 ```
 git clone https://github.com/ethanplusai/astro-conversion-kit
@@ -55,8 +55,8 @@ node skills/capture-site/scripts/capture.mjs --help
 
 ## What happens
 
-1. **Intake.** Two requests fingerprint the platform; one message asks you where the repo and
-   hosting go, how forms are handled, and what the agent cannot detect.
+1. **Intake.** At most four requests fingerprint the platform; one message asks you where the
+   repo and hosting go, how forms are handled, and what the agent cannot detect.
 2. **Capture.** A paced, read-only crawl (sitemaps, platform APIs, links) saves every page's HTML,
    head tags, redirects, media list, fonts, feeds and screenshots into `capture/`.
 3. **Plan.** `docs/plan.md`: templates, counts, the media decision, and a row for every oddity.
@@ -101,8 +101,10 @@ These are found at intake and reported as out of scope, with the options: a thir
 keeping that part on the old platform under a subdomain, or a separate project. Forms are the one
 exception: they post to a third-party form endpoint you choose.
 
-It also refuses to run on end-of-life Node, to commit to your `main`, to submit forms or log in on
-the live site, or to touch DNS. One site per run.
+It also refuses to run on end-of-life Node, to submit forms or log in on the live site, or to
+touch DNS. One site per run. Apart from the scaffold commit that init-site makes on a new or empty
+repository, nothing is committed to `main`; all work goes on `astro-rebuild` and reaches `main`
+through a pull request you merge.
 
 ## Security
 
@@ -117,6 +119,8 @@ That is not the whole story:
   keep. Their security is their vendor's.
 - TLS and security headers are handled at your host's edge. The kit ships a baseline set in
   `vercel.json` or `_headers`.
+- One optional exception: on Cloudflare Pages, when media is too large for the repository, a
+  small Pages Function serves it from R2. It is the only code that runs at the edge.
 
 More in [docs/security.md](docs/security.md).
 

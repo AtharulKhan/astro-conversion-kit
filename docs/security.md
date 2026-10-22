@@ -5,7 +5,10 @@ What converting to static output changes, and what it does not.
 ## What goes away
 
 A converted site is HTML, CSS, fonts, images and whatever client-side scripts you keep, served as
-files. There is no PHP, no Node, no database and no admin login on the server. That removes the
+files. There is no PHP, no Node, no database and no admin login on the server. The one optional
+exception is on Cloudflare Pages when media is too large for the repository: a Pages Function of
+about twenty lines, running on Cloudflare's Workers runtime, reads media from R2. It only reads
+objects by path and has no other inputs. That removes the
 classes of attack that need them:
 
 - Remote code execution through the language runtime (PHP or Node.js vulnerabilities in the
@@ -41,7 +44,8 @@ the host's job. The kit ships a baseline set of headers in `vercel.json` or `_he
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` and
 `X-Frame-Options: SAMEORIGIN`. It does not ship a Content-Security-Policy or HSTS, because a wrong
 CSP breaks the third-party scripts you kept and HSTS is hard to undo; add them deliberately once
-the site is live. `post-launch` checks the headers the live host actually sends.
+the site is live. Vercel sends Strict-Transport-Security on its domains by default; the kit itself
+adds none. `post-launch` checks the headers the live host actually sends.
 
 **Accounts still matter.** Whoever controls your Git host, hosting account, DNS registrar and media
 store controls the site. Turn on two-factor authentication on all of them.

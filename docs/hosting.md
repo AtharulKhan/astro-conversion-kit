@@ -51,9 +51,10 @@ upload's size), and `vercel.json` gets a rewrite from the media prefix (for exam
 `/wp-content/uploads/:path*`) to the store. The public URLs stay the same.
 
 **Deployment protection.** Vercel protects preview deployments by default, so visitors (and
-scripts) get a login page. The staging audit cannot sign in. Either open the preview to the
-public for the audit (it is still noindexed) or keep it protected and accept that the staging
-audit appears under "Not covered" until it can run. Keep previews of sites you do not own the
+scripts) get a login page. Vercel's Protection Bypass for Automation lets a script through with a
+secret header, but `launch-audit` cannot send that header yet. So the choice is: open the preview
+to the public for the audit (it is still noindexed), or keep it protected and accept that the
+staging audit appears under "Not covered" until it can run. Keep previews of sites you do not own the
 content of protected.
 
 ## Cloudflare Pages
@@ -66,7 +67,10 @@ npx wrangler pages deploy dist --branch astro-rebuild
 ```
 
 That gives a preview at `astro-rebuild.<project>.pages.dev`. Production is
-`PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main`. Because
+`PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main`, which deploys
+to production only when the project's production branch is `main` (check it in the Pages project
+settings). The first deploy has to name the project, with `--project-name <name>` or a
+`wrangler.toml` holding `name` and `pages_build_output_dir = "dist"`. Because
 wrangler uploads the local `dist/`, the indexable switch belongs on that local build, not in the
 Pages dashboard.
 
@@ -85,15 +89,22 @@ pair, the redirect gate shows the difference, and accepting it is an entry in `e
 
 **Media in R2.** When the media decision is "store", files go to an R2 bucket through its
 S3-compatible API (`media-upload.mjs --store r2`, reading `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY` and `R2_BUCKET` from the environment). Pages cannot rewrite to another
-origin from `_redirects`, so serving them at the original paths takes two dashboard steps the
-runbook spells out:
+`R2_SECRET_ACCESS_KEY` and `R2_BUCKET` from the environment), keyed by their site path. Pages cannot
+rewrite to another origin, so the kit ships a small Pages Function that serves the media prefix
+from the bucket. This is the one place the converted site runs code at the edge, and only when
+media is over the repository threshold; with media in the repository there is no function at all.
+The runbook spells out the steps:
 
-1. Connect a custom domain in the site's zone to the bucket (for example `media.example.com`).
-2. Add an Origin Rule in the zone: when the path starts with the media prefix, send the request to
-   that custom domain, with the Host header overridden to match.
-
-Then request one file under the prefix on the new site and confirm it is served from R2.
+1. Copy [the function template](../skills/convert-site/templates/cloudflare/r2-media-function.js)
+   to `functions/<prefix>/[[path]].js` in the site repository, with the prefix's leading slash
+   dropped (for example `functions/wp-content/uploads/[[path]].js`). It answers GET and HEAD, looks
+   the path up in the bucket, returns 404 when it is missing, and otherwise returns the file with
+   its stored content type, its etag and `cache-control: public, max-age=31536000, immutable`.
+2. Bind the bucket to the Pages project as `MEDIA`: in the dashboard (the project's settings,
+   Bindings, R2 bucket), or in `wrangler.toml` with `[[r2_buckets]]`, `binding = "MEDIA"` and
+   `bucket_name = "<bucket>"`. `wrangler pages deploy` uploads `functions/` along with `dist/`.
+3. After the deploy, request one media URL on the new site and confirm it returns 200 with the
+   right content type and size.
 
 **Preview access.** Pages previews are public by default. Put Cloudflare Access in front of them if
 the content should not be seen; the same "Not covered" note as Vercel applies to the staging audit.
@@ -101,7 +112,8 @@ the content should not be seen; the same "Not covered" note as Vercel applies to
 ## No media store yet
 
 If media needs a store and there are no store credentials, `media-plan.mjs --mode live-temporary`
-proxies media from the live site, for staging only. The plan carries a warning, and the runbook
+serves media from the live site, for staging only: a `vercel.json` rewrite on Vercel, a 302 line
+in `_redirects` on Cloudflare Pages. The plan carries a warning, and the runbook
 puts "create the store and upload" before the DNS step. Do not launch in this mode: when the old
 host goes, the media goes with it.
 
