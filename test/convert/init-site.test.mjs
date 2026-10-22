@@ -372,6 +372,14 @@ test('docs/LAUNCH.md: every command complete, its flags in the script --help, th
   assert.match(agents.replace(/\s+/g, ' '), /goes only to the address given at intake/);
 });
 
+test('docs/LAUNCH.md submits the sitemap robots.txt names when the capture saved several', (t) => {
+  const dir = tempDir(t, 'site-');
+  for (const name of ['wp-sitemap.xml', 'wp-sitemap-posts-post-1.xml', 'sitemap_index.xml']) plant(join(dir, 'capture', 'sitemaps', name), '<x/>\n');
+  plant(join(dir, 'capture', 'robots.txt'), 'User-agent: *\nDisallow: /wp-admin/\n\nSitemap: https://www.fixture-roofing.test/wp-sitemap.xml\n');
+  assert.equal(run(baseArgs(dir, bareKit(t))).status, 0);
+  assert.ok(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8').includes('`https://www.fixture-roofing.test/wp-sitemap.xml`'));
+});
+
 test('docs/LAUNCH.md names sitemap.xml when the capture saved no sitemap', (t) => {
   const dir = tempDir(t, 'site-');
   assert.equal(run(baseArgs(dir, bareKit(t))).status, 0);
