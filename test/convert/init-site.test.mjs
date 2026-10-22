@@ -113,7 +113,7 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   const files = walk(dir);
   for (const file of EXPECTED_FILES) assert.ok(files.includes(file), `missing ${file}`);
   assert.ok(files.includes('vercel.json'));
-  assert.ok(!files.includes('_headers'), 'vercel sites get vercel.json, not _headers');
+  assert.ok(!files.includes('public/_headers'), 'vercel sites get vercel.json, not _headers');
 
   for (const file of files.filter((f) => !f.startsWith('scripts/'))) {
     assert.doesNotMatch(readFileSync(join(dir, file), 'utf8'), /\{\{/, `unsubstituted placeholder in ${file}`);
@@ -128,9 +128,10 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.equal(readFileSync(join(dir, 'scripts', 'verify', 'run-all.mjs'), 'utf8'), RUN_ALL);
   assert.ok(!existsSync(join(dir, 'scripts', 'unrelated.mjs')), 'only the named convert-site scripts are copied');
 
-  // Vercel URL handling for trailing slashes always: trailingSlash true, never cleanUrls.
+  // Vercel URL handling for trailing slashes always: no trailingSlash key (build-redirects writes the
+  // slash rules after the site's redirects), never cleanUrls.
   const vercel = JSON.parse(readFileSync(join(dir, 'vercel.json'), 'utf8'));
-  assert.equal(vercel.trailingSlash, true);
+  assert.ok(!('trailingSlash' in vercel));
   assert.ok(!('cleanUrls' in vercel));
   assert.ok(Array.isArray(vercel.headers));
 
@@ -167,7 +168,7 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.equal(pkg.scripts['verify:release'], 'PUBLIC_INDEXABLE=true node scripts/verify/run-all.mjs');
   assert.equal(pkg.scripts.baseline, 'node scripts/build-baseline.mjs --capture capture --out baseline');
   assert.equal(pkg.scripts['redirects:build'],
-    'node scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json');
+    'node scripts/build-redirects.mjs --csv redirects.csv --host vercel --out vercel.json --trailing-slash always');
   assert.equal(pkg.scripts['verify:live'], 'node scripts/verify-live.mjs');
   for (const name of ['shoot', 'diff', 'styles', 'sheet']) {
     assert.equal(pkg.scripts[`review:${name}`], `node scripts/review/${name}.mjs`);
@@ -213,13 +214,13 @@ test('cloudflare host and --trailing-slash never shape the scaffold', (t) => {
   const dir = tempDir(t, 'site-');
   const result = run(baseArgs(dir, fakeKit(t), { host: 'cloudflare', extra: ['--trailing-slash', 'never'] }));
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(existsSync(join(dir, '_headers')));
+  assert.ok(existsSync(join(dir, 'public', '_headers')), 'Astro copies public/_headers into dist/');
   assert.ok(!existsSync(join(dir, 'vercel.json')));
   const config = readFileSync(join(dir, 'astro.config.mjs'), 'utf8');
   assert.match(config, /trailingSlash: 'never'/);
   assert.match(config, /format: 'file'/);
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-  assert.match(pkg.scripts['redirects:build'], /--host cloudflare --out _redirects$/);
+  assert.match(pkg.scripts['redirects:build'], /--host cloudflare --out public\/_redirects --trailing-slash never$/);
   const launch = readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8');
   assert.ok(launch.includes('`npm run build && npx wrangler pages deploy dist --branch astro-rebuild`'));
   assert.ok(launch.includes('`PUBLIC_INDEXABLE=true npm run build && npx wrangler pages deploy dist --branch main`'));
@@ -233,7 +234,7 @@ test('vercel with --trailing-slash never uses cleanUrls; quotes in the name stay
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const vercel = JSON.parse(readFileSync(join(dir, 'vercel.json'), 'utf8'));
   assert.equal(vercel.cleanUrls, true);
-  assert.equal(vercel.trailingSlash, false);
+  assert.ok(!('trailingSlash' in vercel));
   assert.match(readFileSync(join(dir, 'astro.config.mjs'), 'utf8'), /format: 'file'/);
   const site = await import(pathToFileURL(join(dir, 'src', 'lib', 'site.mjs')).href);
   assert.equal(site.SITE_NAME, name);

@@ -132,16 +132,18 @@ export function renderDiff(diff) {
     .join(' ');
 }
 
-// results: { checked, failures: [{ path, field, expected, actual, diff? }], skipped?, skipReason?, notes? }
+// results: { checked, failures: [{ path, field, expected, actual, diff? }], skipped?, skipReason?, skips?, notes? }
 // A gate that could not check something sets skipped (a count) and skipReason, and the summary
-// line says so: a skip is not a pass. notes are lines printed before the summary.
-export function report(name, { checked = 0, failures = [], skipped, skipReason, notes = [] } = {}, { json = false, out = process.stdout, exit = process.exit } = {}) {
+// line says so: a skip is not a pass. A gate that skips individual items also lists them in skips
+// ([{ from, reason }]), one line each and in the JSON. notes are lines printed before the summary.
+export function report(name, { checked = 0, failures = [], skipped, skipReason, skips = [], notes = [] } = {}, { json = false, out = process.stdout, exit = process.exit } = {}) {
   const failed = failures.length;
-  const skip = skipped === undefined ? {} : { skipped, skipReason };
+  const skip = skipped === undefined ? {} : { skipped, skipReason, ...(skips.length ? { skips } : {}) };
   if (json) {
     out.write(`${JSON.stringify({ gate: name, checked, failed, ...skip, failures }, null, 2)}\n`);
   } else {
     for (const note of notes) out.write(`  ${note}\n`);
+    for (const s of skips) out.write(`  ${s.from} skipped: ${s.reason}\n`);
     for (const f of failures) {
       if (Array.isArray(f.diff) && f.diff.length) out.write(`  ${f.path} ${f.field}: ${renderDiff(f.diff)}\n`);
       else out.write(`  ${f.path} ${f.field}: expected ${show(f.expected)}, got ${show(f.actual)}\n`);

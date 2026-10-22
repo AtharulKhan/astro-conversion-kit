@@ -9,42 +9,61 @@ import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { applyExceptions, exceptionFailure } from '../lib/exceptions.mjs';
 import { distFiles, readJson, requireInputs } from '../lib/dist.mjs';
-import { isDynamic, isExternal, readRedirectsCsv } from '../lib/redirects-csv.mjs';
+import { isDynamic, isExternal, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
 import { vercelResolver } from '../lib/vercel-resolver.mjs';
 import { cloudflareResolver, parseRedirectsFile } from '../lib/cloudflare-resolver.mjs';
 
 const NAME = 'redirects';
 const DEFAULT_CSV = 'redirects.csv';
 const UNVERIFIED = ' [unverified live]';
+export const SKIP_NOOP = 'noop: destination equals source path';
+export const SKIP_CLOUDFLARE_QUERY = 'query redirect, needs a Cloudflare Single Redirect';
+const SAMPLE = 'sample';
 const OPTIONS = {
   host: { type: 'string', default: '', description: 'vercel or cloudflare (default: whichever config exists)' },
-  config: { type: 'string', default: '', description: 'host config (default: vercel.json, or <dist>/_redirects then _redirects)' },
+  config: { type: 'string', default: '', description: 'host config (default: vercel.json, or <dist>/_redirects)' },
   csv: { type: 'string', default: DEFAULT_CSV, description: 'the redirects source, every row is checked' },
 };
 const NOTES = `
 Each redirect is requested through a simulation of the host: for Vercel, vercel.json's cleanUrls
-and trailingSlash, then its redirects in order, then dist/; for Cloudflare Pages, _redirects
-(static rules before dynamic ones), then dist/ with Pages' own trailing-slash handling. Every hop
-counts, so a chain the live site had (/old -> /old/ -> /new/) must now be one rule.
+and trailingSlash, then its redirects in order, then dist/; for Cloudflare Pages, the built
+dist/_redirects (static rules before dynamic ones), then dist/ with Pages' own trailing-slash
+handling. The request's query string is carried to a destination that has none. Every hop counts,
+so a chain the live site had (/old -> /old/ -> /new/) must now be one rule.
+A splat or placeholder row is requested with a sample URL: the segment of a page in dist that its
+target matches, else "${SAMPLE}"; a catch-all is also requested at its bare prefix.
+Skipped, listed and counted, never passed: a query row whose target is its own path (${SKIP_NOOP}),
+and on Cloudflare every query row (_redirects cannot match one; build-redirects lists them for
+Single Redirects).
 A shortlink the capture did not request (verified: false) is checked the same way; a failure on
 one says "[unverified live]".
 A redirect exception (field "redirect", path = the source, from = the baseline target, to = the
 new target) approves a changed target. Write the host config with build-redirects.mjs first.
 `;
 
-const show = (hops) => hops.map((h) => `${h.status} ${h.to}`).join(' -> ');
+const show = (hops, max = 4) =>
+  `${hops.slice(0, max).map((h) => `${h.status} ${h.to}`).join(' -> ')}${hops.length > max ? ' -> ...' : ''}`;
+const withoutQuery = (url) => url.split('?')[0];
+const unslash = (path) => path.replace(/\/+$/, '') || '/';
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 
-// The paths dist serves a file at: about/index.html at /about/, about.html at /about, any file at
-// its own path.
+// The paths dist serves a file at (about/index.html at /about/, about.html at /about, any file at
+// its own path), and the page paths among them.
 function servedPaths(dist) {
   const served = new Map();
+  const pages = [];
   for (const file of distFiles(dist)) {
     served.set(`/${file}`, file);
-    if (file === 'index.html') served.set('/', file);
-    else if (file.endsWith('/index.html')) served.set(`/${file.slice(0, -'index.html'.length)}`, file);
-    else if (file.endsWith('.html') && file !== '404.html') served.set(`/${file.slice(0, -'.html'.length)}`, file);
+    let page = null;
+    if (file === 'index.html') page = '/';
+    else if (file.endsWith('/index.html')) page = `/${file.slice(0, -'index.html'.length)}`;
+    else if (file.endsWith('.html') && file !== '404.html') page = `/${file.slice(0, -'.html'.length)}`;
+    if (page) {
+      served.set(page, file);
+      pages.push(page);
+    }
   }
-  return served;
+  return { served, pages };
 }
 
 // The entries to check, by source: baseline redirects first, then redirects.csv rows not in it.
@@ -58,82 +77,136 @@ function entriesOf(baseline, rows) {
   return [...entries.values()];
 }
 
-export function checkRedirects({ dist, baseline, rows = [], resolve, exceptions = [], origins = [], paths = () => true }) {
+const PARAM = /:(\w+)([*+?]?)|\*/g;
+
+// Sample requests for a splat or placeholder row: [{ url, target }]. The values come from the first
+// dist page the target pattern matches, else "sample"; a "*" catch-all adds its bare prefix.
+export function samplesFor(from, to, pages) {
+  const names = [...from.matchAll(PARAM)].map((m) => m[1] ?? 'splat');
+  let values = Object.fromEntries(names.map((n) => [n, SAMPLE]));
+  if (!isExternal(to) && /:\w/.test(to)) {
+    const targetNames = [];
+    const re = to
+      .split(/(:\w+[*+?]?)/)
+      .map((part) => {
+        const m = /^:(\w+)/.exec(part);
+        if (!m) return escapeRe(part);
+        targetNames.push(m[1]);
+        return '([^/]+)';
+      })
+      .join('');
+    const pattern = new RegExp(`^${re.replace(/\\\/$/, '')}\\/?$`);
+    for (const page of pages) {
+      const m = pattern.exec(page);
+      if (m) {
+        values = { ...values, ...Object.fromEntries(targetNames.map((n, i) => [n, m[i + 1]])) };
+        break;
+      }
+    }
+  }
+  const fillFrom = (v) => from.replace(PARAM, (m, name) => v[name ?? 'splat'] ?? '');
+  const fillTo = (v) => to.replace(/:(\w+)[*+?]?/g, (m, name) => (name in v ? v[name] : m)).replace(/([^:])\/{2,}/g, '$1/');
+  const samples = [{ url: fillFrom(values), target: fillTo(values) }];
+  const star = [...from.matchAll(PARAM)].find((m) => m[0] === '*' || m[2] === '*');
+  if (star) {
+    const bare = { ...values, [star[1] ?? 'splat']: '' };
+    samples.push({ url: fillFrom(bare), target: fillTo(bare) });
+  }
+  return samples;
+}
+
+export function checkRedirects({ dist, baseline, rows = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true }) {
   const relevant = exceptions.filter((e) => e.field === 'redirect');
   const entries = entriesOf(baseline, rows).filter((e) => paths(e.from));
   const known = new Set(entries.map((e) => e.from));
   const failures = relevant.filter((e) => paths(e.path) && !known.has(e.path)).map((e) => exceptionFailure(e, 'path not checked'));
-  const served = servedPaths(dist);
+  const skips = [];
+  const { served, pages } = servedPaths(dist);
   const local = (url) => {
     const own = origins.find((o) => o && (url === o || url.startsWith(`${o}/`)));
     return own ? url.slice(own.length) || '/' : url;
   };
+  let checked = 0;
 
   for (const entry of entries) {
     const { expected, staleExceptions } = applyExceptions({ redirect: local(entry.to) }, entry.from, relevant);
     failures.push(...staleExceptions.map((e) => exceptionFailure(e, 'no longer matches the baseline')));
     const target = expected.redirect;
-    const tag = entry.unverified ? UNVERIFIED : '';
-    const fail = (field, want, actual) => failures.push({ path: entry.from, field, expected: want, actual: `${actual}${tag}` });
-    const { hops, final } = resolve(entry.from);
-    const last = hops.length ? local(hops.at(-1).to) : null;
+    if (isNoop({ from: entry.from, to: target })) {
+      skips.push({ from: entry.from, reason: SKIP_NOOP });
+      continue;
+    }
+    if (host === 'cloudflare' && entry.from.includes('?')) {
+      skips.push({ from: entry.from, reason: SKIP_CLOUDFLARE_QUERY });
+      continue;
+    }
+    const dynamic = isDynamic(entry.from);
+    const requests = dynamic ? samplesFor(entry.from, target, pages) : [{ url: entry.from, target }];
+    for (const request of requests) {
+      checked += 1;
+      const note = `${dynamic ? ` (sample ${request.url})` : ''}${entry.unverified ? UNVERIFIED : ''}`;
+      const fail = (field, want, actual) => failures.push({ path: entry.from, field, expected: want, actual: `${actual}${note}` });
+      const want = request.target;
+      const { hops, final } = resolve(request.url);
+      let last = hops.length ? local(hops.at(-1).to) : null;
+      if (last !== null && !want.includes('?')) last = withoutQuery(last);
+      const same = dynamic ? (a, b) => unslash(a) === unslash(b) : (a, b) => a === b;
 
-    if (hops.length === 0) fail('redirect', target, `no redirect: ${final.status} at ${final.path}`);
-    else if (last !== target) fail('redirect', target, show(hops));
-    else if (hops.length > 1) fail('hops', `1 hop to ${target}`, show(hops));
-    else if (hops[0].status !== entry.status) fail('status', entry.status, `${hops[0].status}`);
-    else if (!isExternal(local(target)) && final.status !== 200) fail('target', 'a page or file in dist', `${final.status} at ${final.path}`);
-
-    if (!entry.from.includes('?') && !isDynamic(entry.from) && served.has(entry.from)) {
+      if (final.status === 'loop') fail('loop', `1 hop to ${want}`, show(hops));
+      else if (hops.length === 0) fail('redirect', want, `no redirect: ${final.status} at ${final.path}`);
+      else if (!same(last, want)) fail('redirect', want, show(hops));
+      else if (hops.length > 1) fail('hops', `1 hop to ${want}`, show(hops));
+      else if (hops[0].status !== entry.status) fail('status', entry.status, `${hops[0].status}`);
+      else if (!isExternal(local(want)) && final.status !== 200) {
+        fail('target', 'a page or file in dist', `${final.status} at ${withoutQuery(final.path)}`);
+      }
+    }
+    if (!entry.from.includes('?') && !dynamic && served.has(entry.from)) {
       failures.push({ path: entry.from, field: 'collision', expected: null, actual: served.get(entry.from) });
     }
   }
-  return { checked: entries.length, failures };
+  if (!skips.length) return { checked, failures };
+  const skipReason = [...new Set(skips.map((s) => s.reason.split(':')[0]))].join('; ');
+  return { checked, failures, skipped: skips.length, skipReason, skips };
 }
 
-function pickHost(name, args) {
+const exit2 = (message) => {
+  process.stderr.write(`${NAME}: ${message}\n`);
+  process.exit(2);
+};
+
+// Cloudflare reads the _redirects Astro copied into dist/ from public/; a copy anywhere else is not
+// what deploys.
+function pickHost(args) {
+  if (args.host && !['vercel', 'cloudflare'].includes(args.host)) exit2(`--host must be vercel or cloudflare, not "${args.host}"`);
   const vercel = args.config || 'vercel.json';
-  const cloudflare = args.config || [join(args.dist, '_redirects'), '_redirects'].find((f) => existsSync(f)) || '_redirects';
-  if (args.host && !['vercel', 'cloudflare'].includes(args.host)) {
-    process.stderr.write(`${name}: --host must be vercel or cloudflare, not "${args.host}"\n`);
-    process.exit(2);
-  }
+  const cloudflare = args.config || join(args.dist, '_redirects');
   let host = args.host;
   if (!host) {
     const found = [existsSync(vercel) && 'vercel', existsSync(cloudflare) && 'cloudflare'].filter(Boolean);
-    if (found.length === 2 && !args.config) {
-      process.stderr.write(`${name}: both ${vercel} and ${cloudflare} exist; pass --host\n`);
-      process.exit(2);
-    }
+    if (found.length === 2 && !args.config) exit2(`both ${vercel} and ${cloudflare} exist; pass --host`);
     host = found[0];
   }
   const config = host === 'cloudflare' ? cloudflare : vercel;
-  if (!host || !existsSync(config)) {
-    process.stderr.write(
-      `${name}: no host config found (${host ? config : `${vercel} or ${cloudflare}`}); write it with build-redirects.mjs from redirects.csv\n`,
-    );
-    process.exit(2);
-  }
-  return { host, config };
+  if (host && existsSync(config)) return { host, config };
+  const stray = ['public/_redirects', '_redirects'].find((f) => existsSync(f));
+  if (host !== 'vercel' && stray && !args.config) exit2(`${stray} exists but ${cloudflare} does not: run the build (Astro copies public/_redirects into dist/)`);
+  return exit2(`no host config found (${host ? config : `${vercel} or ${cloudflare}`}); write it with build-redirects.mjs from redirects.csv`);
 }
 
 function main() {
   assertNodeVersion();
   const args = gateArgs(process.argv.slice(2), NAME, { options: OPTIONS, notes: NOTES });
   requireInputs(NAME, args.dist, args.baseline, ['redirects.json']);
-  const { host, config } = pickHost(NAME, args);
+  const { host, config } = pickHost(args);
   let rows = [];
   if (existsSync(args.csv)) {
     try {
       rows = readRedirectsCsv(args.csv);
     } catch (error) {
-      process.stderr.write(`${NAME}: ${error.message}\n`);
-      process.exit(2);
+      exit2(error.message);
     }
-  } else if (args.csv !== DEFAULT_CSV) {
-    process.stderr.write(`${NAME}: not found: ${args.csv}\n`);
-    process.exit(2);
-  }
+  } else if (args.csv !== DEFAULT_CSV) exit2(`not found: ${args.csv}`);
   const metaFile = join(args.baseline, 'meta.json');
   const meta = existsSync(metaFile) ? readJson(metaFile) : {};
   const origins = [meta.origin, meta.canonicalOrigin].filter(Boolean).map((o) => o.replace(/\/+$/, ''));
@@ -144,14 +217,14 @@ function main() {
         ? vercelResolver({ config: readJson(config), dist: args.dist, origins })
         : cloudflareResolver({ rules: parseRedirectsFile(readFileSync(config, 'utf8')), dist: args.dist, origins });
   } catch (error) {
-    process.stderr.write(`${NAME}: ${config}: ${error.message}\n`);
-    process.exit(2);
+    exit2(`${config}: ${error.message}`);
   }
   const results = checkRedirects({
     dist: args.dist,
     baseline: readJson(join(args.baseline, 'redirects.json')),
     rows,
     resolve,
+    host,
     exceptions: gateExceptions(NAME, args),
     origins,
     paths: args.paths,

@@ -181,3 +181,14 @@ test('report json comes from options, not process.argv', () => {
   assert.deepEqual(JSON.parse(c.text()), { gate: 'text', checked: 1, failed: 1, failures: [failure] });
   assert.equal(c.code(), 1);
 });
+
+test('report lists each skip in skips, counts them, and keeps the exit code', () => {
+  const skips = [{ from: '/?p=2', reason: 'noop: destination equals source path' }];
+  const text = capture();
+  report('redirects', { checked: 2, failures: [], skipped: 1, skipReason: 'noop', skips }, { out: text.out, exit: text.exit });
+  assert.equal(text.text(), '  /?p=2 skipped: noop: destination equals source path\nredirects: 2 checked, 0 failed, 1 skipped (noop)\n');
+  assert.equal(text.code(), 0);
+  const json = capture();
+  report('redirects', { checked: 2, failures: [], skipped: 1, skipReason: 'noop', skips }, { json: true, out: json.out, exit: json.exit });
+  assert.deepEqual(JSON.parse(json.text()), { gate: 'redirects', checked: 2, failed: 0, skipped: 1, skipReason: 'noop', skips, failures: [] });
+});

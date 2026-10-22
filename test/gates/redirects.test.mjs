@@ -21,20 +21,29 @@ let baseline;
 let good;
 let vercelDir;
 let cloudflareDir;
+let cloudflareDist;
 
-// A site folder (cwd for the gate) holding redirects.csv and the host config compiled from it.
+// A site folder (cwd for the gate) holding redirects.csv and the host config compiled from it, as
+// init-site scaffolds it: vercel.json with cleanUrls for "never" and no trailingSlash, or
+// public/_redirects for Cloudflare.
 async function site(name, host, { rows = [], trailing = 'always' } = {}) {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
   copyFileSync(join(root, 'redirects.csv'), join(dir, 'redirects.csv'));
   if (rows.length) appendFileSync(join(dir, 'redirects.csv'), `${rows.join('\n')}\n`);
-  const out = host === 'vercel' ? 'vercel.json' : '_redirects';
   if (host === 'vercel') {
-    const config = { ...JSON.parse(readFileSync(TEMPLATE, 'utf8')), ...(trailing === 'always' ? { trailingSlash: true } : { cleanUrls: true, trailingSlash: false }) };
-    writeFileSync(join(dir, out), JSON.stringify(config));
+    const config = { ...JSON.parse(readFileSync(TEMPLATE, 'utf8')), ...(trailing === 'never' ? { cleanUrls: true } : {}) };
+    writeFileSync(join(dir, 'vercel.json'), JSON.stringify(config));
   }
-  await exec(process.execPath, [COMPILER, '--csv', 'redirects.csv', '--host', host, '--out', out, '--trailing-slash', trailing], { cwd: dir });
+  await exec(process.execPath, [COMPILER, '--host', host, '--trailing-slash', trailing], { cwd: dir });
   return dir;
+}
+
+// A built dist for a Cloudflare site: the fixture build plus public/_redirects, as Astro copies it.
+function cloudflareBuild(dir, name) {
+  const dist = makeDist(join(root, name));
+  copyFileSync(join(dir, 'public', '_redirects'), join(dist, '_redirects'));
+  return dist;
 }
 
 before(async () => {
@@ -43,6 +52,7 @@ before(async () => {
   good = makeDist(join(root, 'dist-good'));
   vercelDir = await site('site-vercel', 'vercel');
   cloudflareDir = await site('site-cloudflare', 'cloudflare');
+  cloudflareDist = cloudflareBuild(cloudflareDir, 'dist-cloudflare');
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -52,16 +62,27 @@ const vercelConfig = (dir) => JSON.parse(readFileSync(join(dir, 'vercel.json'), 
 test('the live chain /old-services -> /old-services/ -> /services/ compiles to one rule', () => {
   const rules = vercelConfig(vercelDir).redirects.filter((r) => r.destination === '/services/' && !r.has);
   assert.deepEqual(rules, [{ source: '/old-services', destination: '/services/', statusCode: 301 }]);
-  const lines = readFileSync(join(cloudflareDir, '_redirects'), 'utf8').split('\n');
+  const lines = readFileSync(join(cloudflareDir, 'public', '_redirects'), 'utf8').split('\n');
   assert.deepEqual(lines.filter((l) => l.startsWith('/old-services')), ['/old-services /services/ 301']);
 });
 
-test('vercel: the chain resolves in one hop; the gate passes every baseline redirect', async () => {
+test('vercel: the chain resolves in one hop; the gate passes every baseline redirect, the no-op is skipped', async () => {
   const resolved = resolveVercel('/old-services', { config: vercelConfig(vercelDir), dist: good });
   assert.deepEqual(resolved, { hops: [{ from: '/old-services', to: '/services/', status: 301 }], final: { path: '/services/', status: 200 } });
   const result = await gate(vercelDir, good);
   assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /^redirects: 14 checked, 0 failed$/m);
+  assert.match(result.stdout, /^ {2}\/\?p=2 skipped: noop: destination equals source path$/m);
+  assert.match(result.stdout, /^redirects: 13 checked, 0 failed, 1 skipped \(noop\)$/m);
+});
+
+test('vercel: a query redirect carries the query in one hop; /?p=2 -> / is not compiled', () => {
+  const config = vercelConfig(vercelDir);
+  assert.deepEqual(resolveVercel('/?p=7', { config, dist: good }), {
+    hops: [{ from: '/?p=7', to: '/services/?p=7', status: 301 }],
+    final: { path: '/services/?p=7', status: 200 },
+  });
+  assert.ok(!config.redirects.some((r) => r.has?.some((h) => h.key === 'p' && h.value === '2')), 'the no-op is left out');
+  assert.deepEqual(resolveVercel('/?p=2', { config, dist: good }).hops, []);
 });
 
 test('vercel trailingSlash: true runs before redirects, so a config that keeps it double-hops', async () => {
@@ -79,6 +100,20 @@ test('vercel trailingSlash: true runs before redirects, so a config that keeps i
   assert.match(result.stdout, /\/old-services hops: expected "1 hop to \/services\/", got "308 \/old-services\/ -> 301 \/services\/"/);
 });
 
+test('a redirect loop fails as "loop"', async () => {
+  const dir = join(root, 'site-loop');
+  mkdirSync(dir);
+  writeFileSync(join(dir, 'redirects.csv'), 'from,to,status,source,note\n/a,/b/,301,decision,\n');
+  const loop = [
+    { source: '/a', destination: '/b/', statusCode: 301 },
+    { source: '/b/', destination: '/a', statusCode: 301 },
+  ];
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify({ redirects: loop }));
+  const result = await gate(dir, good, ['--paths', '/a']);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^ {2}\/a loop: expected "1 hop to \/b\/", got "301 \/b\/ -> 301 \/a"$/m);
+});
+
 test('vercel never mode: compiled rules strip the slash only after the site redirects', async () => {
   const dist = makeDist(join(root, 'dist-file'), { bad: ['file-format'] });
   const dir = await site('site-never', 'vercel', { trailing: 'never', rows: ['/roofing-services/,/services/roofing,301,decision,'] });
@@ -90,32 +125,40 @@ test('vercel never mode: compiled rules strip the slash only after the site redi
   assert.deepEqual(resolveVercel('/contact/', { config, dist }).hops, [{ from: '/contact/', to: '/contact', status: 308 }]);
 });
 
-test('cloudflare: the chain resolves in one hop; unverified shortlinks fail as "unverified live"', async () => {
-  const rules = parseRedirectsFile(readFileSync(join(cloudflareDir, '_redirects'), 'utf8'));
-  const resolved = resolveCloudflare('/old-services', { rules, dist: good });
+test('cloudflare: the chain resolves in one hop; query rows are skipped and listed for Single Redirects', async () => {
+  const rules = parseRedirectsFile(readFileSync(join(cloudflareDist, '_redirects'), 'utf8'));
+  const resolved = resolveCloudflare('/old-services', { rules, dist: cloudflareDist });
   assert.deepEqual(resolved, { hops: [{ from: '/old-services', to: '/services/', status: 301 }], final: { path: '/services/', status: 200 } });
   // Pages' own slash handling: /about/index.html is served at /about/, /about redirects to it.
-  assert.deepEqual(resolveCloudflare('/contact', { rules, dist: good }).hops, [{ from: '/contact', to: '/contact/', status: 308 }]);
-  const seeds = await gate(cloudflareDir, good, ['--paths', '/old-services,/about']);
-  assert.equal(seeds.code, 0, seeds.stdout + seeds.stderr);
-  assert.match(seeds.stdout, /^redirects: 2 checked, 0 failed$/m);
-  // _redirects cannot match a query string, so /?p=7 serves the home page.
-  const all = await gate(cloudflareDir, good);
-  assert.equal(all.code, 1);
-  assert.match(all.stdout, /\/\?p=7 redirect: expected "\/services\/", got "no redirect: 200 at \/ \[unverified live\]"/);
-  assert.match(all.stdout, /^redirects: 14 checked, 12 failed$/m);
+  assert.deepEqual(resolveCloudflare('/contact', { rules, dist: cloudflareDist }).hops, [{ from: '/contact', to: '/contact/', status: 308 }]);
+  const all = await gate(cloudflareDir, cloudflareDist);
+  assert.equal(all.code, 0, all.stdout + all.stderr);
+  assert.match(all.stdout, /^ {2}\/\?p=7 skipped: query redirect, needs a Cloudflare Single Redirect$/m);
+  assert.match(all.stdout, /^ {2}\/\?p=2 skipped: noop: destination equals source path$/m);
+  assert.match(all.stdout, /^redirects: 2 checked, 0 failed, 12 skipped \(query redirect, needs a Cloudflare Single Redirect; noop\)$/m);
+  const json = JSON.parse((await gate(cloudflareDir, cloudflareDist, ['--json'])).stdout);
+  assert.equal(json.skipped, 12);
+  assert.equal(json.skips.length, 12);
+  assert.deepEqual(json.skips.find((s) => s.from === '/?p=7'), { from: '/?p=7', reason: 'query redirect, needs a Cloudflare Single Redirect' });
+  const queryRows = readFileSync(join(cloudflareDir, 'cloudflare-query-redirects.csv'), 'utf8').trimEnd().split('\n');
+  assert.equal(queryRows[0], 'from,to,status');
+  assert.equal(queryRows.length, 12, 'eleven shortlinks, the no-op left out');
+  assert.ok(queryRows.includes('/?p=7,/services/,301'));
 });
 
-test('the host is read from the config that exists, or from --host', async () => {
-  const auto = await gate(cloudflareDir, good, ['--paths', '/old-services', '--json']);
+test('the host is read from the config that exists; cloudflare reads only dist/_redirects', async () => {
+  const auto = await gate(cloudflareDir, cloudflareDist, ['--paths', '/old-services', '--json']);
   assert.equal(JSON.parse(auto.stdout).failed, 0);
+  const unbuilt = await gate(cloudflareDir, good);
+  assert.equal(unbuilt.code, 2);
+  assert.match(unbuilt.stderr, /public\/_redirects exists but .*_redirects does not: run the build/);
   const empty = join(root, 'site-empty');
   mkdirSync(empty);
   const none = await gate(empty, good);
   assert.equal(none.code, 2);
   assert.match(none.stderr, /build-redirects/);
   const forced = await gate(vercelDir, good, ['--host', 'cloudflare']);
-  assert.equal(forced.code, 2, 'no _redirects for --host cloudflare');
+  assert.equal(forced.code, 2, 'no dist/_redirects for --host cloudflare');
 });
 
 test('a redirect whose target is missing from dist fails', async () => {
@@ -131,15 +174,40 @@ test('a redirect source that is also a built page fails', async () => {
   const result = await gate(vercelDir, dist);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /\/old-services collision: expected null, got "old-services\.html"/);
-  assert.match(result.stdout, /^redirects: 14 checked, 1 failed$/m);
+  assert.match(result.stdout, /^redirects: 13 checked, 1 failed, 1 skipped \(noop\)$/m);
 });
 
 test('decision rows in redirects.csv are checked too', async () => {
   const dir = await site('site-decision', 'vercel', { rows: ['/promo,/contact/,301,decision,merged promo', '/gone,/missing/,301,decision,'] });
   const result = await gate(dir, good);
   assert.equal(result.code, 1);
-  assert.match(result.stdout, /^redirects: 16 checked, 1 failed$/m);
+  assert.match(result.stdout, /^redirects: 15 checked, 1 failed, 1 skipped \(noop\)$/m);
   assert.match(result.stdout, /\/gone target: expected "a page or file in dist", got "404 at \/missing\/"/);
+});
+
+const DYNAMIC = ['/svc/*,/services/:splat,301,decision,', '/o/:slug,/about/,301,decision,'];
+
+test('splat and placeholder rows are requested with sample URLs on both hosts', async () => {
+  const dir = await site('site-dynamic', 'vercel', { rows: DYNAMIC });
+  const config = vercelConfig(dir);
+  // The sample segment comes from a dist page the target matches: /services/roofing/.
+  assert.deepEqual(resolveVercel('/svc/roofing', { config, dist: good }).hops, [{ from: '/svc/roofing', to: '/services/roofing/', status: 301 }]);
+  const vercel = await gate(dir, good, ['--paths', '/svc/*,/o/*']);
+  assert.equal(vercel.code, 0, vercel.stdout);
+  assert.match(vercel.stdout, /^redirects: 3 checked, 0 failed$/m, 'two samples for the catch-all (one bare), one for the placeholder');
+  const cfDir = await site('site-dynamic-cf', 'cloudflare', { rows: DYNAMIC });
+  const cfDist = cloudflareBuild(cfDir, 'dist-dynamic-cf');
+  const cloudflare = await gate(cfDir, cfDist, ['--paths', '/svc/*,/o/*']);
+  assert.equal(cloudflare.code, 0, cloudflare.stdout);
+  assert.match(cloudflare.stdout, /^redirects: 3 checked, 0 failed$/m);
+});
+
+test('a failing sample fails its row', async () => {
+  const dir = await site('site-dynamic-bad', 'vercel', { rows: ['/gone/*,/missing/:splat,301,decision,', '/p/:id,/posts/:id/,301,decision,'] });
+  const result = await gate(dir, good, ['--paths', '/gone/*,/p/*']);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /\/gone\/\* target: expected "a page or file in dist", got "404 at \/missing\/sample\/ \(sample \/gone\/sample\)"/);
+  assert.match(result.stdout, /\/p\/:id target: .*\(sample \/p\/sample\)/);
 });
 
 test('a changed target needs a redirect exception; a stale one fails', async () => {

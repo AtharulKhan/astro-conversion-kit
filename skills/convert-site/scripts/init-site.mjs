@@ -34,14 +34,14 @@ Exit codes: 0 scaffolded, 2 usage or environment error (a non-empty directory is
 const HOSTS = {
   vercel: {
     redirectsOut: 'vercel.json',
-    skip: '_headers',
+    skip: 'public/_headers',
     deployPreview: 'npx vercel deploy',
     deployProduction: 'npx vercel deploy --prod',
     envCommand: '`npx vercel env add PUBLIC_INDEXABLE production` (value `true`).',
     dnsNote: 'add the domain with `npx vercel domains add <domain>` and set the records it prints.',
   },
   cloudflare: {
-    redirectsOut: '_redirects',
+    redirectsOut: 'public/_redirects',
     skip: 'vercel.json',
     // wrangler uploads the local dist/, so the flag belongs on the local build, never in the dashboard.
     deployPreview: 'npm run build && npx wrangler pages deploy dist --branch astro-rebuild',
@@ -59,9 +59,11 @@ const CONVERT_SCRIPTS = ['css-coverage', 'css-prune', 'media-plan', 'media-uploa
 const PINNED_DEPS = ['parse5', 'playwright', 'pixelmatch', 'pngjs', 'css-tree'];
 const COMMIT_SUBJECT = 'chore: scaffold from astro-conversion-kit';
 // Vercel URL handling per trailing-slash mode; cleanUrls never goes with the directory format.
+// No trailingSlash key: Vercel would apply it before the redirects and add a hop to every unslashed
+// source, so build-redirects writes the same slash rules after the site's redirects instead.
 const VERCEL_URLS = {
-  always: { trailingSlash: true },
-  never: { cleanUrls: true, trailingSlash: false },
+  always: {},
+  never: { cleanUrls: true },
 };
 
 class UsageError extends Error {}

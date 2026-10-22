@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,17 +16,19 @@ const GATES = readdirSync(dirname(gateScript('run-all')))
 let root;
 let baseline;
 let good;
+// The fixture build is a Cloudflare Pages one (dist/_headers), so each dist also gets the
+// public/_redirects compiled from the redirects.csv beside the baseline, as the build copies it.
+const build = (name, options) => {
+  const dist = makeDist(join(root, name), options);
+  copyFileSync(join(root, 'public', '_redirects'), join(dist, '_redirects'));
+  return dist;
+};
 before(async () => {
   root = mkdtempSync(join(tmpdir(), 'run-all-'));
   baseline = await buildFixtureBaseline(root);
-  good = makeDist(join(root, 'dist-good'));
-  // The redirects gate reads the host config compiled from the redirects.csv beside the baseline. A
-  // vercel.json is what the headers gate reads too, so it carries the staging headers of dist/_headers.
-  const all = ['X-Content-Type-Options: nosniff', 'Referrer-Policy: strict-origin-when-cross-origin', 'X-Frame-Options: SAMEORIGIN', 'X-Robots-Tag: noindex'];
-  const headers = all.map((line) => ({ key: line.split(': ')[0], value: line.split(': ')[1] }));
-  writeFileSync(join(root, 'vercel.json'), JSON.stringify({ headers: [{ source: '/(.*)', headers }] }));
   const compiler = fileURLToPath(new URL('../../skills/parity-gates/scripts/build-redirects.mjs', import.meta.url));
-  execFileSync(process.execPath, [compiler, '--host', 'vercel'], { cwd: root, stdio: 'ignore' });
+  execFileSync(process.execPath, [compiler, '--host', 'cloudflare'], { cwd: root, stdio: 'ignore' });
+  good = build('dist-good');
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -45,7 +47,7 @@ test('runs every gate in order and prints All N gates passed', async () => {
 });
 
 test('stops at the first failing gate with its exit code', async () => {
-  const bad = makeDist(join(root, 'dist-bad'), { bad: ['changed-title'] });
+  const bad = build('dist-bad', { bad: ['changed-title'] });
   const result = await runAll(bad, ['--origin', DIST_ORIGIN]);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^routes: \d+ checked, 0 failed$/m);

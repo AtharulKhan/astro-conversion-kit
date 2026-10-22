@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 // Compiles redirects.csv, the single source of a site's redirects, into the host's config:
 // the `redirects` of vercel.json, or a Cloudflare Pages _redirects file.
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { isDeepStrictEqual, parseArgs } from 'node:util';
 import { assertNodeVersion } from './lib/node-version.mjs';
-import { isCatchAll, isDynamic, isExternal, readRedirectsCsv, splitFrom } from './lib/redirects-csv.mjs';
+import {
+  CLOUDFLARE_QUERY_CSV, isCatchAll, isDynamic, isExternal, isNoop, readRedirectsCsv, splitFrom,
+} from './lib/redirects-csv.mjs';
 
 const NAME = 'build-redirects';
-const OUT = { vercel: 'vercel.json', cloudflare: '_redirects' };
+const OUT = { vercel: 'vercel.json', cloudflare: 'public/_redirects' };
 const MODES = new Set(['always', 'never']);
 export const CLOUDFLARE_LIMITS = { static: 2000, dynamic: 100 };
+// Vercel accepts 2,048 routes from vercel.json (redirects, rewrites and headers together).
+export const VERCEL_ROUTE_LIMIT = 2048;
+const VERCEL_ROUTE_WARNING = 1800;
 
 const HELP = `Usage: ${NAME} --host vercel|cloudflare [options]
 
@@ -19,11 +25,15 @@ in the csv's order. Sources are case-sensitive and kept as written.
 
   --csv <file>              the redirects (default: redirects.csv)
   --host vercel|cloudflare  the hosting target (required)
-  --out <file>              where to write (default: vercel.json or _redirects)
+  --out <file>              where to write (default: vercel.json, or public/_redirects so that
+                            Astro copies it into dist/)
   --trailing-slash <mode>   always or never: the site's URL form, used for catch-all targets and
-                            Vercel's slash rules (default for vercel: read from the existing
-                            vercel.json, else always; for cloudflare: always)
+                            Vercel's slash rules (default for vercel: read from the slash rules
+                            or keys already in vercel.json, else always; for cloudflare: always)
   --help                    show this help
+
+A query row whose target is its own path (/?p=2 -> /) is left out as a no-op: hosts pass the query
+on to the target, so the rule would redirect to itself, and the page is already served there.
 
 vercel: merges into an existing vercel.json, keeping every other key (headers, rewrites,
 cleanUrls, ...) and replacing "redirects". Entries are { source, destination, statusCode }, never
@@ -31,12 +41,13 @@ cleanUrls, ...) and replacing "redirects". Entries are { source, destination, st
 /old/:path*) is written in both its /:path* and /:path*/ forms. Vercel applies "trailingSlash"
 before "redirects", so an unslashed source would take two hops (308 to the slashed URL, then the
 redirect); the key is therefore replaced by the same 308 normalisation written as the last
-redirects, after the site's own.
+redirects, after the site's own. Warns near Vercel's 2,048-route limit, and in "always" mode on a
+target without its trailing slash (the slash rule would add a second hop).
 
 cloudflare: writes "from to status" lines, static rules first, then splats and placeholders. A
-query-string row cannot be matched by _redirects and is left out, named on stderr. Pages accepts
-2,000 static and 100 dynamic rules; more than that warns. The file must reach the deployed
-output (put it in public/ or point --out at public/_redirects).
+query-string row cannot be matched by _redirects: it is written to ${CLOUDFLARE_QUERY_CSV}
+(from,to,status) beside the csv, to be created as a Cloudflare Single Redirect. Pages accepts
+2,000 static and 100 dynamic rules; more than that warns.
 
 A static file at a redirect source competes with the rule: hosts differ on which one answers, so
 the redirects gate fails any source that is also a page or file in dist. Delete the page or the
@@ -49,6 +60,7 @@ const fail = (message) => {
   process.stderr.write(`${NAME}: ${message}\n`);
   process.exit(2);
 };
+const warn = (message) => process.stderr.write(`${NAME}: warning: ${message}\n`);
 
 // Escape path-to-regexp's special characters, keeping :name, :name*, :name+ and :name? parameters.
 const pathToRegexpSafe = (path) => path.replace(/(:\w+[*+?]?)|([(){}*+?])/g, (m, param, ch) => param ?? `\\${ch}`);
@@ -117,10 +129,74 @@ export function cloudflareLines(rows, mode = 'always') {
   };
 }
 
-function inferMode(existing) {
+// The URL mode of an existing vercel.json: from the slash rules a previous run wrote, else from
+// trailingSlash, else cleanUrls (the "never" form), else "always".
+export function inferMode(existing) {
+  const redirects = Array.isArray(existing.redirects) ? existing.redirects : [];
+  for (const mode of MODES) {
+    if (redirects.some((r) => isDeepStrictEqual(r, SLASH_RULES[mode][0]))) return mode;
+  }
   if (existing.trailingSlash === true) return 'always';
   if (existing.trailingSlash === false || existing.cleanUrls === true) return 'never';
   return 'always';
+}
+
+// Static rows whose internal target lacks the trailing slash an "always" site adds with a 308.
+function unslashedTargets(rows) {
+  return rows.filter((row) => {
+    if (isCatchAll(row.from) || isExternal(row.to)) return false;
+    const path = row.to.split(/[?#]/)[0];
+    return !path.endsWith('/') && !/\.[^/]*$/.test(path);
+  });
+}
+
+function writeVercel(out, rows, mode) {
+  let existing = {};
+  if (existsSync(out)) {
+    try {
+      existing = JSON.parse(readFileSync(out, 'utf8'));
+    } catch (error) {
+      fail(`${out}: not valid JSON (${error.message})`);
+    }
+  }
+  const urlMode = mode ?? inferMode(existing);
+  const { trailingSlash, redirects: _replaced, ...kept } = existing;
+  const redirects = vercelRules(rows, urlMode);
+  writeFileSync(out, `${JSON.stringify({ ...kept, redirects }, null, 2)}\n`);
+  if (trailingSlash !== undefined) {
+    process.stderr.write(
+      `${NAME}: replaced "trailingSlash": ${trailingSlash} with ${SLASH_RULES[urlMode].length} slash rule(s) after the site's ` +
+        'redirects, so an unslashed source redirects in one hop\n',
+    );
+  }
+  const routes = redirects.length + (kept.headers?.length ?? 0) + (kept.rewrites?.length ?? 0);
+  if (routes > VERCEL_ROUTE_WARNING) {
+    warn(`${routes} routes in ${out}; Vercel accepts ${VERCEL_ROUTE_LIMIT.toLocaleString('en-US')} (redirects, rewrites and headers together)`);
+  }
+  if (urlMode === 'always') {
+    const unslashed = unslashedTargets(rows);
+    if (unslashed.length) {
+      warn(`${unslashed.length} target(s) without a trailing slash; the slash rule adds a second hop: ${unslashed.map((r) => `${r.from} -> ${r.to}`).join(', ')}`);
+    }
+  }
+  return `${rows.length} rows -> ${redirects.length} rules in ${out} (vercel, trailing slash ${urlMode})`;
+}
+
+function writeCloudflare(out, rows, mode, csv) {
+  const { lines, skipped, counts } = cloudflareLines(rows, mode ?? 'always');
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, `# Generated by ${NAME} from ${csv}; edit that file instead.\n${lines.join('\n')}\n`);
+  const queryCsv = join(dirname(csv), CLOUDFLARE_QUERY_CSV);
+  if (skipped.length) {
+    writeFileSync(queryCsv, `from,to,status\n${skipped.map((r) => `${r.from},${r.to},${r.status}`).join('\n')}\n`);
+    process.stderr.write(
+      `${NAME}: ${skipped.length} query row(s) cannot be matched by _redirects; wrote ${queryCsv}: create each as a ` +
+        'Cloudflare Single Redirect (a rule on http.request.uri.query)\n',
+    );
+  } else rmSync(queryCsv, { force: true });
+  if (counts.static > CLOUDFLARE_LIMITS.static) warn(`${counts.static} static rules; Cloudflare Pages accepts 2,000`);
+  if (counts.dynamic > CLOUDFLARE_LIMITS.dynamic) warn(`${counts.dynamic} dynamic rules; Cloudflare Pages accepts 100`);
+  return `${rows.length} rows -> ${lines.length} rules in ${out} (cloudflare)`;
 }
 
 function main() {
@@ -157,46 +233,14 @@ function main() {
   } catch (error) {
     fail(error.message);
   }
+  const noops = rows.filter(isNoop);
+  if (noops.length) {
+    process.stderr.write(`${NAME}: ${noops.length} no-op row(s) left out (destination equals source path): ${noops.map((r) => r.from).join(', ')}\n`);
+  }
+  const live = rows.filter((row) => !isNoop(row));
   const out = values.out ?? OUT[host];
-
-  if (host === 'vercel') {
-    let existing = {};
-    if (existsSync(out)) {
-      try {
-        existing = JSON.parse(readFileSync(out, 'utf8'));
-      } catch (error) {
-        fail(`${out}: not valid JSON (${error.message})`);
-      }
-    }
-    const urlMode = mode ?? inferMode(existing);
-    const { trailingSlash, redirects: _replaced, ...kept } = existing;
-    const redirects = vercelRules(rows, urlMode);
-    writeFileSync(out, `${JSON.stringify({ ...kept, redirects }, null, 2)}\n`);
-    if (trailingSlash !== undefined) {
-      process.stderr.write(
-        `${NAME}: replaced "trailingSlash": ${trailingSlash} with ${SLASH_RULES[urlMode].length} slash rule(s) after the site's ` +
-          'redirects, so an unslashed source redirects in one hop\n',
-      );
-    }
-    process.stdout.write(`${NAME}: ${rows.length} rows -> ${redirects.length} rules in ${out} (vercel, trailing slash ${urlMode})\n`);
-    return;
-  }
-
-  const { lines, skipped, counts } = cloudflareLines(rows, mode ?? 'always');
-  const header = `# Generated by ${NAME} from ${values.csv}; edit that file instead.\n`;
-  writeFileSync(out, `${header}${lines.join('\n')}\n`);
-  if (skipped.length) {
-    process.stderr.write(
-      `${NAME}: ${skipped.length} row(s) left out: _redirects cannot match a query string (${skipped.map((r) => r.from).join(', ')})\n`,
-    );
-  }
-  if (counts.static > CLOUDFLARE_LIMITS.static) {
-    process.stderr.write(`${NAME}: warning: ${counts.static} static rules; Cloudflare Pages accepts 2,000\n`);
-  }
-  if (counts.dynamic > CLOUDFLARE_LIMITS.dynamic) {
-    process.stderr.write(`${NAME}: warning: ${counts.dynamic} dynamic rules; Cloudflare Pages accepts 100\n`);
-  }
-  process.stdout.write(`${NAME}: ${rows.length} rows -> ${lines.length} rules in ${out} (cloudflare)\n`);
+  const summary = host === 'vercel' ? writeVercel(out, live, mode) : writeCloudflare(out, live, mode, values.csv);
+  process.stdout.write(`${NAME}: ${summary}\n`);
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

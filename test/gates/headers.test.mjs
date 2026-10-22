@@ -123,6 +123,15 @@ test('no vercel.json and no _headers fails', async () => {
   assert.match(result.stdout, /config: expected "vercel\.json or _headers", got null/);
 });
 
+test("the site template's public/_headers, copied into dist by the build, passes for production", async () => {
+  const template = new URL('../../skills/convert-site/templates/site/public/_headers', import.meta.url);
+  const dir = join(root, 'template-site');
+  mkdirSync(join(dir, 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'dist', '_headers'), readFileSync(template, 'utf8'));
+  const result = await headers(join(dir, 'dist'), [], { cwd: dir, indexable: 'true' });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+});
+
 test('usage errors exit 2 and --help exits 0', async () => {
   assert.equal((await headers(good, ['--bogus'])).code, 2);
   assert.equal((await headers(good, ['--vercel', 'missing.json'])).code, 2);

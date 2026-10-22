@@ -125,25 +125,32 @@ export function distSet(dist) {
 }
 
 // Shared request loop: next(path, search) returns a hop { to, status } or a final { path, status }.
-// A hop to an absolute URL on one of `origins` continues at its path; any other absolute URL ends
-// the chain with { path: url, status: null }.
+// Both hosts pass the request's query string on to a destination that has none, so it is carried
+// across hops (and `final.path` keeps it). A hop to an absolute URL on one of `origins` continues
+// at its path; any other absolute URL ends the chain with { path: url, status: null }. A URL
+// requested twice, or more than MAX_HOPS hops, ends it with status "loop".
 export function follow(url, next, origins = []) {
   const hops = [];
+  const seen = new Set([url]);
   let current = url;
-  for (let n = 0; n <= MAX_HOPS; n += 1) {
+  for (let n = 0; n < MAX_HOPS; n += 1) {
     const at = current.indexOf('?');
     const path = at === -1 ? current : current.slice(0, at);
     const search = at === -1 ? '' : current.slice(at);
     const result = next(path, search);
-    if (!('to' in result)) return { hops, final: result };
-    hops.push({ from: current, to: result.to, status: result.status });
-    if (isExternal(result.to)) {
-      const own = origins.find((o) => o && (result.to === o || result.to.startsWith(`${o}/`)));
-      if (!own) return { hops, final: { path: result.to, status: null } };
-      current = result.to.slice(own.length) || '/';
-    } else current = result.to;
+    if (!('to' in result)) return { hops, final: { path: current, status: result.status } };
+    const to = result.to.includes('?') ? result.to : `${result.to}${search}`;
+    hops.push({ from: current, to, status: result.status });
+    if (isExternal(to)) {
+      const own = origins.find((o) => o && (to === o || to.startsWith(`${o}/`) || to.startsWith(`${o}?`)));
+      if (!own) return { hops, final: { path: to, status: null } };
+      current = to.slice(own.length) || '/';
+      if (current.startsWith('?')) current = `/${current}`;
+    } else current = to;
+    if (seen.has(current)) return { hops, final: { path: current, status: 'loop' } };
+    seen.add(current);
   }
-  return { hops, final: { path: current, status: null } };
+  return { hops, final: { path: current, status: 'loop' } };
 }
 
 // vercelResolver({ config, dist, origins }) -> (url) => { hops: [{ from, to, status }], final: { path, status } }

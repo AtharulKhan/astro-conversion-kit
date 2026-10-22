@@ -38,10 +38,14 @@ third-party scripts stay; a wrong one breaks forms and analytics silently.
 
 | Live URLs look like | Astro | `vercel.json` |
 |---|---|---|
-| `/about/` | `trailingSlash: 'always'`, `build.format: 'directory'` | `"trailingSlash": true` |
-| `/about` | `trailingSlash: 'never'`, `build.format: 'file'` | `"cleanUrls": true, "trailingSlash": false` |
+| `/about/` | `trailingSlash: 'always'`, `build.format: 'directory'` | slash rules adding `/` |
+| `/about` | `trailingSlash: 'never'`, `build.format: 'file'` | `"cleanUrls": true`, slash rules removing `/` |
 
-With `trailingSlash: true`, Vercel redirects `/about` to `/about/` itself. `cleanUrls` serves
+`vercel.json` carries no `trailingSlash` key: Vercel applies it before `redirects`, so every
+unslashed redirect source would take two hops. `npm run redirects:build` writes the same 308
+normalisation as the last entries of `redirects`, after the site's own rules. A query row whose
+target is its own path (`/?p=2` to `/`) is left out: Vercel passes the query on, so it would
+redirect to itself. `cleanUrls` serves
 `about.html` at `/about` and redirects `/about.html` there; it is never combined with the directory
 format. URLs in the minority form become rows in `redirects.csv`.
 
@@ -74,13 +78,17 @@ settings). The first deploy has to name the project, with `--project-name <name>
 wrangler uploads the local `dist/`, the indexable switch belongs on that local build, not in the
 Pages dashboard.
 
-**Redirects.** `npm run redirects:build` writes `_redirects` from `redirects.csv`. Each line is
+**Redirects.** `npm run redirects:build` writes `public/_redirects` from `redirects.csv`; Astro copies it
+into `dist/`, which is what wrangler uploads and what the redirect gate reads. Each line is
 `source destination status`; Pages treats a line with no status as a 302, so every line must carry
 the code the live site used. Pages allows 2,000 static and 100 dynamic redirects (dynamic means a
 splat or a placeholder). Beyond that, the rest belong in Cloudflare Bulk Redirects, an account-level
-list set up in the dashboard; the runbook points you there when the count is over.
+list set up in the dashboard; the runbook points you there when the count is over. `_redirects`
+cannot match a query string, so query rows (WordPress `/?p=7` shortlinks) go to
+`cloudflare-query-redirects.csv` beside `redirects.csv`, each to be created as a Single Redirect
+(a rule on `http.request.uri.query`); the redirect gate lists them as skipped.
 
-**Headers.** `_headers` carries the same baseline as Vercel: `nosniff`, the referrer policy,
+**Headers.** `public/_headers` (copied into `dist/` by the build) carries the same baseline as Vercel: `nosniff`, the referrer policy,
 `SAMEORIGIN` framing, and an immutable cache on `/_astro/*`.
 
 **URL modes.** Pages serves `about/index.html` at `/about/` and redirects `/about` to it, and serves

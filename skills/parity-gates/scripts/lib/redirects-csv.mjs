@@ -79,3 +79,13 @@ export const isCatchAll = (from) => /\/\*$/.test(from) || /:\w+[*+]/.test(from);
 // Anything with a splat or a placeholder.
 export const isDynamic = (from) => from.includes('*') || /:\w/.test(from);
 export const isExternal = (to) => /^[a-z][a-z0-9+.-]*:\/\//i.test(to);
+
+// A query row whose target is its own path (/?p=2 -> /): both hosts pass the query on to the
+// target, so the rule would answer itself forever. The page is already served at that URL.
+export function isNoop({ from, to }) {
+  const { path, query } = splitFrom(from);
+  return query.length > 0 && !isExternal(to) && !to.includes('?') && to === path;
+}
+
+// Where build-redirects lists the query rows Cloudflare's _redirects cannot match.
+export const CLOUDFLARE_QUERY_CSV = 'cloudflare-query-redirects.csv';

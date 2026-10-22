@@ -94,9 +94,11 @@ test('vercel: trailingSlash is replaced by ordered rules after the site redirect
   assert.match(result.stderr, /trailingSlash/);
 });
 
-test('cloudflare: static rules first, splats kept, query rows left out with a warning', async () => {
-  const out = join(root, '_redirects');
-  const result = await compile(['--csv', csv('cf.csv', ROWS), '--host', 'cloudflare', '--out', out]);
+test('cloudflare: static rules first, splats kept, query rows listed for Single Redirects', async () => {
+  const out = join(root, 'public', '_redirects');
+  csv('cf.csv', [...ROWS, '/?p=2,/,301,shortlink,']);
+  // The default --out is public/_redirects, which Astro copies into dist/.
+  const result = await compile(['--csv', 'cf.csv', '--host', 'cloudflare']);
   assert.equal(result.code, 0, result.stderr);
   const lines = readFileSync(out, 'utf8').split('\n').filter((l) => l && !l.startsWith('#'));
   // In "always" mode a catch-all lands on the slashed URL in one hop; its bare prefix gets a static rule.
@@ -110,8 +112,34 @@ test('cloudflare: static rules first, splats kept, query rows left out with a wa
   const rules = parseRedirectsFile(readFileSync(out, 'utf8'));
   assert.deepEqual(resolveCloudflare('/blog/a', { rules, dist: root }).hops, [{ from: '/blog/a', to: '/news/a/', status: 301 }]);
   assert.deepEqual(resolveCloudflare('/blog/', { rules, dist: root }).hops, [{ from: '/blog/', to: '/news/', status: 301 }]);
-  assert.match(result.stderr, /\/\?p=7/);
-  assert.match(result.stderr, /query string/);
+  assert.match(result.stderr, /cloudflare-query-redirects\.csv/);
+  assert.match(result.stderr, /Single Redirect/);
+  assert.match(result.stderr, /no-op row\(s\) left out .*\/\?p=2/);
+  assert.equal(readFileSync(join(root, 'cloudflare-query-redirects.csv'), 'utf8'), 'from,to,status\n/?p=7,/services/,301\n');
+  // Without query rows the list is removed rather than left stale.
+  await compile(['--csv', csv('cf-none.csv', ROWS.slice(0, 1)), '--host', 'cloudflare', '--out', join(root, 'none_redirects')]);
+  assert.ok(!existsSync(join(root, 'cloudflare-query-redirects.csv')));
+});
+
+test('vercel: the mode is read back from the slash rules a previous run wrote', async () => {
+  const out = join(root, 'again.json');
+  writeFileSync(out, '{}');
+  await compile(['--csv', csv('again.csv', ROWS.slice(0, 1)), '--host', 'vercel', '--out', out, '--trailing-slash', 'never']);
+  const again = await compile(['--csv', 'again.csv', '--host', 'vercel', '--out', out]);
+  assert.match(again.stdout, /trailing slash never/);
+  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')).redirects.at(-1), { source: '/:path(.+)/', destination: '/:path', statusCode: 308 });
+});
+
+test('vercel: warns on an unslashed target in always mode and near the 2,048-route limit', async () => {
+  const out = join(root, 'warn.json');
+  const unslashed = await compile(['--csv', csv('unslashed.csv', ['/x,/contact,301,decision,', '/y,/brochure.pdf,301,decision,']), '--host', 'vercel', '--out', out]);
+  assert.match(unslashed.stderr, /1 target\(s\) without a trailing slash.*\/x -> \/contact/);
+  const many = Array.from({ length: 1801 }, (_, i) => `/old-${i},/services/,301,decision,`);
+  const big = await compile(['--csv', csv('big.csv', many), '--host', 'vercel', '--out', join(root, 'big.json')]);
+  assert.equal(big.code, 0);
+  assert.match(big.stderr, /1803 routes .*2,048/);
+  const small = await compile(['--csv', csv('small.csv', ROWS.slice(0, 1)), '--host', 'vercel', '--out', join(root, 'small.json')]);
+  assert.doesNotMatch(small.stderr, /warning/);
 });
 
 test('cloudflare: more than 2,000 static or 100 dynamic rules warns', async () => {
