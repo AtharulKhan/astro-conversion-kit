@@ -111,6 +111,26 @@ test('a gzipped sitemap is decompressed before parsing', async () => {
   }
 });
 
+test('a gzipped sitemap that decodes past 20 MB is not expanded and is reported "too-large"', async () => {
+  const bomb = gzipSync(Buffer.alloc(20 * 1024 * 1024 + 1, ' '));
+  assert.ok(bomb.length < 100_000, 'small on the wire');
+  const stub = await startStub({
+    '/sitemap_index.xml': (o) => ({
+      body: `<sitemapindex><sitemap><loc>${o}/big.xml.gz</loc></sitemap><sitemap><loc>${o}/pages.xml</loc></sitemap></sitemapindex>`,
+    }),
+    '/big.xml.gz': { headers: { 'Content-Type': 'application/x-gzip' }, body: bomb },
+    '/pages.xml': (o) => ({ body: `<urlset><url><loc>${o}/a/</loc></url></urlset>` }),
+  });
+  try {
+    const errors = [];
+    const entries = await expandSitemaps([`${stub.origin}/sitemap_index.xml`], { fetch: fast, onError: (e) => errors.push(e) });
+    assert.deepEqual(entries.map((e) => new URL(e.loc).pathname), ['/a/']);
+    assert.deepEqual(errors, [{ url: `${stub.origin}/big.xml.gz`, status: 'too-large' }]);
+  } finally {
+    await stub.close();
+  }
+});
+
 test('a Drupal sitemap index of ?page= children is walked as an index', async () => {
   const stub = await startStub({
     '/sitemap.xml': (o) => ({

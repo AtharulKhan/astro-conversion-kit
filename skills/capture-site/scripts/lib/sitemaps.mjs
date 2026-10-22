@@ -1,11 +1,17 @@
 // Sitemap expansion: walk sitemap indexes down to their leaf URL sets.
-// expandSitemaps(urls, { fetch }) -> [{ loc, lastmod, source }], deduplicated by loc, first source wins.
+// expandSitemaps(urls, { fetch, onError }) -> [{ loc, lastmod, source }], deduplicated by loc, first
+// source wins. A gzipped sitemap that decodes past MAX_TEXT_BYTES is skipped and reported to
+// onError({ url, status: 'too-large' }); parseSitemap marks it { tooLarge: true } with no entries.
 // A bare `/sitemap.xml` that is a URL set is also paged Drupal-style (`?page=1`, `?page=2`, ...)
 // until a page is non-200, lists no <loc>, or adds nothing new.
 
 import { gunzipSync } from 'node:zlib';
 
 const MAX_PAGES = 10_000;
+// The decoded size a gzipped sitemap may reach (the same 20 MB cap as any text body over HTTP),
+// so a small .xml.gz cannot expand to gigabytes in memory.
+const MAX_TEXT_BYTES = 20 * 1024 * 1024;
+export const TOO_LARGE = 'too-large';
 
 function decode(text) {
   return text
@@ -28,12 +34,14 @@ function blocks(xml, name) {
 }
 
 // A gzipped sitemap (`.xml.gz`) arrives as a binary Buffer starting with the gzip magic bytes.
+// Past MAX_TEXT_BYTES decoded it is null; a corrupt one reads as empty.
 function toText(body) {
   if (!Buffer.isBuffer(body)) return String(body ?? '');
   if (body[0] === 0x1f && body[1] === 0x8b) {
     try {
-      return gunzipSync(body).toString('utf8');
-    } catch {
+      return gunzipSync(body, { maxOutputLength: MAX_TEXT_BYTES }).toString('utf8');
+    } catch (err) {
+      if (err.code === 'ERR_BUFFER_TOO_LARGE') return null;
       return '';
     }
   }
@@ -42,6 +50,7 @@ function toText(body) {
 
 export function parseSitemap(xml, base) {
   const text = toText(xml);
+  if (text === null) return { index: false, children: [], entries: [], tooLarge: true };
   const resolveLoc = (loc) => {
     try {
       return new URL(loc, base).href;
@@ -71,7 +80,7 @@ function pageUrl(url, page) {
   return parsed.href;
 }
 
-export async function expandSitemaps(urls, { fetch }) {
+export async function expandSitemaps(urls, { fetch, onError = () => {} }) {
   const visited = new Set();
   const byLoc = new Map();
   const queue = [...urls];
@@ -80,7 +89,10 @@ export async function expandSitemaps(urls, { fetch }) {
     visited.add(url);
     const res = await fetch(url, { redirect: 'follow' });
     if (res.status !== 200) return null;
-    return parseSitemap(res.body, res.finalUrl || url);
+    const sitemap = parseSitemap(res.body, res.finalUrl || url);
+    if (!sitemap.tooLarge) return sitemap;
+    onError({ url, status: TOO_LARGE });
+    return null;
   };
 
   const add = (entries, source) => {

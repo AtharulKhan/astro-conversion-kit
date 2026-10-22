@@ -313,7 +313,11 @@ class Crawler {
       }
       for (const sitemap of this.state.fingerprint.sitemapUrls) {
         if (this.state.sitemapsDone.includes(sitemap)) continue;
-        const entries = await expandSitemaps([sitemap], { fetch });
+        const errors = (this.state.discoveryErrors ??= []);
+        const onError = (e) => {
+          if (!errors.some((x) => x.url === e.url)) errors.push(e);
+        };
+        const entries = await expandSitemaps([sitemap], { fetch, onError });
         for (const entry of entries) this.enqueue(entry.loc, 'sitemap');
         this.state.sitemapsDone.push(sitemap);
         saveState(this.out, this.state);

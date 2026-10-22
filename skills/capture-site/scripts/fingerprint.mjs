@@ -117,7 +117,8 @@ async function findSitemaps(origin, platform, declared, fetch) {
     if (res.status !== 200) continue;
     const sitemap = parseSitemap(res.body, res.finalUrl || url);
     if (sitemap.index && sitemap.children.length > 0) return unique([...sitemap.children, ...others]);
-    if (!sitemap.index && sitemap.entries.length > 0) return unique([url, ...others]);
+    // Too large to read here: kept, so the capture's sitemap step reports it.
+    if (sitemap.tooLarge || (!sitemap.index && sitemap.entries.length > 0)) return unique([url, ...others]);
   }
   return others;
 }

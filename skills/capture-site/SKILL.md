@@ -90,7 +90,8 @@ source. Run each step as its own command, in this order:
 
 8. **README.** Summarises the capture in `capture/README.md`; its `## Notes` open with generated
    lines, rewritten on every run (how many Wayback paths the second pass verified and what each
-   answered: status, redirect target; every URL still failing after its retries). Run it last,
+   answered: status, redirect target; a Wayback listing that failed or was refused for size;
+   every URL still failing after its retries). Run it last,
    and after any rerun:
 
        node <skill-dir>/scripts/readme.mjs --capture capture
@@ -176,6 +177,8 @@ wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, befor
 Repeat this list to the person verbatim. None of it was captured:
 
 - Classes and states added by JavaScript after load (open menus, sliders); coverage runs later.
+- A gzipped sitemap that decodes past 20 MB: not read, listed in `meta.json` `discoveryErrors`
+  with status `too-large`.
 - CSS `@import` more than 5 levels below a linked stylesheet (listed `too-deep` in
   `css/manifest.json`, never fetched).
 - Media on other hosts (platform CDNs, image services): not listed in `media.json`.

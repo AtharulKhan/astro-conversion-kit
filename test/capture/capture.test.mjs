@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from '../fixture/serve.mjs';
 import { startStub } from './helpers.mjs';
@@ -204,6 +205,23 @@ test('a URL that keeps answering 429 is given up; three different URLs failing i
     assert.ok(state.queue.every((q) => q.attempts <= 1));
   } finally {
     await busy.close();
+  }
+});
+
+test('a gzipped sitemap too large once decoded is a discoveryErrors entry "too-large", not fatal', async () => {
+  const stub = await startStub({
+    '/': { body: '<html><body>home</body></html>' },
+    '/robots.txt': { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'Sitemap: /big.xml.gz\n' },
+    '/big.xml.gz': { headers: { 'Content-Type': 'application/x-gzip' }, body: gzipSync(Buffer.alloc(20 * 1024 * 1024 + 1, ' ')) },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const errors = readJson(out, 'meta.json').discoveryErrors.map((e) => `${new URL(e.url).pathname}:${e.status}`);
+    assert.ok(errors.includes('/big.xml.gz:too-large'), errors.join(' '));
+  } finally {
+    await stub.close();
   }
 });
 
@@ -408,6 +426,10 @@ test('a Wayback failure is recorded in meta.json and never fails the capture; --
   const meta = readJson(out, 'meta.json');
   assert.equal(meta.wayback.status, 'failed');
   assert.match(meta.wayback.error, /ECONNREFUSED|fetch failed/);
+  assert.match(await readme(out), /^- Wayback: the CDX listing failed \(.+\), so no archived paths were checked$/m);
+  // A listing refused for its size (the HTTP layer answers "too-large") is named as such.
+  writeFileSync(join(out, 'meta.json'), JSON.stringify({ ...meta, wayback: { status: 'failed', error: 'the Wayback CDX API answered too-large' } }));
+  assert.match(await readme(out), /^- Wayback: the CDX listing was refused for size \(too-large\), so no archived paths were checked/m);
 
   const skipped = tempDir();
   const before = cdx.requests.length;
