@@ -311,3 +311,50 @@ test('usage errors exit 2 and write nothing', (t) => {
   assert.equal(run(baseArgs(dir, null, { extra: ['--trailing-slash', 'sometimes'] })).status, 2);
   assert.deepEqual(readdirSync(dir), []);
 });
+
+// The script each npm script in docs/LAUNCH.md runs, so its flags can be checked against --help.
+const LAUNCH_SCRIPTS = {
+  'review:shoot': ['visual-review', 'shoot.mjs'],
+  'review:diff': ['visual-review', 'diff.mjs'],
+  'review:sheet': ['visual-review', 'sheet.mjs'],
+  'verify:live': ['parity-gates', 'verify-live.mjs'],
+  verify: ['parity-gates', 'verify/forms.mjs', 'verify/routes.mjs'],
+  'verify:release': ['parity-gates', 'verify/forms.mjs', 'verify/routes.mjs'],
+};
+
+const helpOf = (skill, script) => spawnSync(process.execPath, [join(ROOT, 'skills', skill, 'scripts', script), '--help'], { encoding: 'utf8' }).stdout;
+
+test('docs/LAUNCH.md: every command complete, its flags in the script --help, the sitemap from the capture, the visual rule', (t) => {
+  const dir = tempDir(t, 'site-');
+  for (const name of ['page-sitemap.xml', 'post-sitemap.xml', 'sitemap_index.xml']) plant(join(dir, 'capture', 'sitemaps', name), '<x/>\n');
+  const result = run(baseArgs(dir, bareKit(t)));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const launch = readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8');
+
+  const commands = [...launch.matchAll(/`(npm run [^`]+)`/g)].map((m) => m[1]);
+  const flagged = (name) => commands.filter((c) => c.startsWith(`npm run ${name} -- `));
+  for (const name of ['review:shoot', 'review:diff', 'review:sheet', 'verify', 'verify:release']) assert.ok(flagged(name).length, `${name} with its arguments`);
+  assert.ok(commands.filter((c) => c.startsWith('npm run verify:live')).every((c) => /-- --base \S+/.test(c)), 'verify:live always with --base');
+  assert.match(launch, /npm run review:shoot -- --base http:\/\/localhost:4321 --routes capture\/templates\.json --widths 390,768,1440 --out review\/new/);
+  assert.match(launch, /npm run review:diff -- --a capture\/screens\/live --b review\/new --out review\/diff/);
+  for (const name of ['verify', 'verify:release']) {
+    for (const c of flagged(name)) assert.match(c, /--endpoint "\$FORM_ENDPOINT" --honeypot _gotcha --thank-you \/thank-you\//);
+  }
+  for (const [name, [skill, ...scripts]] of Object.entries(LAUNCH_SCRIPTS)) {
+    const help = scripts.map((s) => helpOf(skill, s)).join('\n');
+    for (const c of commands.filter((x) => x === `npm run ${name}` || x.startsWith(`npm run ${name} `))) {
+      for (const flag of c.match(/--[a-z-]+/g) ?? []) assert.ok(help.includes(flag), `${c}: ${flag} is not in ${scripts.join(', ')} --help`);
+    }
+  }
+  assert.match(launch, /^ {4}export FORM_ENDPOINT="https:\/\/formspree\.io\/f\/REPLACE"$/m);
+  assert.ok(launch.includes('`https://www.fixture-roofing.test/sitemap_index.xml`'), 'the sitemap index the capture saved');
+  assert.doesNotMatch(launch, /forms@example\.com style|each miss is an exception/);
+  assert.match(launch, /0\.5 % or fewer differing pixels/);
+  assert.match(launch, /needs a decision row/);
+});
+
+test('docs/LAUNCH.md names sitemap.xml when the capture saved no sitemap', (t) => {
+  const dir = tempDir(t, 'site-');
+  assert.equal(run(baseArgs(dir, bareKit(t))).status, 0);
+  assert.ok(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8').includes('`https://www.fixture-roofing.test/sitemap.xml`'));
+});

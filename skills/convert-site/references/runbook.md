@@ -1,8 +1,9 @@
 # The runbook: docs/LAUNCH.md
 
-The scaffold writes `docs/LAUNCH.md` with four sections. In phase 12 (`pr`) you fill it for this
-run: every line concrete (the real host, project, counts, commands and URLs), in the order a
-person does them. It is the person's document; you never tick a box in it on their behalf.
+The scaffold writes `docs/LAUNCH.md` with four sections, every command complete with its
+arguments. In phase 12 (`pr`) you fill it for this run: the `STAGING_URL` line, `FORM_ENDPOINT`
+once the form id is known, and every line concrete (the real host, project, counts, commands and
+URLs), in the order a person does them. It is the person's document; you never tick a box in it on their behalf.
 
 ## A. Needs you
 
@@ -40,7 +41,8 @@ Typical run-specific lines (keep the ones that apply):
 
 - [ ] `npm run build` then `npm run verify -- --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/`
       passes on `astro-rebuild` (paste the summary line).
-- [ ] The visual review passes for templates and every page (`review/all.html`).
+- [ ] The visual review passes for templates and every page (`review/all.html`): 0.5 % or fewer
+      differing pixels per page and width; a looser `--per-route` threshold needs a decision row.
 - [ ] `npm run redirects:build` output committed.
 - [ ] Staging: `<staging url>`, noindexed (`npm run verify:live -- --base <staging url> --expect-noindex`).
 - [ ] The one test submission sent to the intake address (date), receipt confirmed by the person.
@@ -58,7 +60,9 @@ Typical run-specific lines (keep the ones that apply):
 5. `PUBLIC_INDEXABLE=true npm run build` then
    `npm run verify:release -- --endpoint <endpoint> --honeypot _gotcha --thank-you /thank-you/`:
    must exit 0. Then `PUBLIC_INDEXABLE=true node <kit>/skills/pre-launch/scripts/pre-launch.mjs
-   --dir . --production-url <live> --predecessor-url <live> --ignore-dir capture`: `pre-launch` exits 0, or fails only `predecessor.wildcard-redirects` / `predecessor.redirect-chains` where every row they name is a trailing-slash rule or a slash-only redirect (a known launch-skills limitation), and/or `placeholders.form-id` while the form id is missing; nothing else is accepted.
+   --dir . --production-url <live> --predecessor-url <live> --ignore-dir capture --out review/pre-launch`
+   and `node <kit>/skills/convert-site/scripts/prelaunch-reconcile.mjs --findings
+   review/pre-launch/gate.json --baseline baseline --plan docs/plan.md`, which must exit 0.
 6. Set the switch for production (Vercel: `npx vercel env add PUBLIC_INDEXABLE production`,
    value `true`; Cloudflare: it is on the local build) and deploy production
    (`npx vercel deploy --prod`, or the wrangler production deploy).

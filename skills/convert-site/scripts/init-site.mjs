@@ -192,6 +192,16 @@ function readKitPackage(kit) {
   }
 }
 
+// The sitemap the runbook submits: the index the capture saved (the same names baseline/sitemaps.json
+// freezes), else its one sitemap, else /sitemap.xml.
+export function sitemapUrl(dir, origin) {
+  const saved = join(dir, 'capture', 'sitemaps');
+  const names = existsSync(saved) ? readdirSync(saved).filter((f) => /\.xml$/i.test(f)).sort() : [];
+  const name = ['sitemap_index.xml', 'sitemap-index.xml', 'sitemap.xml'].find((n) => names.includes(n))
+    ?? names.find((n) => /index/i.test(n)) ?? names[0] ?? 'sitemap.xml';
+  return `${origin}/${name}`;
+}
+
 function copyIfPresent(source, target) {
   if (!existsSync(source)) return;
   mkdirSync(dirname(target), { recursive: true });
@@ -288,6 +298,7 @@ export function initSite(argv) {
     DEPLOY_PRODUCTION: host.deployProduction,
     ENV_COMMAND: host.envCommand,
     DNS_NOTE: host.dnsNote,
+    SITEMAP_URL: sitemapUrl(dir, opts.url.origin),
   };
 
   mkdirSync(dir, { recursive: true });
