@@ -42,7 +42,7 @@ requested and is listed "blocked-address".
   --help            show this help
 
 Run it again after a stop: files already checked (and downloaded) are kept.
-Exit codes: 0 done, 2 usage error or no capture, 3 stopped because the site is blocking
+Exit codes: 0 done, 2 usage error, no capture or no page that answered 200, 3 stopped because the site is blocking
 requests (wait, then run the same command again).`;
 
 const SOURCE_ORDER = ['html', 'srcset', 'css', 'rest', 'sitemap', 'og'];
@@ -259,6 +259,11 @@ async function main() {
   const captureDir = resolve(args.capture);
   if (!existsSync(join(captureDir, 'inventory.json'))) {
     console.error(`No capture in ${captureDir}: inventory.json is missing (run capture.mjs first).`);
+    process.exit(2);
+  }
+
+  if (!readJson(join(captureDir, 'inventory.json')).some((r) => r.status === 200)) {
+    console.error(`No page in ${join(captureDir, 'inventory.json')} answered 200: there is no media to list. Fix the capture first (capture.mjs).`);
     process.exit(2);
   }
 

@@ -974,6 +974,13 @@ async function main() {
   saveState(out, state);
 
   const failed = inventory.filter((r) => r.status !== 200).length;
+  if (failed === inventory.length) {
+    console.error(
+      `Stopped: no page answered 200 (${inventory.length} recorded, none with content), so there is nothing to build from. `
+        + `Check inventory.json and whether ${state.origin} is blocking the capture; then run again with --resume, or --seed the pages.`,
+    );
+    process.exit(3);
+  }
   const tail = outcome === 'max' ? ` Stopped at --max ${args.max}; ${state.queue.length} URLs left (use --resume).` : '';
   console.log(
     `Captured ${inventory.length} pages (${failed} not 200), ${crawler.redirectList().length} redirects, ${state.feeds.length} feeds into ${out}.${tail}`,

@@ -27,7 +27,8 @@ the page with the median word count.
   --capture <dir>   the capture folder written by capture.mjs
   --help            show this help
 
-Exit codes: 0 done, 2 usage error or no inventory.json in the capture.`;
+Exit codes: 0 done, 2 usage error, no inventory.json in the capture, or no captured pages
+(no page answered 200).`;
 
 export const ELEMENT_LIMIT = 40;
 // Tier 1 (WordPress): a page leaves its named group only below this similarity to the group's main page.
@@ -216,6 +217,10 @@ function main() {
   const pages = inventory
     .filter((r) => r.status === 200 && r.snapshot && existsSync(join(dir, r.snapshot)))
     .map((r) => ({ path: r.path, wordCount: r.wordCount, bodyClasses: r.bodyClasses, html: readFileSync(join(dir, r.snapshot), 'utf8') }));
+  if (pages.length === 0) {
+    console.error(`no captured pages: no page in ${inventoryFile} answered 200. Fix the capture first (capture.mjs).`);
+    process.exit(2);
+  }
   const stateFile = join(dir, 'state.json');
   const platform = existsSync(stateFile) ? (JSON.parse(readFileSync(stateFile, 'utf8')).fingerprint?.platform ?? null) : null;
   const templates = clusterPages(pages, { platform });

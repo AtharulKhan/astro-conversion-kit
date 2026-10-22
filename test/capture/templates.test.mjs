@@ -176,3 +176,16 @@ test('per-page classes and svg, script, style and noscript markup do not split a
 test('names are safe folder names', () => {
   for (const t of [...templates, ...otherTemplates]) assert.match(t.name, /^[a-z0-9][a-z0-9-]*$/);
 });
+
+test('a capture with no page that answered 200 exits 2 and writes no templates.json', async () => {
+  const empty = mkdtempSync(join(tmpdir(), 'templates-empty-test-'));
+  try {
+    writeFileSync(join(empty, 'inventory.json'), JSON.stringify([{ url: 'https://example.com/', path: '/', status: 'challenge', snapshot: null }]));
+    const result = await run('templates.mjs', ['--capture', empty]);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /no captured pages/);
+    assert.throws(() => readFileSync(join(empty, 'templates.json')));
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});

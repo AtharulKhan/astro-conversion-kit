@@ -307,3 +307,16 @@ test('usage errors exit 2', async () => {
   assert.equal(help.code, 0);
   assert.match(help.stdout, /--check/);
 });
+
+test('a capture with no page that answered 200 exits 2 and writes nothing', async (t) => {
+  const copy = join(root, 'no-pages');
+  const out = join(root, 'no-pages-baseline');
+  t.after(() => rmSync(copy, { recursive: true, force: true }));
+  cpSync(capture, copy, { recursive: true });
+  const inventory = readJson(copy, 'inventory.json').map((r) => ({ ...r, status: r.status === 200 ? 'challenge' : r.status }));
+  writeFileSync(join(copy, 'inventory.json'), JSON.stringify(inventory));
+  const result = await build(['--capture', copy, '--out', out]);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /no page .*answered 200/i);
+  assert.ok(!existsSync(out), 'nothing written');
+});

@@ -784,3 +784,17 @@ test('a challenge partway through the crawl stops it with the URL queued; --resu
     await stub.close();
   }
 });
+
+test('a capture where no page answers 200 exits 3, not 0', async () => {
+  const stub = await startStub({});
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 3, run.stderr);
+    assert.match(run.stderr, /no page answered 200/);
+    assert.doesNotMatch(run.stdout, /Captured/);
+    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:404']);
+  } finally {
+    await stub.close();
+  }
+});

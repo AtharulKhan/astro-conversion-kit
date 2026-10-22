@@ -45,7 +45,8 @@ The capture needs inventory.json, media.json (media.mjs) and templates.json (tem
 A missing feeds/index.json or scripts.json is warned about; a missing wp-rest/ is normal off
 WordPress. --out must not be the capture folder.
 
-Exit codes: 0 written or counts match, 1 counts drifted, 2 usage error or missing input.`;
+Exit codes: 0 written or counts match, 1 counts drifted, 2 usage error, missing input or a
+capture with no page that answered 200.`;
 
 const OPTIONS = {
   capture: { type: 'string', default: 'capture' },
@@ -299,6 +300,10 @@ function build(capture, out, csvFile) {
     if (!existsSync(join(capture, file))) console.error(`warning: no ${file} in ${capture}; the baseline records none.`);
   }
   const inventory = readJson(join(capture, 'inventory.json'));
+  if (!inventory.some((r) => r.status === 200)) {
+    console.error(`No page in ${join(capture, 'inventory.json')} answered 200: a baseline of nothing is not a baseline. Fix the capture first (capture.mjs).`);
+    process.exit(2);
+  }
   const media = readJson(join(capture, 'media.json'));
   const state = readJson(join(capture, 'state.json'), {});
   const routes = buildRoutes({

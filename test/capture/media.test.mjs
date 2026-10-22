@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -360,4 +360,15 @@ test('media.mjs usage errors exit 2 and --help prints usage', async () => {
   assert.match(help.stdout, /first URL/);
   assert.equal((await run(MEDIA, [])).code, 2);
   assert.equal((await run(MEDIA, ['--capture', join(work, 'missing')])).code, 2);
+});
+
+test('media.mjs refuses a capture with no page that answered 200 (exit 2)', async () => {
+  const empty = join(work, 'empty-capture');
+  mkdirSync(empty, { recursive: true });
+  writeFileSync(join(empty, 'meta.json'), JSON.stringify({ origin: 'https://example.com' }));
+  writeFileSync(join(empty, 'inventory.json'), JSON.stringify([{ url: 'https://example.com/', path: '/', status: 404, snapshot: 'pages/home.html' }]));
+  const result = await run(MEDIA, ['--capture', empty, '--delay', '0']);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /no page .*answered 200/i);
+  assert.ok(!existsSync(join(empty, 'media.json')));
 });
