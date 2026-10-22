@@ -31,13 +31,15 @@ npm run verify
 ## Exceptions and proposals
 - `exceptions.json`: a difference from the live site that is accepted on purpose (a broken embed
   that cannot work statically, a form that now posts elsewhere). Each entry names the path, the
-  field and the reason. The gates skip exactly that check on exactly that path. Add one only when
-  the difference is unavoidable, and say why.
+  field and the reason. The gates substitute `to` for `from` for that one field on that one
+  path. Add one only when the difference is unavoidable, and say why.
 - `proposals.json`: an improvement over the live site (a fixed typo, a missing alt text). It ships
   only in a `PROPOSALS=on` build (`npm run verify:proposals`) until a person approves it. A
-  proposal is never applied to the default build. It carries `"approvedBy": "proposed"`; when a
-  person approves it, the entry moves to `exceptions.json` with their name in `approvedBy`.
-- Both files hold the same record shape: `{ path, field, from, to, reason, approvedBy, date }`.
+  proposal is never applied to the default build. It carries `"approvedBy": "proposed"` and `id`,
+  the decision id from `docs/plan.md` (several entries may share one); code checks it with
+  `proposalOn(id)`. When a person approves it, the entry moves to `exceptions.json` with their
+  name in `approvedBy`.
+- Both files hold the gates' record shape: `{ path, field, from, to, reason, approvedBy, date }`.
 - Never edit `baseline/` to make a gate pass.
 
 ## Indexing switch

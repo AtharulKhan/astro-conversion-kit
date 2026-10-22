@@ -24,9 +24,11 @@ const GIT_ENV = {
 const EXCEPTION = {
   path: '/about/', field: 'title', from: 'About', to: 'About us', reason: 'fixture', approvedBy: 'default, d1', date: '2026-10-22',
 };
-const PROPOSAL = {
-  path: '/services/', field: 'h1', from: '', to: 'Services', reason: 'missing-h1', approvedBy: 'proposed', date: '2026-10-22',
-};
+// A proposal carries the decision id; several records may share one.
+const PROPOSALS = [
+  { id: 'd3', path: '/services/', field: 'h1', from: '', to: 'Services', reason: 'missing-h1', approvedBy: 'proposed', date: '2026-10-22' },
+  { id: 'd3', path: '/about/', field: 'h1', from: '', to: 'About', reason: 'missing-h1', approvedBy: 'proposed', date: '2026-10-22' },
+];
 
 function scaffold(t) {
   const base = mkdtempSync(join(tmpdir(), 'site-templates-'));
@@ -52,8 +54,8 @@ function helpers(dir, proposals) {
       exception: m.exceptionFor('/about/', 'title') ?? null,
       wrongField: m.exceptionFor('/about/', 'description') ?? null,
       wrongPath: m.exceptionFor('/contact/', 'title') ?? null,
-      proposal: m.proposalOn('/services/', 'h1') ?? null,
-      noProposal: m.proposalOn('/services/', 'title') ?? null,
+      proposal: m.proposalOn('d3'),
+      noProposal: m.proposalOn('d9'),
       proposals: m.proposals.length,
     }));`;
   const env = { ...process.env };
@@ -64,22 +66,22 @@ function helpers(dir, proposals) {
   return JSON.parse(result.stdout);
 }
 
-test('the site exceptions helpers match the gates\' record shape on path and field', (t) => {
+test('exceptionFor matches path and field; proposalOn(id) is true only with PROPOSALS=on', (t) => {
   const dir = scaffold(t);
   writeFileSync(join(dir, 'exceptions.json'), JSON.stringify([EXCEPTION]));
-  writeFileSync(join(dir, 'proposals.json'), JSON.stringify([PROPOSAL]));
+  writeFileSync(join(dir, 'proposals.json'), JSON.stringify(PROPOSALS));
 
   const off = helpers(dir, false);
   assert.deepEqual(off.exception, EXCEPTION);
   assert.equal(off.wrongField, null);
   assert.equal(off.wrongPath, null);
-  assert.equal(off.proposal, null, 'a proposal is off unless PROPOSALS=on');
+  assert.equal(off.proposal, false, 'a proposal is off unless PROPOSALS=on');
   assert.equal(off.proposals, 0);
 
   const on = helpers(dir, true);
-  assert.deepEqual(on.proposal, PROPOSAL);
-  assert.equal(on.noProposal, null);
-  assert.equal(on.proposals, 1);
+  assert.equal(on.proposal, true);
+  assert.equal(on.noProposal, false);
+  assert.equal(on.proposals, 2);
 });
 
 test('the plan template\'s decisions table has the kit\'s decision columns', (t) => {
@@ -88,8 +90,10 @@ test('the plan template\'s decisions table has the kit\'s decision columns', (t)
   assert.doesNotMatch(plan, /\| Date \| Decision \| Why \| Who \|/);
 });
 
-test('the site AGENTS.md says a proposal carries approvedBy "proposed" until it moves to exceptions.json', (t) => {
+test('the site AGENTS.md states the proposal and exception rules', (t) => {
   const agents = readFileSync(join(scaffold(t), 'AGENTS.md'), 'utf8');
   assert.match(agents, /"approvedBy": "proposed"/);
   assert.match(agents, /moves to `exceptions\.json`/);
+  assert.match(agents, /substitute `to` for `from` for that one field/);
+  assert.doesNotMatch(agents, /skip exactly that check/);
 });
