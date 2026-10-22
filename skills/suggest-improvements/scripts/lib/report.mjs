@@ -28,7 +28,7 @@ export function buildResult({ checks, ctx, generatedAt }) {
     generatedAt,
     counts: { total: items.length, byCategory },
     gates: gatesLine(ctx.gates),
-    checks: sorted.map((c) => ({ id: c.check.id, title: c.check.title, category: c.check.category, why: c.check.why, count: c.items.length, notCovered: c.notCovered })),
+    checks: sorted.map((c) => ({ id: c.check.id, title: c.check.title, category: c.check.category, why: c.check.why, count: c.items.length, notCovered: c.notCovered, partial: c.partial ?? null })),
     items,
   };
 }
@@ -42,18 +42,19 @@ function itemLine(item, checkWhy) {
 }
 
 export function renderMarkdown(result) {
-  const checkCount = result.checks.length;
+  const skipped = result.checks.filter((c) => c.notCovered).length;
+  const ran = result.checks.length - skipped;
   const lines = ['# Suggested improvements', ''];
   if (result.origin) lines.push(`Site: ${result.origin}${result.capturedAt ? `, captured ${result.capturedAt}` : ''}. Generated ${result.generatedAt}.`, '');
   const counts = Object.entries(result.counts.byCategory).map(([c, n]) => `${LABELS[c]} ${n}`).join(', ');
-  lines.push(`${result.counts.total} suggestions from ${checkCount} checks${counts ? `: ${counts}` : ''}.`);
+  lines.push(`${result.counts.total} suggestions from ${ran} checks run, ${skipped} not covered${counts ? `: ${counts}` : ''}.`);
   if (result.gates) lines.push(result.gates);
   lines.push('');
   lines.push('This report changes nothing. The converted site reproduces every item below on purpose, because the default build equals live; each one is a decision for the site owner.');
-  const notCovered = result.checks.filter((c) => c.notCovered);
-  if (notCovered.length) {
-    lines.push('', 'Not covered (no input for these checks; a check not run is not a pass):');
-    for (const c of notCovered) lines.push(`- \`${c.id}\`: ${c.notCovered}`);
+  const gaps = result.checks.filter((c) => c.notCovered || c.partial);
+  if (gaps.length) {
+    lines.push('', 'Not covered (a check, or part of one, had no input or failed; not covered is not a pass):');
+    for (const c of gaps) lines.push(c.notCovered ? `- \`${c.id}\`: ${c.notCovered}` : `- \`${c.id}\` (partly): ${c.partial}`);
   }
 
   for (const category of CATEGORIES) {

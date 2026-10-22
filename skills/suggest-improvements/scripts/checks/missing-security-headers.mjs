@@ -2,7 +2,7 @@
 // clickjacking-mitigation, origin-isolation) and from response headers when a capture record
 // carries them (record.headers, lower-case names).
 import { defineCheck } from '../lib/item.mjs';
-import { failingAudits, okPages } from '../lib/pages.mjs';
+import { failingAudits, listOf, okPages } from '../lib/pages.mjs';
 
 const AUDITS = ['has-hsts', 'csp-xss', 'clickjacking-mitigation', 'origin-isolation'];
 
@@ -28,6 +28,10 @@ export default defineCheck({
   applyable: true,
   notCovered: (ctx) =>
     ctx.lighthouse.length || ctx.inventory.some((r) => r.headers) ? null : 'no Lighthouse reports and no captured response headers',
+  partial(ctx) {
+    const lacking = ctx.lighthouse.filter(({ report }) => !AUDITS.some((id) => report.audits?.[id])).map(({ path }) => path);
+    return lacking.length ? `Lighthouse report without the best-practices audits (${AUDITS.join(', ')}) for ${listOf(lacking)}` : null;
+  },
   find(ctx) {
     const found = new Map();
     const add = (path, note) => found.set(path, [...(found.get(path) ?? []), note]);

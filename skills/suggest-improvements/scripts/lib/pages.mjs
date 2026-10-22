@@ -49,6 +49,32 @@ export function listOf(values, max = 3) {
 
 export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// One finding per key (a script URL, an image, a link) instead of one per page: hits are
+// [{ key, page, element?, detail }]; the first hit for a key sets its element and detail, and
+// the item's path is the first page it was seen on.
+export function acrossPages(hits) {
+  const groups = new Map();
+  for (const hit of hits) {
+    const group = groups.get(hit.key) ?? { element: hit.element, detail: hit.detail, pages: [] };
+    if (!group.pages.includes(hit.page)) group.pages.push(hit.page);
+    groups.set(hit.key, group);
+  }
+  return [...groups.values()].map((g) => ({
+    path: g.pages[0],
+    element: g.element,
+    evidence: `${g.detail}; on ${plural(g.pages.length, 'page')}: ${listOf(g.pages)}`,
+  }));
+}
+
+// The absolute URL of a src as written on a page, or the src itself when it cannot be resolved.
+export function absoluteUrl(src, base) {
+  try {
+    return new URL(src, base).href;
+  } catch {
+    return src;
+  }
+}
+
 // Lighthouse audits in one report that did not pass (a numeric score below 1).
 export function failingAudits(report, ids) {
   const audits = report?.audits ?? {};

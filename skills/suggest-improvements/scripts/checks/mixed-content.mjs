@@ -1,5 +1,7 @@
+// http:// images, scripts, styles and iframes on https pages, one item per resource across
+// every page that loads it.
 import { defineCheck } from '../lib/item.mjs';
-import { listOf, okPages, plural } from '../lib/pages.mjs';
+import { acrossPages, okPages } from '../lib/pages.mjs';
 
 const srcsetUrls = (srcset) => (srcset ?? '').split(',').map((c) => c.trim().split(/\s+/)[0]).filter(Boolean);
 
@@ -20,10 +22,14 @@ export default defineCheck({
   effort: 'S',
   risk: 'medium',
   applyable: true,
-  find: (ctx) =>
-    okPages(ctx)
-      .filter((r) => (r.url ?? r.finalUrl ?? '').startsWith('https://'))
-      .map((r) => ({ r, insecure: [...new Set(resources(r).filter((u) => u.startsWith('http://')))] }))
-      .filter(({ insecure }) => insecure.length)
-      .map(({ r, insecure }) => ({ path: r.path, element: insecure[0], evidence: `${plural(insecure.length, 'resource')} over http: ${listOf(insecure)}` })),
+  find(ctx) {
+    const hits = [];
+    for (const r of okPages(ctx)) {
+      if (!(r.url ?? r.finalUrl ?? '').startsWith('https://')) continue;
+      for (const url of resources(r).filter((u) => u.startsWith('http://'))) {
+        hits.push({ key: url, page: r.path, element: url, detail: `loaded over http: ${url}` });
+      }
+    }
+    return acrossPages(hits);
+  },
 });

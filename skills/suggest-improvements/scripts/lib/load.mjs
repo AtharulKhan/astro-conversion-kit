@@ -1,6 +1,7 @@
 // Reads every input the checks use into one context object. Only the capture's inventory.json
 // and the baseline's routes.json are required; everything else is optional and comes back
-// empty when absent, and the checks that need it report themselves not covered.
+// empty when absent (media is null without media.json), and the checks that need it report
+// themselves not covered.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -60,7 +61,7 @@ export function loadContext({ capture, baseline, review = null, lighthouse = nul
       scripts: readJson(join(baseline, 'scripts.json'), {}),
       meta: readJson(join(baseline, 'meta.json'), null),
     },
-    media: readJson(join(capture, 'media.json'), []),
+    media: readJson(join(capture, 'media.json'), null),
     redirects: readJson(join(capture, 'redirects.json'), []),
     links: readJson(join(capture, 'links.json'), { internal: {}, external: {} }),
     templates: readJson(join(capture, 'templates.json'), []),

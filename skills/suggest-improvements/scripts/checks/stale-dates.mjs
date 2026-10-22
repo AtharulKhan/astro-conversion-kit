@@ -1,12 +1,12 @@
 import { defineCheck } from '../lib/item.mjs';
-import { okPages } from '../lib/pages.mjs';
+import { okPages, routeOf } from '../lib/pages.mjs';
 
 const YEARS = 3;
 const YEAR_MS = 365.25 * 24 * 3600 * 1000;
 
 export default defineCheck({
   id: 'stale-dates',
-  title: `Pages not updated in ${YEARS} years`,
+  title: `Posts not updated in ${YEARS} years`,
   category: 'content',
   why: 'Review the page: update what changed and its modified date, or retire it if it no longer applies.',
   effort: 'M',
@@ -15,7 +15,8 @@ export default defineCheck({
   find(ctx) {
     const now = ctx.now instanceof Date ? ctx.now : new Date(ctx.now ?? Date.now());
     const found = [];
-    for (const r of okPages(ctx)) {
+    // Posts only: a page's date is when it was last saved, not whether its content has aged.
+    for (const r of okPages(ctx).filter((p) => routeOf(ctx, p.path)?.kind === 'post')) {
       const stamp = r.modified ?? r.published;
       const when = Date.parse(stamp ?? '');
       if (Number.isNaN(when)) continue;

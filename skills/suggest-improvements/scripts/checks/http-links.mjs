@@ -1,6 +1,7 @@
-// Links written as http:// (external links on any page; the canonical and og:url on an https site).
+// Links written as http:// (external links on any page; the canonical and og:url on an https
+// site), one item per link across every page that carries it.
 import { defineCheck } from '../lib/item.mjs';
-import { listOf, okPages, plural } from '../lib/pages.mjs';
+import { acrossPages, okPages } from '../lib/pages.mjs';
 
 export default defineCheck({
   id: 'http-links',
@@ -11,15 +12,15 @@ export default defineCheck({
   risk: 'low',
   applyable: true,
   find(ctx) {
-    const found = [];
+    const hits = [];
     for (const r of okPages(ctx)) {
-      const links = (r.externalLinks ?? []).filter((u) => u.startsWith('http://'));
+      const links = (r.externalLinks ?? []).filter((u) => u.startsWith('http://')).map((u) => [u, 'link']);
       if ((r.url ?? '').startsWith('https://')) {
-        for (const u of [r.canonical, r.og?.url]) if (typeof u === 'string' && u.startsWith('http://')) links.push(u);
+        if (r.canonical?.startsWith('http://')) links.push([r.canonical, 'canonical']);
+        if (r.og?.url?.startsWith('http://')) links.push([r.og.url, 'og:url']);
       }
-      const unique = [...new Set(links)];
-      if (unique.length) found.push({ path: r.path, element: unique[0], evidence: `${plural(unique.length, 'link')}: ${listOf(unique)}` });
+      for (const [url, kind] of links) hits.push({ key: `${kind} ${url}`, page: r.path, element: url, detail: `${kind} ${url}` });
     }
-    return found;
+    return acrossPages(hits);
   },
 });

@@ -106,6 +106,7 @@ test('the fixture yields the expected suggestions with evidence', () => {
   const alt = of('missing-alt');
   assert.deepEqual(alt.map((i) => i.path), ['/']);
   assert.match(alt[0].element, /storm-clouds-300x200\.webp/);
+  assert.match(alt[0].evidence, /on 1 page: \/$/);
 
   const orphans = of('orphan-pages');
   assert.deepEqual(orphans.map((i) => i.path), ['/hidden-page/']);
@@ -122,17 +123,18 @@ test('the fixture yields the expected suggestions with evidence', () => {
   assert.deepEqual(of('broken-links').map((i) => i.path), ['/deleted-post/'], 'the sitemap lists a 404');
   assert.ok(of('no-webp').some((i) => i.path === '/wp-content/uploads/2026/01/hero-1024x683.jpg'));
   assert.ok(!of('no-webp').some((i) => i.path.endsWith('.webp')));
-  // Every fixture page is short; the archives and the noindex page are not counted.
+  // Every fixture page is short; the home page, the contact form, the archives and the noindex
+  // page are short by design or not content.
   const thin = of('thin-pages').map((i) => i.path);
   assert.ok(thin.includes('/about/'));
-  for (const path of ['/blog/', '/category/news/', '/private-page/', '/deleted-post/']) assert.ok(!thin.includes(path), path);
+  for (const path of ['/', '/contact/', '/blog/', '/category/news/', '/private-page/', '/deleted-post/']) assert.ok(!thin.includes(path), path);
   assert.deepEqual(of('missing-h1'), []);
   assert.deepEqual(of('stale-dates'), []);
 });
 
 test('the markdown is grouped by category with counts, evidence lines and how to apply', () => {
   assert.match(md, /^# Suggested improvements$/m);
-  assert.match(md, new RegExp(`^${report.items.length} suggestions from \\d+ checks`, 'm'));
+  assert.match(md, new RegExp(`^${report.items.length} suggestions from 21 checks run, 3 not covered`, 'm'));
   assert.match(md, /^## Content \(\d+\)$/m);
   assert.match(md, /^## Links \(\d+\)$/m);
   const lines = md.split('\n');
@@ -249,14 +251,17 @@ test('stale-dates, placeholder-text, mixed-content, http-links, multiple-h1, lon
     page({ path: '/mixed/', images: [{ src: 'http://cdn.example.com/a.jpg', alt: 'a', width: 10, height: 10, lazy: false }], externalLinks: ['http://partner.example.com/'] }),
     page({ path: '/two/', h1: ['A', 'B'], title: 'T'.repeat(70) }),
   ];
-  const run = async (id) => (await check(id)).run(ctx({ inventory }));
+  const baseline = { routes: [{ path: '/old/', kind: 'post' }], seo: {}, media: [], scripts: {} };
+  const run = async (id) => (await check(id)).run(ctx({ inventory, baseline }));
   assert.deepEqual((await run('stale-dates')).map((i) => i.path), ['/old/']);
   assert.deepEqual((await run('placeholder-text')).map((i) => i.path), ['/lorem/']);
   assert.deepEqual((await run('mixed-content')).map((i) => i.path), ['/mixed/']);
   assert.deepEqual((await run('http-links')).map((i) => i.path), ['/mixed/']);
   assert.deepEqual((await run('multiple-h1')).map((i) => i.path), ['/two/']);
   assert.deepEqual((await run('long-titles')).map((i) => i.path), ['/two/']);
-  assert.deepEqual((await run('duplicate-titles')).map((i) => i.path).sort(), ['/lorem/', '/old/']);
+  const titles = await run('duplicate-titles');
+  assert.deepEqual(titles.map((i) => i.path), ['/old/'], 'one item per title');
+  assert.match(titles[0].evidence, /"Same" on 2 pages: \/old\/, \/lorem\//);
 });
 
 test('oversized-images and render-blocking-scripts', async () => {
@@ -282,4 +287,117 @@ test('usage errors exit 2 and --help exits 0', async () => {
   assert.equal((await suggest(['--bogus'])).code, 2);
   assert.equal((await suggest(['--capture', join(root, 'missing'), '--baseline', baseline, '--out', join(root, 'x.md')])).code, 2);
   assert.equal((await suggest(['--capture', capture, '--baseline', baseline])).code, 2, '--out is required');
+});
+
+test('dead-analytics: embeds without an id (YouTube) are not analytics and never fire', async () => {
+  const c = await check('dead-analytics');
+  const scripts = {
+    youtube: { id: null, ids: [], pages: ['/'], keep: true },
+    'google-maps': { id: null, ids: [], pages: ['/contact/'], keep: true },
+    ga4: { id: 'G-1', ids: ['G-1'], pages: ['/'], keep: true },
+  };
+  assert.deepEqual(c.run(ctx({ baseline: { routes: [], seo: {}, media: [], scripts } })), []);
+});
+
+// Five pages sharing the same header: one item per script, image, link or title, not five.
+test('site-wide problems are one item across pages, with the page count in the evidence', async () => {
+  const shared = {
+    title: 'Same title',
+    snapshot: 'pages/x.html',
+    images: [
+      { src: 'https://www.example.com/logo-2048x1365.jpg', srcset: null, alt: null, width: 200, height: 100, lazy: false },
+      { src: 'http://cdn.example.com/pixel.gif', srcset: null, alt: '', width: 1, height: 1, lazy: false },
+    ],
+    externalLinks: ['http://partner.example.com/'],
+  };
+  const paths = ['/', '/about/', '/contact/', '/services/', '/team/'];
+  const inventory = paths.map((path) => page({ ...shared, path, url: `https://www.example.com${path}` }));
+  const html = '<html><head><script src="/wp-includes/js/jquery.js"></script></head><body></body></html>';
+  const lighthouse = [{
+    path: '/about/',
+    report: { audits: { 'render-blocking-resources': { title: 'Eliminate render-blocking resources', score: 0, details: { items: [{ url: 'https://www.example.com/wp-includes/js/jquery.js', wastedMs: 300 }] } } } },
+  }];
+  const context = ctx({ inventory, lighthouse, readSnapshot: () => html });
+  for (const id of ['render-blocking-scripts', 'missing-alt', 'http-links', 'mixed-content', 'oversized-images', 'duplicate-titles']) {
+    const items = (await check(id)).run(context);
+    assert.equal(items.length, 1, `${id}: ${JSON.stringify(items)}`);
+    assertItem(items[0]);
+    assert.equal(items[0].path, '/');
+    assert.match(items[0].evidence, /on 5 pages: \/, \/about\/, \/contact\/ and 2 more$/, id);
+  }
+});
+
+test('a check that throws is isolated and listed as not covered; missing inputs are noted', async () => {
+  const { runChecks } = await import(skills('suggest-improvements/scripts/suggest.mjs'));
+  const boom = { id: 'boom', title: 'Boom', category: 'seo', run: () => { throw new Error('bad input'); } };
+  const fine = await check('missing-h1');
+  const noWebp = await check('no-webp');
+  const oversized = await check('oversized-images');
+  const headers = await check('missing-security-headers');
+  const lighthouse = [{ path: '/', report: { audits: { 'first-contentful-paint': { score: 0.5 } } } }];
+  const results = runChecks([boom, fine, noWebp, oversized, headers], ctx({ inventory: [page({ h1: [] })], media: null, lighthouse }));
+  const by = Object.fromEntries(results.map((r) => [r.check.id, r]));
+  assert.equal(by.boom.notCovered, 'check failed: bad input');
+  assert.deepEqual(by.boom.items, []);
+  assert.equal(by['missing-h1'].items.length, 1, 'the next check still ran');
+  assert.match(by['no-webp'].notCovered, /no media\.json/);
+  assert.equal(by['oversized-images'].notCovered, null);
+  assert.match(by['oversized-images'].partial, /no media\.json/);
+  assert.match(by['missing-security-headers'].partial, /without the best-practices audits/);
+});
+
+test('thin-pages leaves out pages short by design', async () => {
+  const c = await check('thin-pages');
+  const inventory = [
+    page({ path: '/', wordCount: 20 }),
+    page({ path: '/contact/', wordCount: 20, forms: [{ action: '/', method: 'post', fields: [] }] }),
+    page({ path: '/thank-you/', wordCount: 5 }),
+    page({ path: '/privacy-policy/', wordCount: 90 }),
+    page({ path: '/roofing/', wordCount: 40 }),
+  ];
+  const items = c.run(ctx({ inventory }));
+  assert.deepEqual(items.map((i) => i.path), ['/roofing/']);
+  assert.equal(items[0].applyable, false);
+  assert.match(items[0].why, /^Check whether this page should say more/);
+});
+
+test('oversized-images: a srcset candidate near the shown width is enough; stale-dates is posts only', async () => {
+  const img = {
+    src: 'https://www.example.com/a-2048x1365.jpg',
+    srcset: 'https://www.example.com/a-300x200.jpg 300w, https://www.example.com/a-2048x1365.jpg 2048w',
+    alt: 'a', width: 300, height: 200, lazy: false,
+  };
+  assert.deepEqual((await check('oversized-images')).run(ctx({ inventory: [page({ images: [img] })] })), []);
+  const old = page({ path: '/about/', modified: '2019-01-01T00:00:00Z' });
+  const baseline = { routes: [{ path: '/about/', kind: 'page' }], seo: {}, media: [], scripts: {} };
+  assert.deepEqual((await check('stale-dates')).run(ctx({ inventory: [old], baseline })), []);
+});
+
+test('noindex-in-sitemap, missing-descriptions and duplicate-analytics fire on their cases', async () => {
+  const inventory = [
+    page({ path: '/hidden/', robots: 'noindex, follow', foundBy: ['sitemap'] }),
+    page({ path: '/bare/', description: '' }),
+    page({
+      path: '/double/',
+      scripts: [
+        { src: 'https://www.googletagmanager.com/gtag/js?id=G-1', inline: false, vendor: 'ga4', id: 'G-1' },
+        { src: null, inline: true, vendor: 'ga4', id: 'G-2' },
+      ],
+    }),
+  ];
+  const run = async (id) => (await check(id)).run(ctx({ inventory }));
+  assert.deepEqual((await run('noindex-in-sitemap')).map((i) => i.path), ['/hidden/']);
+  assert.deepEqual((await run('missing-descriptions')).map((i) => i.path), ['/bare/']);
+  const dup = await run('duplicate-analytics');
+  assert.deepEqual(dup.map((i) => i.path), ['/double/']);
+  assert.match(dup[0].evidence, /G-1 and G-2/);
+});
+
+test('shortcode-leftovers ignores footnotes and editorial brackets', async () => {
+  const c = await check('shortcode-leftovers');
+  const inventory = [
+    page({ path: '/notes/', text: 'As noted [1] the roof was [sic] fine [2].' }),
+    page({ path: '/form/', text: 'Call us. [contact-form-7 id="12" title="Contact"]' }),
+  ];
+  assert.deepEqual(c.run(ctx({ inventory })).map((i) => i.path), ['/form/']);
 });

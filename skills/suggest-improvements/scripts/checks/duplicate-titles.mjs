@@ -1,5 +1,6 @@
+// Indexable pages sharing a <title>: one item per title, on the first page that uses it.
 import { defineCheck } from '../lib/item.mjs';
-import { indexablePages, listOf } from '../lib/pages.mjs';
+import { indexablePages, listOf, plural } from '../lib/pages.mjs';
 
 export default defineCheck({
   id: 'duplicate-titles',
@@ -16,14 +17,12 @@ export default defineCheck({
       if (!title) continue;
       byTitle.set(title, [...(byTitle.get(title) ?? []), r.path]);
     }
-    return [...byTitle].flatMap(([title, paths]) =>
-      paths.length < 2
-        ? []
-        : paths.map((path) => ({
-            path,
-            element: 'title',
-            evidence: `"${title}" is also the title of ${listOf(paths.filter((p) => p !== path))}`,
-          })),
-    );
+    return [...byTitle]
+      .filter(([, paths]) => paths.length > 1)
+      .map(([title, paths]) => ({
+        path: paths[0],
+        element: 'title',
+        evidence: `"${title}" on ${plural(paths.length, 'page')}: ${listOf(paths)}`,
+      }));
   },
 });

@@ -60,19 +60,29 @@ export async function loadChecks(dir = CHECKS_DIR) {
   return checks;
 }
 
+// Runs each check on its own: one that throws, or returns an item without the shape, is
+// reported as "check failed: <message>" under Not covered and the others still run.
+// partial(ctx) names the half of a check that had no input while the rest of it ran.
+export function runChecks(checks, ctx) {
+  return checks.map((check) => {
+    try {
+      const notCovered = check.notCovered?.(ctx) ?? null;
+      if (notCovered) return { check, items: [], notCovered, partial: null };
+      const items = check.run(ctx);
+      for (const item of items) {
+        const problems = itemProblems(item);
+        if (problems.length) throw new Error(`malformed item for ${item.path ?? 'no path'} (${problems.join('; ')})`);
+      }
+      return { check, items, notCovered: null, partial: check.partial?.(ctx) ?? null };
+    } catch (error) {
+      return { check, items: [], notCovered: `check failed: ${error.message}`, partial: null };
+    }
+  });
+}
+
 export async function suggest(options) {
   const ctx = loadContext(options);
-  const results = [];
-  for (const check of await loadChecks()) {
-    const notCovered = check.notCovered?.(ctx) ?? null;
-    const items = notCovered ? [] : check.run(ctx);
-    for (const item of items) {
-      const problems = itemProblems(item);
-      if (problems.length) throw new Error(`check ${check.id} returned a malformed item (${problems.join('; ')})`);
-    }
-    results.push({ check, items, notCovered });
-  }
-  return buildResult({ checks: results, ctx, generatedAt: new Date().toISOString() });
+  return buildResult({ checks: runChecks(await loadChecks(), ctx), ctx, generatedAt: new Date().toISOString() });
 }
 
 function writeFile(file, text) {

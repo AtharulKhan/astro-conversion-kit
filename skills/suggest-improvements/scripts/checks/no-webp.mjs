@@ -11,6 +11,7 @@ export default defineCheck({
   effort: 'S',
   risk: 'low',
   applyable: true,
+  notCovered: (ctx) => (ctx.media ? null : 'no media.json in the capture (run media.mjs)'),
   find: (ctx) =>
     ctx.media
       .filter((m) => LEGACY.has(m.contentType) && (m.status ?? 200) === 200 && (m.referencedBy ?? []).length > 0)

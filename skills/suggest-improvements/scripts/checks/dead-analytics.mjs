@@ -1,7 +1,11 @@
-// A known analytics or tag vendor whose snippet loads but carries no measurement id: it costs
-// a request and records nothing. Reads baseline/scripts.json, or the inventory's scripts.
+// A measurement vendor (analytics, tag manager, pixel, session recording, chat with tracking)
+// whose snippet loads but carries no id: it costs a request and records nothing. Embeds the
+// extractor also names (YouTube, Vimeo, Maps, reCAPTCHA) have no id to find and are never
+// reported. Reads baseline/scripts.json, or the inventory's scripts.
 import { defineCheck } from '../lib/item.mjs';
 import { listOf, plural } from '../lib/pages.mjs';
+
+export const MEASUREMENT = new Set(['gtm', 'ga4', 'meta-pixel', 'hotjar', 'clarity', 'hubspot', 'intercom', 'crisp', 'tawk']);
 
 function vendors(ctx) {
   if (Object.keys(ctx.baseline.scripts ?? {}).length) return ctx.baseline.scripts;
@@ -27,7 +31,7 @@ export default defineCheck({
   applyable: true,
   find: (ctx) =>
     Object.entries(vendors(ctx))
-      .filter(([vendor, v]) => vendor !== 'other' && !v.id && !(v.ids ?? []).length)
+      .filter(([vendor, v]) => MEASUREMENT.has(vendor) && !v.id && !(v.ids ?? []).length)
       .map(([vendor, v]) => ({
         path: v.pages?.[0] ?? '/',
         element: vendor,
