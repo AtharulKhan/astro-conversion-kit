@@ -10,8 +10,8 @@ every pair yourself, fix, and repeat until every template passes. Then do it aga
 
 ## The golden rule
 
-**The diff decides, your eyes explain.** A pair passes only when `diff.mjs` says it passes and
-`styles.mjs` has no failing row for it. Looking at a screenshot and finding it "close enough" is
+**The diff decides, your eyes explain.** A pair passes only when `review:diff` says it passes and
+`review:styles` has no failing row for it. Looking at a screenshot and finding it "close enough" is
 never a pass. Four more that follow from it:
 
 1. **Write down every visible difference before you change code.** Per pair, in words, from the
@@ -25,16 +25,21 @@ never a pass. Four more that follow from it:
 
 ## What the scripts do
 
-Paths are relative to this skill's directory. A site made by `convert-site` carries copies in
-`scripts/review/` with `npm run review:shoot|diff|styles|sheet -- <options>`. Every script prints
-`--help`; run it rather than reading the source.
+A site made by `convert-site` carries copies of the scripts in `scripts/review/`. Every command
+below runs from the site root as `npm run review:<name> -- <options>`. Outside a converted site,
+run `node <skill-dir>/scripts/<name>.mjs <options>` from the folder that holds `capture/` and
+`review/`. Every script prints `--help`; run it rather than reading the source.
 
 | Script | Does | Exit |
 |---|---|---|
-| `scripts/shoot.mjs` | Full-page Chromium screenshots per route and width, plus `manifest.json` | 0 all shot, 1 a route failed, 2 usage, 3 stopped on blocks |
-| `scripts/diff.mjs` | Pixel diff of two screenshot folders, diff images plus `diff.json` | 0 all pass, 1 any fail, 2 usage |
-| `scripts/styles.mjs` | Computed styles of sampled selectors on both origins, `styles.json` | 0 all match, 1 a row fails, 2 usage or environment |
-| `scripts/sheet.mjs` | One self-contained HTML contact sheet: live, new and diff side by side | 0 written, 2 usage or environment |
+| `review:shoot` | Full-page Chromium screenshots per route and width, plus `manifest.json` | 0 all shot, 1 a route failed, 2 usage, 3 stopped on blocks |
+| `review:diff` | Pixel diff of two screenshot folders, diff images plus `diff.json` | 0 all pass, 1 any fail, 2 usage |
+| `review:styles` | Computed styles of sampled selectors on both origins, `styles.json` | 0 all match, 1 a row fails, 2 usage or environment |
+| `review:sheet` | One self-contained HTML contact sheet: live, new and diff side by side | 0 written, 2 usage or environment |
+
+Exit 1 from diff or styles is expected while differences remain: carry on to the sheet, and run
+each step as its own command rather than chaining them with `&&`. Exit 3 from shoot means the
+site is blocking requests: wait, then rerun with a longer `--delay`; never retry in a tight loop.
 
 What makes the screenshots comparable, on both sides alike: animations and transitions are
 frozen and scroll-reveal content is forced visible; lazy images are loaded by scrolling to the
@@ -58,7 +63,8 @@ route that is not 2xx on either side fails with one `status` row.
 ## Where things live
 
     capture/screens/live/     live screenshots, taken once at capture time (the capture step
-                              runs shoot.mjs against the live site); never re-shot during review
+                              runs shoot.mjs against the live site); never re-shot to
+                              get a match (rollout adds capture/screens/live-all/ once)
     review/new/               new screenshots, from the dev or preview server
     review/diff/              diff images and diff.json
     review/styles.json        style rows
@@ -76,19 +82,20 @@ Read `references/review-procedure.md` before the first run. In short:
    `npm run dev` while iterating. Note the origin, e.g. `http://localhost:4321`.
 2. **Shoot new** with the same `--routes` and widths the live shots used, so folder names match:
 
-       node scripts/shoot.mjs --base http://localhost:4321 --routes capture/templates.json --out review/new --delay 0
+       npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/new --delay 0
 
-3. **Diff:**
+3. **Diff** (add `--per-route review/overrides.json` once that file exists):
 
-       node scripts/diff.mjs --a capture/screens/live --b review/new --out review/diff [--per-route review/overrides.json]
+       npm run review:diff -- --a capture/screens/live --b review/new --out review/diff
 
-4. **Styles** (this one loads the live site, so keep the default 2500 ms pacing):
+4. **Styles.** It loads the live site, so keep the default 2500 ms pacing. It defaults to 390
+   and 1440, so pass the widths to cover 768 too:
 
-       node scripts/styles.mjs --live https://www.example.com --new http://localhost:4321 --routes capture/templates.json --out review/styles.json
+       npm run review:styles -- --live https://www.example.com --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json
 
 5. **Sheet:**
 
-       node scripts/sheet.mjs --live capture/screens/live --new review/new --diff review/diff/diff.json --styles review/styles.json --out review/index.html
+       npm run review:sheet -- --live capture/screens/live --new review/new --diff review/diff/diff.json --styles review/styles.json --out review/index.html
 
 6. **Look.** Open `review/index.html`. For every pair, write down every visible difference you
    can see, failing or not, before you touch any code. Then read `diff.json` for `offset`,
@@ -96,7 +103,8 @@ Read `references/review-procedure.md` before the first run. In short:
    `heightMismatch` and `error`: the sheet does not show those.
 7. **Fix** from `capture/` (markup, CSS, media), one difference at a time. Then go back to 2.
 8. **Roll out** only when every template pair passes at every width: shoot every page
-   (`--full`) at 390 and 1440, diff, sheet, look, fix, repeat until every page passes.
+   (`--full`) at 390 and 1440, diff, sheet, look, fix, repeat until every page passes. The
+   exact commands are in the reference, step 7.
 
 ## If your agent has a browser of its own
 
@@ -111,11 +119,10 @@ page you looked at and liked has not passed anything.
    person should see.
 3. **Every banner closed and every `heightMismatch`**, with the route: each is a place the
    screenshot may not show what a visitor sees.
-4. **Proposals**: what you saw that could be better and put in `proposals.json` instead.
-5. **Not covered, verbatim**: hover and focus states, menus and modals that need a click, video
-   and carousels past their first frame, widths other than those shot, browsers other than
-   Chromium, and anything below a lazy-scroll cap. None of these were compared. Not covered is
-   never a pass.
+4. **Proposals**: what you saw that could be better and put in `proposals.json` instead (the
+   site's `AGENTS.md`, "Exceptions and proposals", says what an entry holds and how it ships).
+5. **Not covered, verbatim**: the list at the end of `references/review-procedure.md`, every
+   line, unedited. None of it was compared. Not covered is never a pass.
 
 ## References
 

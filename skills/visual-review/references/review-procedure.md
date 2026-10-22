@@ -2,9 +2,20 @@
 
 The loop is: shoot new, diff, styles, sheet, look and write down every difference, fix, repeat.
 Templates first at every width, then every page at 390 and 1440. This file carries the detail
-behind each step. Script paths are relative to the skill's directory; in a site made by
-`convert-site` use `npm run review:<name> -- <options>` instead, which runs the copies in
-`scripts/review/`.
+behind each step.
+
+Every command runs from the root of a site made by `convert-site`, whose `package.json` maps
+`npm run review:shoot|diff|styles|sheet` to the copies in `scripts/review/`; the data paths
+(`capture/`, `review/`) are relative to that root. Outside a converted site, run
+`node <skill-dir>/scripts/<name>.mjs <options>` from the folder that holds `capture/` and
+`review/`.
+
+**Exit codes in the loop.** Exit 1 from `review:diff` and `review:styles` is expected while
+differences remain: it is the measurement, not a crash. Carry on to the sheet. Run each step as
+its own command; do not chain them with `&&`, or the sheet is never built when it is needed most.
+Exit 2 is a usage or environment problem: fix the command. Exit 3 from `review:shoot` means the
+site answered 403, 429, 503 or network errors three times in a row: wait several minutes, then
+rerun with a longer `--delay` (for example 5000). Never retry in a tight loop.
 
 ## Before the first run
 
@@ -13,7 +24,8 @@ behind each step. Script paths are relative to the skill's directory; in a site 
   They are the reference for every run. Do not re-shoot the live site to get a better match: the
   live site is read-only and the reference must stay fixed while you work. If a live shot is
   missing or broken (its manifest row has `error`, or `file` is null), re-run that capture step for
-  that route, then carry on.
+  that route, then carry on. The only other live shoot is the one-time full set for rollout
+  (step 7), into its own folder.
 - **Know the routes.** `--routes` takes a templates file (`[{ name, representative, paths[] }]`,
   from the capture step, e.g. `capture/templates.json`) or a comma list of paths. With a templates
   file the folder is the template name and only the representative path is shot. With a path list,
@@ -26,7 +38,7 @@ behind each step. Script paths are relative to the skill's directory; in a site 
 
 ## 1. Shoot new
 
-    node scripts/shoot.mjs --base http://localhost:4321 --routes capture/templates.json --out review/new --delay 0
+    npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/new --delay 0
 
 Options (all from `--help`):
 
@@ -65,7 +77,9 @@ What it does to every page, on both sides alike, so the two are comparable:
 
 ## 2. Diff
 
-    node scripts/diff.mjs --a capture/screens/live --b review/new --out review/diff --per-route review/overrides.json
+    npm run review:diff -- --a capture/screens/live --b review/new --out review/diff
+
+Add `--per-route review/overrides.json` once that file exists; a missing file exits 2.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -98,13 +112,13 @@ Exit 0 every pair passes, 1 any pair fails (each listed on stdout with its reaso
 
 ## 3. Styles
 
-    node scripts/styles.mjs --live https://www.example.com --new http://localhost:4321 --routes capture/templates.json --out review/styles.json
+    npm run review:styles -- --live https://www.example.com --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--live`, `--new` | required | The two origins |
 | `--routes` | required | Templates file (its representatives) or comma list of paths |
-| `--widths` | `390,1440` | Viewport widths |
+| `--widths` | `390,1440` | Viewport widths; the default skips 768, so pass `390,768,1440` for the template set |
 | `--out` | `styles.json` | Output file; always pass `review/styles.json` |
 | `--delay` | `2500` | Milliseconds between page loads, both origins |
 
@@ -130,11 +144,12 @@ Exit 0 every row passes, 1 a row fails, 2 usage or environment error.
 
 ## 4. Sheet
 
-    node scripts/sheet.mjs --live capture/screens/live --new review/new --diff review/diff/diff.json --styles review/styles.json --out review/index.html
+    npm run review:sheet -- --live capture/screens/live --new review/new --diff review/diff/diff.json --styles review/styles.json --out review/index.html
 
 One self-contained HTML file: per route, a row per width with the live, new and diff images side
 by side, the differing-pixel percent, pass or fail, both heights, "banner closed" where a banner
-was dismissed, and the failing style rows beneath. Every image is embedded as data, so the file
+was dismissed, and the failing style rows beneath. Each style row also carries the page `path`
+it was sampled on. Every image is embedded as data, so the file
 opens anywhere with nothing beside it, and on a big site it can run to tens of megabytes. Leave
 `--styles` off if you skipped step 3; the sheet then shows diff rows only. Exit 0 written, 2 usage
 or environment error.
@@ -188,7 +203,7 @@ name (the template name, or the path slug with `--full`):
     }
 
 Both fields are required; an entry without a `reason`, or with a non-numeric `threshold`, makes
-`diff.mjs` exit 2. The threshold and reason are copied onto the row in `diff.json` and printed with
+`review:diff` exit 2. The threshold and reason are copied onto the row in `diff.json` and printed with
 it. Use the smallest threshold that covers the cause, and never use an override to hide a
 difference you could fix. Report every override.
 
@@ -197,6 +212,8 @@ difference you could fix. Report every override.
 Anything you would change deliberately (a typo, misaligned spacing on the live site, a blurry
 image you could replace, a contrast you could improve) is a proposal. It goes in `proposals.json`
 with what and why, and ships only in a `PROPOSALS=on` build after a person approves it. The
+site's `AGENTS.md`, section "Exceptions and proposals", says what an entry holds and how it ships;
+follow it rather than inventing a format. The
 default build matches the live site, flaws included. If you catch yourself fixing a diff by making
 the new page look nicer than the live one, stop: that is a proposal.
 
@@ -209,14 +226,20 @@ pages at 390 and 1440:
    representatives, run the live shoot once more as a capture step, read-only and at the default
    pacing, into its own folder so the template set is kept:
 
-       node scripts/shoot.mjs --base https://www.example.com --routes capture/templates.json --full --widths 390,1440 --out capture/screens/live-all
+       npm run review:shoot -- --base https://www.example.com --routes capture/templates.json --full --widths 390,1440 --out capture/screens/live-all
 
 2. New, same options against the local origin, into its own folder:
 
-       node scripts/shoot.mjs --base http://localhost:4321 --routes capture/templates.json --full --widths 390,1440 --out review/new-all --delay 0
+       npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --full --widths 390,1440 --out review/new-all --delay 0
 
-3. Diff into `review/diff-all`, build the sheet at `review/all.html`, look and write down every
-   difference exactly as in step 5, fix, repeat until every page passes.
+3. Diff (add `--per-route review/overrides.json` once that file exists; with `--full` its keys
+   are path slugs) and build the sheet:
+
+       npm run review:diff -- --a capture/screens/live-all --b review/new-all --out review/diff-all
+       npm run review:sheet -- --live capture/screens/live-all --new review/new-all --diff review/diff-all/diff.json --out review/all.html
+
+4. Open `review/all.html`, look and write down every difference exactly as in step 5, fix,
+   reshoot new (step 2 here), and repeat until every page passes.
 
 A failure on one page of a template that passed usually means content the representative did not
 have (a long title, a missing image, a table). Fix the template so it handles it; do not special-
@@ -224,8 +247,8 @@ case the page.
 
 ## 8. Done means
 
-- `diff.mjs` exits 0 for the template set and for the full set;
-- `styles.mjs` exits 0 for the template set;
+- `review:diff` exits 0 for the template set and for the full set;
+- `review:styles` exits 0 for the template set;
 - you have looked at every pair in the final sheet and your written list has no open item that is
   not a recorded override or a proposal;
 - every `heightMismatch`, closed banner and override is reported to the person.
@@ -235,7 +258,7 @@ case the page.
 Use it to open `review/index.html`, and to look at a live page and its new page side by side at
 the same width when a diff image does not explain itself (hover, a font swap, a sticky header).
 It is a pair of eyes, never a substitute for the diff: a page that looks right in a browser has
-passed nothing until `diff.mjs` and `styles.mjs` say so. Keep its visits to the live site few and
+passed nothing until `review:diff` and `review:styles` say so. Keep its visits to the live site few and
 spaced; the live site is read-only.
 
 ## Not covered
