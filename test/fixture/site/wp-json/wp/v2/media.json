@@ -1,0 +1,162 @@
+[
+  {
+    "id": 41,
+    "slug": "hero",
+    "type": "attachment",
+    "media_type": "image",
+    "mime_type": "image/jpeg",
+    "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/hero.jpg",
+    "alt_text": "",
+    "media_details": {
+      "width": 1536,
+      "height": 1024,
+      "file": "2026/01/hero.jpg",
+      "sizes": {
+        "medium": {
+          "file": "hero-300x200.jpg",
+          "width": 300,
+          "height": 200,
+          "mime_type": "image/jpeg",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/hero-300x200.jpg"
+        },
+        "large": {
+          "file": "hero-1024x683.jpg",
+          "width": 1024,
+          "height": 683,
+          "mime_type": "image/jpeg",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/hero-1024x683.jpg"
+        }
+      }
+    }
+  },
+  {
+    "id": 42,
+    "slug": "team",
+    "type": "attachment",
+    "media_type": "image",
+    "mime_type": "image/jpeg",
+    "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/team.jpg",
+    "alt_text": "",
+    "media_details": {
+      "width": 1536,
+      "height": 1024,
+      "file": "2026/01/team.jpg",
+      "sizes": {
+        "medium": {
+          "file": "team-300x200.jpg",
+          "width": 300,
+          "height": 200,
+          "mime_type": "image/jpeg",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/team-300x200.jpg"
+        },
+        "large": {
+          "file": "team-1024x683.jpg",
+          "width": 1024,
+          "height": 683,
+          "mime_type": "image/jpeg",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/team-1024x683.jpg"
+        }
+      }
+    }
+  },
+  {
+    "id": 44,
+    "slug": "roof-detail",
+    "type": "attachment",
+    "media_type": "image",
+    "mime_type": "image/jpeg",
+    "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/roof-detail.jpg",
+    "alt_text": "",
+    "media_details": {
+      "width": 1536,
+      "height": 1024,
+      "file": "2026/01/roof-detail.jpg",
+      "sizes": {
+        "medium": {
+          "file": "roof-detail-300x200.jpg",
+          "width": 300,
+          "height": 200,
+          "mime_type": "image/jpeg",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/roof-detail-300x200.jpg"
+        },
+        "large": {
+          "file": "roof-detail-1024x683.jpg",
+          "width": 1024,
+          "height": 683,
+          "mime_type": "image/jpeg",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/roof-detail-1024x683.jpg"
+        }
+      }
+    }
+  },
+  {
+    "id": 46,
+    "slug": "siding-sample",
+    "type": "attachment",
+    "media_type": "image",
+    "mime_type": "image/webp",
+    "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/siding-sample.webp",
+    "alt_text": "",
+    "media_details": {
+      "width": 1536,
+      "height": 1024,
+      "file": "2026/01/siding-sample.webp",
+      "sizes": {
+        "medium": {
+          "file": "siding-sample-300x200.webp",
+          "width": 300,
+          "height": 200,
+          "mime_type": "image/webp",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/siding-sample-300x200.webp"
+        },
+        "large": {
+          "file": "siding-sample-1024x683.webp",
+          "width": 1024,
+          "height": 683,
+          "mime_type": "image/webp",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/siding-sample-1024x683.webp"
+        }
+      }
+    }
+  },
+  {
+    "id": 47,
+    "slug": "storm-clouds",
+    "type": "attachment",
+    "media_type": "image",
+    "mime_type": "image/webp",
+    "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/storm-clouds.webp",
+    "alt_text": "",
+    "media_details": {
+      "width": 1536,
+      "height": 1024,
+      "file": "2026/01/storm-clouds.webp",
+      "sizes": {
+        "medium": {
+          "file": "storm-clouds-300x200.webp",
+          "width": 300,
+          "height": 200,
+          "mime_type": "image/webp",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/storm-clouds-300x200.webp"
+        },
+        "large": {
+          "file": "storm-clouds-1024x683.webp",
+          "width": 1024,
+          "height": 683,
+          "mime_type": "image/webp",
+          "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/storm-clouds-1024x683.webp"
+        }
+      }
+    }
+  },
+  {
+    "id": 48,
+    "slug": "brochure",
+    "type": "attachment",
+    "media_type": "file",
+    "mime_type": "application/pdf",
+    "source_url": "{{ORIGIN}}/wp-content/uploads/2026/01/brochure.pdf",
+    "alt_text": "",
+    "media_details": {}
+  }
+]

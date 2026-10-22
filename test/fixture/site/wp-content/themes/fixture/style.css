@@ -1,0 +1,82 @@
+/*
+Theme Name: Fixture
+Version: 1.4.2
+Description: Hand-written theme for the conversion test fixture.
+*/
+@font-face {
+  font-family: "Fixture Sans";
+  src: url("fonts/fixture-sans.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Fixture Serif";
+  src: url("fonts/fixture-serif.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Used rules */
+html { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: inherit; }
+body { margin: 0; font-family: "Fixture Sans", Helvetica, Arial, sans-serif; color: #222; background: #fff; line-height: 1.6; }
+h1, h2 { font-family: "Fixture Serif", Georgia, serif; line-height: 1.2; }
+a { color: #b23c28; }
+a:hover, a:focus { color: #7a2414; text-decoration: none; }
+img { max-width: 100%; height: auto; display: block; }
+.screen-reader-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.skip-link:focus { position: static; width: auto; height: auto; clip: auto; }
+.site-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid #eee; }
+.custom-logo { width: 180px; height: 48px; }
+.menu { display: flex; gap: 20px; list-style: none; margin: 0; padding: 0; }
+.menu-item { position: relative; }
+.sub-menu { display: none; position: absolute; top: 100%; left: 0; list-style: none; margin: 0; padding: 8px 12px; background: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15); }
+.menu-item-has-children:hover .sub-menu { display: block; }
+.site-main { max-width: 1040px; margin: 0 auto; padding: 24px; }
+.hero h1 { font-size: 2.5rem; margin: 24px 0 8px; }
+.button { display: inline-block; padding: 12px 20px; background: #b23c28; color: #fff; border-radius: 4px; text-decoration: none; }
+.button:hover { background: #7a2414; color: #fff; }
+.reveal { opacity: 0; transition: opacity 0.6s ease; }
+.reveal.in { opacity: 1; }
+.carousel { margin: 32px 0; }
+.carousel-track { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; }
+.carousel-slide { flex: 0 0 300px; margin: 0; scroll-snap-align: start; }
+.carousel-dots { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+.service-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+.contact-form label { display: block; font-weight: 600; }
+.contact-form input, .contact-form textarea { width: 100%; padding: 8px; border: 1px solid #ccc; }
+.hp-field { position: absolute; left: -9999px; }
+.entry-meta { color: #666; font-size: 0.875rem; }
+.site-footer { padding: 24px; background: #222; color: #ddd; }
+.site-footer a { color: #fff; }
+.site-info { font-size: 0.875rem; }
+@media (max-width: 640px) {
+  .site-header { flex-direction: column; gap: 12px; }
+  .hero h1 { font-size: 1.75rem; }
+}
+
+/* Leftover rules from plugins and old templates that no page uses */
+.woocommerce-cart { padding: 20px; }
+.woocommerce-checkout .col2-set { display: flex; }
+.elementor-section { position: relative; }
+.elementor-widget-container { margin: 0; }
+.wp-block-cover { min-height: 430px; }
+.wp-block-pullquote { border-top: 4px solid #555; }
+.wp-block-table td { padding: 0.5em; }
+.sidebar-widget { margin-bottom: 32px; }
+.widget_calendar table { width: 100%; }
+.comment-respond { margin-top: 48px; }
+.comment-list .children { margin-left: 24px; }
+.pagination .page-numbers { padding: 4px 8px; }
+.sticky-post { background: #fffbe6; }
+.author-bio { border-top: 1px solid #eee; }
+.related-posts { display: grid; grid-template-columns: repeat(3, 1fr); }
+.newsletter-popup { position: fixed; bottom: 0; right: 0; }
+.cookie-notice { position: fixed; bottom: 0; width: 100%; }
+.testimonial-slider .slick-dots { bottom: -30px; }
+.pricing-table .featured { transform: scale(1.05); }
+.map-embed iframe { width: 100%; height: 400px; }
+.gallery-columns-4 .gallery-item { width: 25%; }
+.legacy-header-v1 { height: 120px; }

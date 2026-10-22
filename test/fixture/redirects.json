@@ -1,0 +1,7 @@
+[
+  { "from": "/old-services", "to": "/old-services/", "status": 301 },
+  { "from": "/old-services/", "to": "/services/", "status": 301 },
+  { "from": "/about", "to": "/about/", "status": 301 },
+  { "from": "/roofing-services/", "to": "/services/roofing/", "status": 301 },
+  { "from": "/spring-sale/", "to": "/contact/", "status": 302 }
+]

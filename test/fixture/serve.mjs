@@ -1,0 +1,157 @@
+// Fixture server: a static imitation of a WordPress site for tests.
+// startFixture({ port, blockAfter, delayMs }) -> { origin, close() }
+import { createServer } from 'node:http';
+import { readFileSync, statSync } from 'node:fs';
+import { dirname, extname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SITE = join(HERE, 'site');
+const REDIRECTS = JSON.parse(readFileSync(join(HERE, 'redirects.json'), 'utf8'));
+const WP_JSON_TYPES = ['pages', 'posts', 'media', 'categories', 'tags'];
+const ORIGIN_PLACEHOLDER = /\{\{ORIGIN\}\}/g;
+
+const CONTENT_TYPES = {
+  '.html': 'text/html; charset=UTF-8',
+  '.css': 'text/css; charset=UTF-8',
+  '.js': 'text/javascript; charset=UTF-8',
+  '.json': 'application/json; charset=UTF-8',
+  '.xml': 'application/xml; charset=UTF-8',
+  '.txt': 'text/plain; charset=UTF-8',
+  '.svg': 'image/svg+xml',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.pdf': 'application/pdf',
+  '.woff2': 'font/woff2',
+};
+const TEXT_EXTENSIONS = new Set(['.html', '.css', '.js', '.json', '.xml', '.txt', '.svg']);
+
+function readWpJson(type) {
+  return JSON.parse(readFileSync(join(SITE, 'wp-json', 'wp', 'v2', `${type}.json`), 'utf8'));
+}
+
+// Every page and post id, for ?p=<id> shortlinks.
+const SHORTLINKS = new Map(
+  ['pages', 'posts'].flatMap((type) => readWpJson(type).map((item) => [String(item.id), item.link])),
+);
+
+function resolveFile(pathname) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const target = resolve(SITE, `.${decoded}`);
+  if (target !== SITE && !target.startsWith(SITE + sep)) return null;
+  const candidates = decoded.endsWith('/')
+    ? [join(target, 'index.html'), join(target, 'index.xml')]
+    : [target];
+  for (const candidate of candidates) {
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
+function contentTypeFor(file) {
+  if (file.endsWith(`${sep}feed${sep}index.xml`)) return 'application/rss+xml; charset=UTF-8';
+  return CONTENT_TYPES[extname(file)] ?? 'application/octet-stream';
+}
+
+function body(file, origin) {
+  const buffer = readFileSync(file);
+  if (!TEXT_EXTENSIONS.has(extname(file))) return buffer;
+  return Buffer.from(buffer.toString('utf8').replace(ORIGIN_PLACEHOLDER, origin));
+}
+
+function wpJson(type, searchParams, origin) {
+  const items = JSON.parse(JSON.stringify(readWpJson(type)).replace(ORIGIN_PLACEHOLDER, origin));
+  const perPage = Number(searchParams.get('per_page') ?? 10);
+  const page = Number(searchParams.get('page') ?? 1);
+  if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100) {
+    return { status: 400, headers: {}, json: { code: 'rest_invalid_param', message: 'Invalid parameter(s): per_page', data: { status: 400 } } };
+  }
+  const totalPages = Math.ceil(items.length / perPage);
+  if (!Number.isInteger(page) || page < 1 || (page > totalPages && items.length > 0)) {
+    return { status: 400, headers: {}, json: { code: 'rest_post_invalid_page_number', message: 'The page number requested is larger than the number of pages available.', data: { status: 400 } } };
+  }
+  return {
+    status: 200,
+    headers: { 'X-WP-Total': String(items.length), 'X-WP-TotalPages': String(totalPages) },
+    json: items.slice((page - 1) * perPage, page * perPage),
+  };
+}
+
+function route(req, origin) {
+  const url = new URL(req.url, origin);
+  const { pathname, searchParams } = url;
+
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return { status: 405, headers: { Allow: 'GET, HEAD', 'Content-Type': 'text/plain' }, body: 'Method Not Allowed' };
+  }
+
+  const redirect = REDIRECTS.find((rule) => rule.from === pathname);
+  if (redirect) {
+    return { status: redirect.status, headers: { Location: new URL(redirect.to, origin).href }, body: '' };
+  }
+
+  if (pathname === '/' && searchParams.has('p')) {
+    const link = SHORTLINKS.get(searchParams.get('p'));
+    if (link) return { status: 301, headers: { Location: link.replace(ORIGIN_PLACEHOLDER, origin) }, body: '' };
+  }
+
+  const wpMatch = pathname.match(/^\/wp-json\/wp\/v2\/([a-z]+)\/?$/);
+  if (wpMatch && WP_JSON_TYPES.includes(wpMatch[1])) {
+    const result = wpJson(wpMatch[1], searchParams, origin);
+    return {
+      status: result.status,
+      headers: { ...result.headers, 'Content-Type': CONTENT_TYPES['.json'] },
+      body: JSON.stringify(result.json),
+    };
+  }
+
+  const file = resolveFile(pathname);
+  if (file && !file.startsWith(join(SITE, 'wp-json') + sep)) {
+    return { status: 200, headers: { 'Content-Type': contentTypeFor(file) }, body: body(file, origin) };
+  }
+
+  const notFound = join(SITE, '404.html');
+  return { status: 404, headers: { 'Content-Type': contentTypeFor(notFound) }, body: body(notFound, origin) };
+}
+
+export function startFixture({ port = 0, blockAfter = Infinity, delayMs = 0 } = {}) {
+  let requests = 0;
+  const server = createServer((req, res) => {
+    requests += 1;
+    const blocked = requests > blockAfter;
+    setTimeout(() => {
+      const origin = `http://${req.headers.host ?? `127.0.0.1:${server.address().port}`}`;
+      const response = blocked
+        ? { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'text/plain' }, body: 'Too Many Requests' }
+        : route(req, origin);
+      const payload = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body);
+      res.writeHead(response.status, { ...response.headers, 'Content-Length': payload.length });
+      res.end(req.method === 'HEAD' ? undefined : payload);
+    }, delayMs);
+  });
+
+  return new Promise((resolveStart, rejectStart) => {
+    server.once('error', rejectStart);
+    server.listen(port, '127.0.0.1', () => {
+      const origin = `http://127.0.0.1:${server.address().port}`;
+      resolveStart({
+        origin,
+        close: () =>
+          new Promise((resolveClose) => {
+            server.closeAllConnections();
+            server.close(() => resolveClose());
+          }),
+      });
+    });
+  });
+}

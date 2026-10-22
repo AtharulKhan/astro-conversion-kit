@@ -1,0 +1,137 @@
+[
+  {
+    "id": 2,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "home",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/",
+    "title": {
+      "rendered": "Home"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 5,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "about",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/about/",
+    "title": {
+      "rendered": "About Us"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 6,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "contact",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/contact/",
+    "title": {
+      "rendered": "Contact"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 7,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "services",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/services/",
+    "title": {
+      "rendered": "Services"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 8,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "roofing",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/services/roofing/",
+    "title": {
+      "rendered": "Roofing"
+    },
+    "parent": 7,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 9,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "siding",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/services/siding/",
+    "title": {
+      "rendered": "Siding"
+    },
+    "parent": 7,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 10,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "blog",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/blog/",
+    "title": {
+      "rendered": "Blog"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 11,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "hidden-page",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/hidden-page/",
+    "title": {
+      "rendered": "Warranty Registration"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  },
+  {
+    "id": 12,
+    "date": "2026-01-15T09:00:00",
+    "modified": "2026-01-15T09:00:00",
+    "slug": "private-page",
+    "status": "publish",
+    "type": "page",
+    "link": "{{ORIGIN}}/private-page/",
+    "title": {
+      "rendered": "Staff Notes"
+    },
+    "parent": 0,
+    "menu_order": 0,
+    "featured_media": 0
+  }
+]

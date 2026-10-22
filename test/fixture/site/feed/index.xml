@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+  <title>Fixture Roofing &amp; Siding</title>
+  <atom:link href="{{ORIGIN}}/feed/" rel="self" type="application/rss+xml"/>
+  <link>{{ORIGIN}}/</link>
+  <description>Roofing and siding contractors</description>
+  <lastBuildDate>Tue, 10 Mar 2026 09:00:00 +0000</lastBuildDate>
+  <language>en-US</language>
+  <generator>https://wordpress.org/?v=6.6.2</generator>
+  <item><title>Your spring roof checklist</title><link>{{ORIGIN}}/spring-roof-checklist/</link><dc:creator>Fixture Crew</dc:creator><pubDate>Tue, 10 Mar 2026 09:00:00 +0000</pubDate><category>News</category><guid isPermaLink="false">{{ORIGIN}}/?p=21</guid><description>Winter is hard on shingles.</description></item>
+  <item><title>Choosing siding colors</title><link>{{ORIGIN}}/choosing-siding-colors/</link><dc:creator>Fixture Crew</dc:creator><pubDate>Sat, 14 Feb 2026 09:00:00 +0000</pubDate><category>News</category><guid isPermaLink="false">{{ORIGIN}}/?p=22</guid><description>Pick a colour in daylight.</description></item>
+  <item><title>Getting ready for storm season</title><link>{{ORIGIN}}/storm-season-prep/</link><dc:creator>Fixture Crew</dc:creator><pubDate>Tue, 20 Jan 2026 09:00:00 +0000</pubDate><category>News</category><guid isPermaLink="false">{{ORIGIN}}/?p=23</guid><description>Trim branches and secure gutters.</description></item>
+</channel>
+</rss>

@@ -1,0 +1,23 @@
+{
+  "name": "astro-conversion-kit",
+  "owner": {
+    "name": "Ethan Rogers"
+  },
+  "plugins": [
+    {
+      "name": "astro-conversion",
+      "source": "./",
+      "description": "Convert a live website into a static Astro site with URL, content, SEO and visual parity gates, then launch it safely.",
+      "skills": [
+        "./skills/convert-site",
+        "./skills/capture-site",
+        "./skills/parity-gates",
+        "./skills/visual-review",
+        "./skills/suggest-improvements",
+        "./skills/pre-launch",
+        "./skills/launch-audit",
+        "./skills/post-launch"
+      ]
+    }
+  ]
+}

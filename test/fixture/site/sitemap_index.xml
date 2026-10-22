@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>{{ORIGIN}}/page-sitemap.xml</loc><lastmod>2026-03-10T09:00:00+00:00</lastmod></sitemap>
+  <sitemap><loc>{{ORIGIN}}/post-sitemap.xml</loc><lastmod>2026-03-10T09:00:00+00:00</lastmod></sitemap>
+  <sitemap><loc>{{ORIGIN}}/category-sitemap.xml</loc><lastmod>2026-03-10T09:00:00+00:00</lastmod></sitemap>
+</sitemapindex>

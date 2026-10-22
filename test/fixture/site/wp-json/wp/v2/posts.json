@@ -1,0 +1,59 @@
+[
+  {
+    "id": 21,
+    "date": "2026-03-10T09:00:00",
+    "modified": "2026-03-10T09:00:00",
+    "slug": "spring-roof-checklist",
+    "status": "publish",
+    "type": "post",
+    "link": "{{ORIGIN}}/spring-roof-checklist/",
+    "title": {
+      "rendered": "Your spring roof checklist"
+    },
+    "featured_media": 44,
+    "categories": [
+      3
+    ],
+    "tags": [
+      4
+    ]
+  },
+  {
+    "id": 22,
+    "date": "2026-02-14T09:00:00",
+    "modified": "2026-02-14T09:00:00",
+    "slug": "choosing-siding-colors",
+    "status": "publish",
+    "type": "post",
+    "link": "{{ORIGIN}}/choosing-siding-colors/",
+    "title": {
+      "rendered": "Choosing siding colors"
+    },
+    "featured_media": 46,
+    "categories": [
+      3
+    ],
+    "tags": [
+      4
+    ]
+  },
+  {
+    "id": 23,
+    "date": "2026-01-20T09:00:00",
+    "modified": "2026-01-20T09:00:00",
+    "slug": "storm-season-prep",
+    "status": "publish",
+    "type": "post",
+    "link": "{{ORIGIN}}/storm-season-prep/",
+    "title": {
+      "rendered": "Getting ready for storm season"
+    },
+    "featured_media": 47,
+    "categories": [
+      3
+    ],
+    "tags": [
+      4
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "name": "astro-conversion-kit",
+  "version": "0.1.0",
+  "description": "Agent Skills that convert a live website into a static Astro site, with parity gates.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Ethan Rogers",
+  "private": true,
+  "engines": {
+    "node": ">=22.23.4 <23 || >=24.22.1"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "hygiene": "node scripts/hygiene.mjs --dir ."
+  },
+  "dependencies": {
+    "css-tree": "3.2.1",
+    "parse5": "8.0.1",
+    "pixelmatch": "8.0.0",
+    "playwright": "1.64.1",
+    "pngjs": "7.0.0"
+  }
+}

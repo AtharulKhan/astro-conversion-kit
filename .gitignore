@@ -3,6 +3,7 @@ dist/
 .env*
 test/tmp/
 review/
+capture/screens/
 *.log
 .DS_Store
 # planning and session material never enters history
