@@ -30,7 +30,9 @@ Typical run-specific lines (keep the ones that apply):
 - "create the store, upload, regenerate rewrites; live-temporary must be gone before DNS moves"
   with the commands from the host file;
 - Cloudflare: create one Single Redirect per row of `cloudflare-query-redirects.csv` (n rows);
-- Vercel: open the preview for the audit or accept the "Not covered" gap;
+- Vercel: create the Protection Bypass for Automation secret (Settings, Deployment Protection)
+  and put it in the environment as `VERCEL_AUTOMATION_BYPASS_SECRET` so `verify-live` can be
+  rerun, or accept the "Not covered" gap;
 - push the repo and open the PR (when `gh` was not logged in);
 - sign off every entry in `exceptions.json`; approve or decline every proposal id (an approved
   proposal's records move to `exceptions.json` with the approver's name);
@@ -65,8 +67,14 @@ Typical run-specific lines (keep the ones that apply):
    and `node <kit>/skills/convert-site/scripts/prelaunch-reconcile.mjs --findings
    review/pre-launch/gate.json --baseline baseline --plan docs/plan.md`, which must exit 0.
 6. Set the switch for production (Vercel: `npx vercel env add PUBLIC_INDEXABLE production`,
-   value `true`; Cloudflare: it is on the local build) and deploy production
-   (`npx vercel deploy --prod`, or the wrangler production deploy).
+   value `true`; Cloudflare: it is on the local build). Vercel, when staging was
+   protected (`publicStaging` `false`): restore the default protection, previews only, so the
+   production alias and the domain answer the public: write `{"ssoProtection":{"deploymentType":"preview"}}`
+   to a file outside the repository, run
+   `npx vercel api /v9/projects/<project> --method PATCH --input <that file> --scope <team slug>`,
+   and check `npx vercel api /v9/projects/<project> --scope <team slug>` shows `"preview"`.
+   Then deploy production (`npx vercel deploy --prod --scope <team slug>`, or the wrangler
+   production deploy).
 7. Add the domain to the project, then change the DNS records for the apex and `www` only, to
    what the host shows. Nothing else in the zone changes (mail, verification records stay).
 8. When the certificate is issued:

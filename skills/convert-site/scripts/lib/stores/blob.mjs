@@ -6,7 +6,12 @@
 // body, x-api-version 13, the store id parsed from the token (vercel_blob_rw_<storeId>_<secret>)
 // in x-vercel-blob-store-id and in x-api-blob-request-id, the attempt number, and the put
 // options as x-* headers. The response is JSON: { url, downloadUrl, pathname, contentType,
-// contentDisposition, etag }. Verified against a real Blob store: pending.
+// contentDisposition }. Checked against a real public store (Vercel CLI 65.1.0, October 2026): the
+// PUT answers 200 with that JSON, a re-PUT of an existing key with x-allow-overwrite answers 200,
+// and the public url's HEAD carries content-length, content-type and cache-control. The PUT
+// response has no etag, as a header or a field: the manifest's etag comes from the HEAD.
+// The token is never told apart by its prefix: the value `vercel env ls` shows for a token from
+// `vercel storage connect --auth token --add-rw-token` begins eyJ, not vercel_blob_rw_.
 import { randomBytes } from 'node:crypto';
 import { fetchWithRetry } from './retry.mjs';
 

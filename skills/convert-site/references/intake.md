@@ -34,8 +34,11 @@ opening explaining what a repository, a staging deploy and a pull request are.
        I'll create a project and a noindexed staging deploy." Not logged in: "Run `npx vercel
        login` (or `npx wrangler login`) if you want a staging deploy; otherwise you get a local
        preview and the deploy is on your list.">
-       <Vercel: "Which Vercel team should the project live in? Default: your personal account.
-       `npx vercel teams ls` lists the teams you can use.">
+       <Vercel: "Which Vercel team should the project live in? Default: the team `npx vercel teams ls`
+       marks as current (<current slug>). A personal account is its own team slug there, not
+       your username." And: "May the staging deployments be public before launch? Default: no;
+       every deployment stays behind Vercel's login, and you create a bypass secret so I can
+       check it. Yes: anyone with the link can open it (it stays noindexed).">
     3. Domain. Default: <host of LIVE> stays the domain; the new site replaces the old one there
        on launch day (you move DNS, not me).
     4. Forms that send a message (contact, quote). Default: they post to Formspree, with the
@@ -71,7 +74,7 @@ Include each line that applies, worded for this run. Each becomes a `state.needs
 | No form id yet (asked at the forms step, never here) | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` until you give the id; the PR opens as a draft; "create the form, send me the id" goes on your list |
 | No test address | No test submission; the `forms` launch check waits on you |
 | No store credentials and media over the limits | Media is served from the live site on staging only (`live-temporary`); "create the store, upload, regenerate rewrites" goes on your list and must be done before DNS moves |
-| Vercel preview protection on | `launch-audit` and `verify-live` cannot reach staging and are "Not covered" until you open the preview or give a bypass secret through the environment |
+| Vercel protection bypass secret (staging not public) | The project is protected before its first deploy, so `launch-audit` and `verify-live` cannot reach staging and are "Not covered" until you create the Protection Bypass for Automation secret and put it in the environment |
 | Cloudflare query redirects (`?p=` shortlinks) | Created by you as Single Redirects from `cloudflare-query-redirects.csv` |
 | Search Console access | The baseline export before DNS moves is yours (`gsc-baseline`) |
 | DNS access | The cutover is yours; the runbook names the two records to change |
@@ -84,7 +87,12 @@ lives in `$SITE/.conversion/` from the start; `init-site.mjs` scaffolds around i
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set site '"<LIVE>"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set hosting '"vercel"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set repo '"<owner>/<slug>"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":null,"consent":[],"keepPages":[],"components":false}'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":"<team slug>","publicStaging":false,"consent":[],"keepPages":[],"components":false}'
+
+`vercelScope` is always a slug from `npx vercel teams ls` (the current one by default): the CLI
+refuses a link without one, and refuses the username. `publicStaging` is the staging-protection
+answer (`false` unless the person said yes); record it as a decision too (topic "staging
+protection"), so `docs/plan.md` and the PR show it.
 
 Every default you applied is also a decision (`state.mjs decision`), so the PR shows it. Add each
 missing item to `needsYou` as `{ "item": "...", "command": "...", "before": "<phase or DNS>" }`:

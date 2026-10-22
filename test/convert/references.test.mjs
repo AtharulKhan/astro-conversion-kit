@@ -43,6 +43,9 @@ test('build-rules.md copies media outside the prefix; SKILL.md names routes as a
 
 test('intake.md: the message asks only what the owner knows, the Vercel team included', () => {
   const template = read('references/intake.md').split('## The template')[1].split('\n## ')[0];
+  assert.match(template.replace(/\s+/g, ' '), /Default: the team `npx vercel teams ls` marks as current/);
+  assert.match(template.replace(/\s+/g, ' '), /May the staging deployments be public before launch\? Default: no/);
+  assert.match(read('references/intake.md'), /"publicStaging":false/);
   for (const asked of [/Repository\./, /Hosting\./, /Vercel team/, /`npx vercel teams ls`/, /Domain\./, /Test address\./, /Search Console\./, /Consent/]) {
     assert.match(template, asked);
   }
@@ -50,13 +53,45 @@ test('intake.md: the message asks only what the owner knows, the Vercel team inc
   assert.doesNotMatch(template, /<n> found|Found: <GA4|Out of scope \(needs a server\)|Large media/);
 });
 
-test('hosting-vercel.md: link with the scope, connect Git, deploy, and the needs-you line when a step fails', () => {
+test('hosting-vercel.md: link with the team slug, protect every deployment, deploy, and the needs-you line when a step fails', () => {
   const vercel = read('references/hosting-vercel.md');
-  const steps = ['npx vercel link --yes --project <slug> --scope <team>', 'npx vercel git connect https://github.com/<owner>/<slug>.git', 'npx vercel deploy --yes'];
+  const steps = [
+    'npx vercel link --yes --project <slug> --scope <scope>',
+    'npx vercel api /v9/projects/<slug> --method PATCH --input <body> --scope <scope>',
+    'npx vercel api /v9/projects/<slug> --scope <scope>',
+    'npx vercel deploy --yes --scope <scope>',
+  ];
   const at = steps.map((s) => vercel.indexOf(`    ${s}\n`));
-  assert.ok(at.every((i) => i > 0) && at[0] < at[1] && at[1] < at[2], 'the three steps in order');
+  assert.ok(at.every((i) => i > 0) && at.every((i, n) => n === 0 || at[n - 1] < i), 'the four steps in order');
+  const flat = vercel.replace(/\s+/g, ' ');
+  assert.match(flat, /not the username/);
+  assert.match(flat, /`npx vercel teams ls`/);
+  assert.match(flat, /`\.env\.local` holding a `VERCEL_OIDC_TOKEN`/);
+  assert.match(flat, /`vercel git connect` is not needed after `link`/);
+  assert.match(flat, /first deploy of a new project is a production deploy/);
+  assert.match(flat, /read `deployment\.url` \(the staging URL\) and `deployment\.target`/);
+  assert.match(flat, /does not read `\.gitignore`/);
+  assert.match(flat, /`\/dist\/`, `\/\.conversion\/`/);
+  assert.match(flat, /`302` to `https:\/\/vercel\.com\/sso-api\?\.\.\.`, not a 401/);
+  assert.match(flat, /Protection Bypass for Automation/);
+  assert.doesNotMatch(flat, /vercel curl/);
+  assert.match(flat, /npx vercel blob create-store <slug>-media --access public/);
+  assert.match(flat, /npx vercel storage connect <store id> --project <slug> -e development --auth token --add-rw-token/);
+  assert.match(flat, /never rely on a prefix/);
+  assert.match(flat, /flagless wrapper/);
+  assert.match(vercel, /`false` \(default\) \| `\{"ssoProtection":\{"deploymentType":"all"\}\}`/);
+  assert.match(vercel, /`true` \| `\{"ssoProtection":null\}`/);
+  assert.match(vercel, /"ssoProtection":\{"deploymentType":"preview"\}/);
+  assert.doesNotMatch(vercel, /--body/);
   assert.match(vercel, /`link` fails[^\n]*`npx vercel teams ls`/);
-  assert.match(vercel, /`git connect` fails/);
+});
+
+test('runbook.md launch day sets protection back to preview before the production deploy', () => {
+  const launch = read('references/runbook.md').split('## C. Launch day')[1].split('\n## ')[0];
+  assert.match(launch, /--method PATCH --input <that file>/);
+  const patch = launch.indexOf('"deploymentType":"preview"');
+  assert.ok(patch > 0, 'the PATCH back to preview');
+  assert.ok(patch < launch.indexOf('npx vercel deploy --prod'), 'before the production deploy');
 });
 
 test('a protected site ends the run with the resume command; SKILL.md has the nvm line and the scaffold exception', () => {

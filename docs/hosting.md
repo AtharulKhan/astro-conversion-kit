@@ -17,8 +17,17 @@ whatever the host's protection settings are, so a leaked staging link does not g
 
 ## Vercel
 
-**Project.** A static project with no framework adapter. `npx vercel deploy` makes a preview;
-`npx vercel deploy --prod` deploys production.
+**Project.** A static project with no framework adapter. `npx vercel link --yes --project <name>
+--scope <team slug>` creates it: an agent's CLI never picks a team, and a personal account's scope
+is its team slug from `npx vercel teams ls` (for example `ethans-projects-xxxx`), not the
+username. `link` also connects the GitHub repository and writes `.env.local` with a
+`VERCEL_OIDC_TOKEN`, so `.vercel` and `.env*` stay in `.gitignore`. The CLI does not read
+`.gitignore` when it uploads; the scaffold's `.vercelignore` keeps `dist/`, run state, review
+output and screenshots out, while `capture/` is uploaded because the build reads it.
+`npx vercel deploy` prints a JSON block at the end; `deployment.url` and `target` are read from
+it. The first deploy of a new project is a production deploy (aliased to `<name>.vercel.app`);
+later ones are previews. `npx vercel deploy --prod` deploys production. Vercel warns that the
+`engines` range lets it move the build to the next Node major automatically.
 
 **Indexing.** Set `PUBLIC_INDEXABLE` for the Production environment only:
 `npx vercel env add PUBLIC_INDEXABLE production` with the value `true`. Never set it for Preview.
@@ -52,14 +61,26 @@ format. URLs in the minority form become rows in `redirects.csv`.
 **Media in Blob.** When the media decision is "store", files are uploaded to a public Vercel Blob
 store by `media-upload.mjs` (it reads `BLOB_READ_WRITE_TOKEN` from the environment and checks every
 upload's size), and `vercel.json` gets a rewrite from the media prefix (for example
-`/wp-content/uploads/:path*`) to the store. The public URLs stay the same.
+`/wp-content/uploads/:path*`) to the store. The public URLs stay the same. The store is made with
+`npx vercel blob create-store <name> --access public`, which gives no token; the static token
+comes from `npx vercel storage connect <store id> --project <name> --auth token --add-rw-token`.
+Its value does not start with `vercel_blob_rw_`, so nothing should rely on that prefix to spot
+or redact it. `npx vercel env run -- <command>` reads the command's flags as its own, so the
+uploader runs through a flagless wrapper script under it.
 
-**Deployment protection.** Vercel protects preview deployments by default, so visitors (and
-scripts) get a login page. Vercel's Protection Bypass for Automation lets a script through with a
-secret header, but `launch-audit` cannot send that header yet. So the choice is: open the preview
-to the public for the audit (it is still noindexed), or keep it protected and accept that the
-staging audit appears under "Not covered" until it can run. Keep previews of sites you do not own the
-content of protected.
+**Deployment protection.** Vercel's default protection covers previews and deployment URLs but
+not the production alias `<name>.vercel.app`, and the first deploy of a new project goes there.
+So the intake asks whether staging may be public before launch. No (the default): before the
+first deploy the project is set to protect every deployment
+(`npx vercel api /v9/projects/<name> --method PATCH --input <file> --scope <team slug>` with
+`{"ssoProtection":{"deploymentType":"all"}}`, checked with a GET), and launch day restores the
+default (`"deploymentType":"preview"`). Yes: the same PATCH with `{"ssoProtection":null}` turns
+Vercel Authentication off; pages stay noindexed. A protected deployment answers scripts with a
+302 to `vercel.com/sso-api`, which `verify-live` reports as deployment protection (exit 3).
+Vercel's Protection Bypass for Automation lets it through with a secret header, but a new
+project has no secret until someone creates one in the dashboard, and `launch-audit` cannot send
+the header yet; until then the staging checks appear under "Not covered". Keep previews of sites
+you do not own the content of protected.
 
 ## Cloudflare Pages
 
