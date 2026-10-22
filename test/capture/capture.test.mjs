@@ -488,7 +488,10 @@ test('@import is followed into css/, on the site and on other hosts, cycle-safe,
   const site = await startFixture({ root });
   try {
     const out = tempDir();
-    const run = await capture([site.origin, '--out', out, '--delay', '0', '--no-rest']);
+    // The address guard refuses another host on a loopback address; the only other host a
+    // capture trusts is the CDX endpoint, so pointing CAPTURE_WAYBACK_CDX at the stand-in makes
+    // it a reachable "other host" here (its CDX request answers 404, which is never fatal).
+    const run = await capture([site.origin, '--out', out, '--delay', '0', '--no-rest'], { wayback: `${remote.origin}/cdx` });
     assert.equal(run.code, 0, run.stderr);
     const theme = `${site.origin}/wp-content/themes/fixture`;
     const manifest = readJson(out, 'css/manifest.json');
@@ -508,6 +511,15 @@ test('@import is followed into css/, on the site and on other hosts, cycle-safe,
     assert.equal(site.requests.filter((u) => u === '/wp-content/themes/fixture/css/editor.css').length, 1);
     assert.equal(site.requests.filter((u) => u === '/wp-content/themes/fixture/css/parts/base.css').length, 1);
     assert.equal(remote.requests.filter((u) => u === '/fonts.css').length, 1);
+
+    // Untrusted, the same import goes through the guard: listed with its refusal, never requested.
+    const guarded = tempDir();
+    const asked = remote.requests.length;
+    const plain = await capture([site.origin, '--out', guarded, '--delay', '0', '--no-rest']);
+    assert.equal(plain.code, 0, plain.stderr);
+    const refused = readJson(guarded, 'css/manifest.json').find((e) => e.href === `${remote.origin}/fonts.css`);
+    assert.deepEqual(refused, { file: null, href: `${remote.origin}/fonts.css`, pages: ['/about/'], status: 'blocked-address', importedBy: [linked.href] });
+    assert.equal(remote.requests.length, asked);
   } finally {
     await site.close();
     await remote.close();

@@ -1,17 +1,15 @@
 // Sitemap expansion: walk sitemap indexes down to their leaf URL sets.
 // expandSitemaps(urls, { fetch, onError }) -> [{ loc, lastmod, source }], deduplicated by loc, first
-// source wins. A gzipped sitemap that decodes past MAX_TEXT_BYTES is skipped and reported to
+// source wins. A gzipped sitemap that decodes past MAX_TEXT_BYTES (http.mjs's 20 MB text cap, so
+// a small .xml.gz cannot expand to gigabytes in memory) is skipped and reported to
 // onError({ url, status: 'too-large' }); parseSitemap marks it { tooLarge: true } with no entries.
 // A bare `/sitemap.xml` that is a URL set is also paged Drupal-style (`?page=1`, `?page=2`, ...)
 // until a page is non-200, lists no <loc>, or adds nothing new.
 
 import { gunzipSync } from 'node:zlib';
+import { MAX_TEXT_BYTES, TOO_LARGE } from './http.mjs';
 
 const MAX_PAGES = 10_000;
-// The decoded size a gzipped sitemap may reach (the same 20 MB cap as any text body over HTTP),
-// so a small .xml.gz cannot expand to gigabytes in memory.
-const MAX_TEXT_BYTES = 20 * 1024 * 1024;
-export const TOO_LARGE = 'too-large';
 
 function decode(text) {
   return text
