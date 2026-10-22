@@ -105,7 +105,9 @@ export function isBlockedAddress(ip) {
       inV4(n, '10.0.0.0', 8) ||
       inV4(n, '172.16.0.0', 12) ||
       inV4(n, '192.168.0.0', 16) ||
-      inV4(n, '169.254.0.0', 16) // link-local, including the 169.254.169.254 metadata service
+      inV4(n, '169.254.0.0', 16) || // link-local, including the 169.254.169.254 metadata service
+      inV4(n, '100.64.0.0', 10) || // carrier-grade NAT
+      n >= ipv4Number('224.0.0.0') // multicast, reserved and broadcast
     );
   }
   if (kind === 6) {
@@ -113,7 +115,12 @@ export function isBlockedAddress(ip) {
     if (!g) return true;
     const zeros = (from, to) => g.slice(from, to).every((x) => x === 0);
     if (zeros(0, 7) && (g[7] === 0 || g[7] === 1)) return true; // :: and ::1
-    if (zeros(0, 5) && g[5] === 0xffff) return isBlockedAddress(`${g[6] >>> 8}.${g[6] & 0xff}.${g[7] >>> 8}.${g[7] & 0xff}`);
+    const v4 = (hi, lo) => isBlockedAddress(`${hi >>> 8}.${hi & 0xff}.${lo >>> 8}.${lo & 0xff}`);
+    if (zeros(0, 6)) return v4(g[6], g[7]); // IPv4-compatible ::a.b.c.d
+    if (zeros(0, 5) && g[5] === 0xffff) return v4(g[6], g[7]); // IPv4-mapped ::ffff:a.b.c.d
+    if (zeros(0, 4) && g[4] === 0xffff && g[5] === 0) return v4(g[6], g[7]); // IPv4-translated ::ffff:0:a.b.c.d
+    if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) return v4(g[6], g[7]); // NAT64 64:ff9b::/96
+    if (g[0] === 0x2002) return v4(g[1], g[2]); // 6to4 2002::/16
     if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local, including fd00:ec2::254
     if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
     return false;
@@ -123,13 +130,25 @@ export function isBlockedAddress(ip) {
 
 const siteHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
 
-// null when the URL may be requested, else the reason it may not.
-async function guard(url, trusted) {
+// null when the URL may be requested, else the reason it may not. The lookup is bounded by
+// what is left of the request's total timeout.
+async function guard(url, trusted, deadline) {
   if (trusted.has(siteHost(url))) return null;
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   let addresses;
   try {
-    addresses = isIP(hostname) ? [{ address: hostname }] : await lookup(hostname, { all: true, verbatim: true });
+    if (isIP(hostname)) addresses = [{ address: hostname }];
+    else {
+      let timer;
+      const late = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error('DNS lookup timed out'), { code: 'ETIMEOUT' })), Math.max(0, deadline - Date.now()));
+      });
+      try {
+        addresses = await Promise.race([lookup(hostname, { all: true, verbatim: true }), late]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
   } catch (err) {
     return { network: err.code ?? err.message };
   }
@@ -202,7 +221,8 @@ export async function fetchPaced(url, {
   const cap = maxBytes ?? (toFile || discardBody ? MAX_FILE_BYTES : MAX_TEXT_BYTES);
   const refused = (reason, at) => ({ status: BLOCKED_ADDRESS, headers: {}, body: '', finalUrl: at.href, bytes: null, error: `${at.hostname} resolves to ${reason}` });
 
-  const first = await guard(target, trust);
+  const deadline = Date.now() + timeoutMs;
+  const first = await guard(target, trust, deadline);
   if (first?.address) return refused(first.address, target);
   const state = await pace(target.host, delayMs);
 
@@ -233,7 +253,7 @@ export async function fetchPaced(url, {
       await res.body?.cancel().catch(() => {});
       target = new URL(location, target);
       if (res.status === 303 && hopMethod !== 'HEAD') hopMethod = 'GET';
-      const check = await guard(target, trust);
+      const check = await guard(target, trust, deadline);
       if (check?.address) {
         clearTimeout(idleTimer);
         state.lastAt = Date.now();

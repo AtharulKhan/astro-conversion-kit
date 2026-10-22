@@ -42,6 +42,30 @@ test('isBlockedAddress refuses loopback, private, link-local and metadata addres
   assert.equal(isBlockedAddress('not-an-ip'), true);
 });
 
+test('isBlockedAddress looks inside IPv6 forms that carry an IPv4 address, and refuses CGNAT and multicast', () => {
+  for (const ip of [
+    '::127.0.0.1', '::a00:1', // IPv4-compatible
+    '::ffff:0:7f00:1', '::ffff:0:10.0.0.1', // IPv4-translated
+    '64:ff9b::127.0.0.1', '64:ff9b::a9fe:a9fe', // NAT64
+    '2002:7f00:1::', '2002:c0a8:101::1', // 6to4
+    '100.64.0.1', '100.127.255.255', // CGNAT
+    '224.0.0.1', '239.255.255.250', '240.0.0.1', '255.255.255.255', // multicast, reserved, broadcast
+  ]) {
+    assert.equal(isBlockedAddress(ip), true, ip);
+  }
+  for (const ip of ['::8.8.8.8', '::ffff:0:808:808', '64:ff9b::8.8.8.8', '2002:808:808::1', '100.63.255.255', '100.128.0.1', '223.255.255.255']) {
+    assert.equal(isBlockedAddress(ip), false, ip);
+  }
+});
+
+test('a host that does not resolve is a network error, without a request', async () => {
+  resetBlocked();
+  const res = await fetchPaced('http://nonexistent.invalid/x', { delayMs: 0, trusted: ['http://example.com'] });
+  assert.equal(res.status, 0);
+  assert.ok(res.error);
+  resetBlocked();
+});
+
 test('fetchPaced refuses a loopback host it was not told to trust, without a request', async () => {
   const stub = await startStub({ '/x': { body: 'secret' } });
   try {

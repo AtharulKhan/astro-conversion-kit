@@ -133,8 +133,9 @@ wrong; Lighthouse run or skipped; the platform oddities. Facts with paths, befor
 
 ## Size, time and address limits
 
-- Every request has a total timeout (30 s; media size checks 120 s) and gives up after 30 s with
-  no data. Downloads (media, fonts, PDFs) stream to disk; one larger than `--max-file-bytes`
+- Every request has a total timeout (30 s; media size checks 120 s; a download 6 hours, so a
+  large file is in practice bounded by the 30 s idle timeout) and gives up after 30 s with no
+  data. Downloads (media, fonts, PDFs) stream to disk; one larger than `--max-file-bytes`
   (`media`, `assets`; default 2 GB) is recorded `"too-large"` and not saved. Pages, stylesheets,
   sitemaps and REST lists are capped at 20 MB after decompression (`"too-large"`).
 - A request to any host but the origin's own (stylesheets, fonts and icons on other hosts, a
@@ -166,3 +167,6 @@ Repeat this list to the person verbatim. None of it was captured:
 - A file over `--max-file-bytes` or a page or stylesheet over 20 MB (`"too-large"`), and
   anything on a host that resolves to a private address (`"blocked-address"`).
 - A host whose DNS answer changes between the address check and the request.
+- Requests made by the browser: the live screenshots and Lighthouse load pages in headless
+  Chromium with no address guard, so a page's frames, images and scripts can reach a private
+  address.
