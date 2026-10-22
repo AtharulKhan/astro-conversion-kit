@@ -2,6 +2,7 @@
 // using node:crypto (no SDK). Path-style URLs: <endpoint>/<bucket>/<key>.
 // Secrets are only used to derive the signing key, never logged.
 import { createHash, createHmac } from 'node:crypto';
+import { fetchWithRetry } from './retry.mjs';
 
 export const R2_ENV = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'];
 const EMPTY_SHA256 = createHash('sha256').update('').digest('hex');
@@ -73,14 +74,14 @@ export function createR2Store({ env = process.env, endpoint } = {}) {
         payloadHash: sha256(body),
         ...creds,
       });
-      const res = await fetch(url, { method: 'PUT', headers: withoutHost(headers), body });
+      const res = await fetchWithRetry(url, { method: 'PUT', headers: withoutHost(headers), body });
       const text = await res.text();
       if (!res.ok) throw new Error(`R2 PUT ${key} answered ${res.status}: ${text.slice(0, 200)}`);
       return { url, etag: res.headers.get('etag') };
     },
     async head(url) {
       const headers = signV4({ method: 'HEAD', url, payloadHash: EMPTY_SHA256, ...creds });
-      const res = await fetch(url, { method: 'HEAD', headers: withoutHost(headers) });
+      const res = await fetchWithRetry(url, { method: 'HEAD', headers: withoutHost(headers) });
       if (!res.ok) throw new Error(`HEAD ${url} answered ${res.status}`);
       return { bytes: Number(res.headers.get('content-length')), etag: res.headers.get('etag') };
     },

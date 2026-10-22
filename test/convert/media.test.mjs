@@ -2,11 +2,12 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startFixture } from '../fixture/serve.mjs';
-import { parseSize, planMedia, rewriteConfig } from '../../skills/convert-site/scripts/media-plan.mjs';
+import { parseSize, planMedia, rewriteConfig, mediaPrefix, LIVE_TEMPORARY_WARNING } from '../../skills/convert-site/scripts/media-plan.mjs';
+import { contentTypeFor } from '../../skills/convert-site/scripts/media-upload.mjs';
 import { signV4 } from '../../skills/convert-site/scripts/lib/stores/r2.mjs';
 
 const SCRIPTS = resolve(import.meta.dirname, '../../skills/convert-site/scripts');
@@ -135,6 +136,18 @@ test('--mode live-temporary is written with the no-credentials reason', async ()
   assert.equal(plan.mode, 'live-temporary');
   assert.equal(plan.store, 'r2');
   assert.ok(plan.reasons.includes('no store credentials'));
+  assert.equal(plan.warning, LIVE_TEMPORARY_WARNING);
+  assert.equal(
+    plan.warning,
+    'staging only: media is proxied from the live site; create the store and upload before DNS moves, then regenerate this config',
+  );
+  assert.match(res.stdout, /warning: staging only/);
+});
+
+test('store and repo plans carry no warning', () => {
+  const entries = [{ path: '/wp-content/uploads/a.jpg', status: 200, bytes: 1 }];
+  assert.equal(planMedia(entries, { host: 'vercel' }).warning, undefined);
+  assert.equal(planMedia(entries, { host: 'vercel', maxTotal: 1 }).warning, undefined);
 });
 
 test('media-plan with a bad size or host exits 2; --help exits 0', async () => {
@@ -152,6 +165,12 @@ test('rewriteConfig: Vercel rewrite, Cloudflare block, and live-temporary at the
   assert.equal(live.source, '/wp-content/uploads/:path*');
   assert.ok(live.destination.startsWith('https://live.example.com'));
   assert.equal(live.destination, 'https://live.example.com/wp-content/uploads/:path*');
+  assert.equal(live.warning, LIVE_TEMPORARY_WARNING);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(live)),
+    { source: '/wp-content/uploads/:path*', destination: 'https://live.example.com/wp-content/uploads/:path*' },
+    'the warning stays out of vercel.json',
+  );
 
   const blob = rewriteConfig('store', 'https://abc.public.blob.vercel-storage.com/', '/wp-content/uploads/', { store: 'blob' });
   assert.deepEqual(blob, {
@@ -168,6 +187,11 @@ test('rewriteConfig: Vercel rewrite, Cloudflare block, and live-temporary at the
   const liveCf = rewriteConfig('live-temporary', 'https://live.example.com', '/wp-content/uploads/', { store: 'r2' });
   assert.equal(typeof liveCf, 'string');
   assert.match(liveCf, /live\.example\.com/);
+  assert.equal(liveCf.split('\n')[0], LIVE_TEMPORARY_WARNING);
+  assert.doesNotMatch(r2, /staging only/);
+  assert.equal(blob.warning, undefined);
+
+  assert.throws(() => rewriteConfig('store', 'https://media.example.com', '/wp-content/uploads/'), /store mode needs/);
 
   assert.equal(rewriteConfig('repo', '', '/wp-content/uploads/'), null);
 });
@@ -207,8 +231,9 @@ function makeCache(name) {
 }
 
 // A stand-in for the object store: records PUTs, serves HEADs of what it stored.
-async function startStoreStub({ lie = false } = {}) {
+async function startStoreStub({ lie = false, failPuts = 0, failHeads = 0 } = {}) {
   const puts = [];
+  const attempts = { PUT: 0, HEAD: 0 };
   const stored = new Map();
   let origin;
   const server = createServer((req, res) => {
@@ -216,6 +241,19 @@ async function startStoreStub({ lie = false } = {}) {
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
       const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+      if (req.method in attempts) attempts[req.method] += 1;
+      if (req.method === 'PUT' && failPuts > 0) {
+        failPuts -= 1;
+        res.writeHead(503, { 'content-type': 'text/plain' });
+        res.end('busy');
+        return;
+      }
+      if (req.method === 'HEAD' && failHeads > 0) {
+        failHeads -= 1;
+        res.writeHead(429);
+        res.end();
+        return;
+      }
       if (req.method === 'PUT') {
         const body = Buffer.concat(chunks);
         puts.push({ path, headers: req.headers, bytes: body.length });
@@ -244,6 +282,7 @@ async function startStoreStub({ lie = false } = {}) {
   return {
     origin,
     puts,
+    attempts,
     close: () =>
       new Promise((r) => {
         server.closeAllConnections();
@@ -270,6 +309,7 @@ test('blob upload against a stub: 3 files, verified sizes, manifest written, sec
     assert.equal(put.headers['x-api-version'], '7');
     assert.equal(put.headers['x-content-type'], 'image/jpeg');
     assert.equal(put.headers['x-add-random-suffix'], '0');
+    assert.equal(put.headers['x-allow-overwrite'], '1');
     assert.equal(put.headers['x-cache-control-max-age'], '31536000');
 
     const entries = JSON.parse(readFileSync(manifest, 'utf8'));
@@ -280,6 +320,7 @@ test('blob upload against a stub: 3 files, verified sizes, manifest written, sec
     assert.equal(a.etag, '"etag-4"');
     assert.ok(entries.some((e) => e.path === '/wp-content/uploads/2026/01/sub/c.pdf' && e.bytes === 12));
     assert.match(first.stdout, /uploaded 3/);
+    assert.deepEqual(readdirSync(work).filter((n) => n.endsWith('.tmp')), [], 'no temp manifest left behind');
 
     const second = await run(UPLOAD, args, { ...NO_CREDS, BLOB_READ_WRITE_TOKEN: token });
     assert.equal(second.code, 0, second.stderr);
@@ -358,4 +399,121 @@ test('r2 upload against a stub: signed PUTs to /<bucket>/<key>, verified by HEAD
   } finally {
     await stub.close();
   }
+});
+
+test('PUT and HEAD are retried once on 503 and 429, then succeed', async () => {
+  const stub = await startStoreStub({ failPuts: 1, failHeads: 1 });
+  try {
+    const dir = makeCache('cache-retry');
+    const manifest = join(work, 'manifest-retry.json');
+    const res = await run(
+      UPLOAD,
+      ['--store', 'blob', '--dir', dir, '--manifest', manifest, '--prefix', '/wp-content/uploads/', '--endpoint', stub.origin],
+      { ...NO_CREDS, BLOB_READ_WRITE_TOKEN: 'tok' },
+    );
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(stub.attempts.PUT, 4, '3 files plus one retried PUT');
+    assert.equal(stub.attempts.HEAD, 4, '3 files plus one retried HEAD');
+    assert.equal(JSON.parse(readFileSync(manifest, 'utf8')).length, 3);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('--media supplies the captured content type; the extension table covers common formats', async () => {
+  const stub = await startStoreStub();
+  try {
+    const dir = makeCache('cache-types');
+    const media = join(work, 'media-types.json');
+    writeFileSync(
+      media,
+      JSON.stringify([
+        {
+          url: 'https://live.example.com/wp-content/uploads/2026/01/a.jpg',
+          path: '/wp-content/uploads/2026/01/a.jpg',
+          source: [],
+          referencedBy: [],
+          status: 200,
+          contentType: 'image/pjpeg',
+          bytes: 4,
+        },
+      ]),
+    );
+    const res = await run(
+      UPLOAD,
+      [
+        '--store', 'blob', '--dir', dir, '--manifest', join(work, 'manifest-types.json'),
+        '--prefix', '/wp-content/uploads/', '--media', media, '--endpoint', stub.origin,
+      ],
+      { ...NO_CREDS, BLOB_READ_WRITE_TOKEN: 'tok' },
+    );
+    assert.equal(res.code, 0, res.stderr);
+    const type = (p) => stub.puts.find((x) => x.path === p).headers['x-content-type'];
+    assert.equal(type('/wp-content/uploads/2026/01/a.jpg'), 'image/pjpeg');
+    assert.equal(type('/wp-content/uploads/2026/01/b.webp'), 'image/webp', 'not in media.json: extension lookup');
+  } finally {
+    await stub.close();
+  }
+  const expected = {
+    mov: 'video/quicktime',
+    m4a: 'audio/mp4',
+    ogg: 'audio/ogg',
+    txt: 'text/plain; charset=utf-8',
+    csv: 'text/csv; charset=utf-8',
+    zip: 'application/zip',
+    json: 'application/json',
+    bmp: 'image/bmp',
+    tif: 'image/tiff',
+    tiff: 'image/tiff',
+    avif: 'image/avif',
+    ico: 'image/x-icon',
+    woff: 'font/woff',
+    woff2: 'font/woff2',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  };
+  for (const [ext, type] of Object.entries(expected)) assert.equal(contentTypeFor(`file.${ext.toUpperCase()}`), type, ext);
+  assert.equal(contentTypeFor('file.unknown'), 'application/octet-stream');
+});
+
+test('the media prefix is never "/": the plan exits 2 listing the top-level prefixes', async () => {
+  assert.throws(
+    () => mediaPrefix(['/wp-content/uploads/a.jpg', '/images/b.jpg', '/favicon.ico']),
+    (err) => /\/images\//.test(err.message) && /\/wp-content\//.test(err.message) && /site root/.test(err.message),
+  );
+  assert.equal(mediaPrefix(['/wp-content/uploads/a.jpg', '/wp-content/themes/x/font.woff2']), '/wp-content/');
+  const media = join(work, 'media-split.json');
+  writeFileSync(
+    media,
+    JSON.stringify([
+      { path: '/wp-content/uploads/a.jpg', status: 200, bytes: 10 },
+      { path: '/images/b.jpg', status: 200, bytes: 10 },
+    ]),
+  );
+  const out = join(work, 'plan-split.json');
+  const res = await run(PLAN, ['--media', media, '--host', 'vercel', '--out', out]);
+  assert.equal(res.code, 2);
+  assert.match(res.stderr, /\/images\/.*\/wp-content\//);
+  assert.ok(!existsSync(out));
+});
+
+test('files outside an explicit --prefix are listed in reasons without changing the mode', async () => {
+  const media = join(work, 'media-outside.json');
+  writeFileSync(
+    media,
+    JSON.stringify([
+      { path: '/wp-content/uploads/a.jpg', status: 200, bytes: 10 },
+      { path: '/images/b.jpg', status: 200, bytes: 10 },
+    ]),
+  );
+  const out = join(work, 'plan-outside.json');
+  const res = await run(PLAN, ['--media', media, '--host', 'vercel', '--prefix', '/wp-content/uploads/', '--out', out]);
+  assert.equal(res.code, 0, res.stderr);
+  const plan = JSON.parse(readFileSync(out, 'utf8'));
+  assert.equal(plan.mode, 'repo');
+  assert.equal(plan.reasons.length, 1);
+  assert.match(plan.reasons[0], /outside the prefix \/wp-content\/uploads\/.*\/images\/b\.jpg/);
+  const root = await run(PLAN, ['--media', media, '--host', 'vercel', '--prefix', '/', '--out', out]);
+  assert.equal(root.code, 2);
 });
