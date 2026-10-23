@@ -111,6 +111,17 @@ test('loadExceptions adds proposals.json only when PROPOSALS=on', (t) => {
   assert.deepEqual(loadExceptions(file, { proposals, env: { PROPOSALS: 'on' } }), [H1, proposal]);
 });
 
+test('a markup record loads from proposals.json; an unknown field is still rejected', (t) => {
+  const dir = tempDir(t);
+  const proposals = join(dir, 'proposals.json');
+  writeFileSync(join(dir, 'exceptions.json'), '[]');
+  const markup = { ...H1, field: 'markup', from: '<a href="https://www.example.com/">', to: '<a href="/">' };
+  writeFileSync(proposals, JSON.stringify([markup]));
+  assert.deepEqual(loadExceptions(join(dir, 'exceptions.json'), { proposals, env: { PROPOSALS: 'on' } }), [markup]);
+  writeFileSync(proposals, JSON.stringify([{ ...markup, field: 'markupp' }]));
+  assert.throws(() => loadExceptions(join(dir, 'exceptions.json'), { proposals, env: { PROPOSALS: 'on' } }), /field "markupp" is not one of/);
+});
+
 function runLoad(cwd, call) {
   const code = `import { loadExceptions } from ${JSON.stringify(pathToFileURL(LIB).href)};
 const out = ${call};
