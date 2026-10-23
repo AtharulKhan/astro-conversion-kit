@@ -89,6 +89,13 @@ source. Run each step as its own command, in this order:
 
        node <skill-dir>/scripts/assets.mjs --capture capture
 
+   The logo is looked for on the home page inside the `<header>`, a `.logo` element, or any
+   element whose class or id contains "logo": first an `<img>` whose src, alt, class or id
+   contains "logo", then an inline `<svg>` with "logo" in its class, id, aria-label or `<title>`
+   (saved as `logo.svg`, `url: null` in `assets/index.json`), then the first `<img>` in a link to
+   the home page, then the first `<img>` in the header. Check `assets/logo.*` by eye: an account
+   avatar or a sponsor mark can still win on an unusual header.
+
 6. **Live screenshots**, one per template at 390, 768 and 1440, with the visual-review shooter:
 
        node <skill-dir>/../visual-review/scripts/shoot.mjs --base https://www.example.com --routes capture/templates.json --widths 390,768,1440 --out capture/screens/live

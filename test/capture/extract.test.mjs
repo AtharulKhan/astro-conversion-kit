@@ -66,7 +66,8 @@ test('module scripts, modulepreload links and import map URLs are script entries
 
 test('the lazy image takes data-src and the noscript copy is not counted twice', () => {
   const record = extractPage(page('index.html'), `${ORIGIN}/`);
-  const team = record.images.filter((img) => img.src.includes('/team-'));
+  // The 24px header avatar reuses team-300x200.jpg; the lazy team photo is the other one.
+  const team = record.images.filter((img) => img.src.includes('/team-') && img.width !== 24);
   assert.equal(team.length, 1);
   assert.equal(team[0].lazy, true);
   assert.equal(team[0].src, `${ORIGIN}/wp-content/uploads/2026/01/team-1024x683.jpg`);

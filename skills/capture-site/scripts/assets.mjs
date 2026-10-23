@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Brand assets: the logo, the favicon, the apple-touch-icon and every web font, saved byte for
 // byte into <capture>/assets/ so the build can use the originals.
-// Sources: <link rel=icon|apple-touch-icon> and the first <img> inside <header> or .logo on the
-// home page snapshot, and every @font-face src in the stylesheets under <capture>/css/.
+// Sources: <link rel=icon|apple-touch-icon> and the logo (findLogo: an image or inline <svg>
+// named logo, the home link's image, else the first <img> inside <header> or .logo) on the home
+// page snapshot, and every @font-face src in the stylesheets under <capture>/css/.
 // Requests are paced like the crawl; fonts already saved are kept, so a stopped run resumes.
 // assets/index.json lists every asset looked for, saved or missing.
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -10,14 +11,17 @@ import { basename, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as csstree from 'css-tree';
 import { assertNodeVersion } from './lib/node-version.mjs';
+import { serializeOuter } from 'parse5';
 import { attr, children, findAll, isElement, parseHtml } from '../../parity-gates/scripts/lib/html.mjs';
 import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, MAX_FILE_BYTES } from './lib/http.mjs';
 
 const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--ua "<string>"] [--max-file-bytes <n>]
 
 Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
-(logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is the first <img> inside
-<header> or .logo on the home page; the icons come from its <link rel=icon> and
+(logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is found on the home page inside
+<header>, .logo or an element whose class or id contains "logo": an <img> whose src, alt,
+class or id says "logo", else an inline <svg> that does (saved as logo.svg), else the <img> in
+the link to the home page, else the first <img>; the icons come from its <link rel=icon> and
 <link rel=apple-touch-icon>; the fonts are every @font-face src in <dir>/css/ (written by
 capture.mjs; without it, fonts are reported as not captured).
 
@@ -67,6 +71,64 @@ function imageSrc(img) {
   const src = attr(img, 'src');
   if (src && !/^data:/i.test(src.trim())) return src;
   return LAZY_SRC.map((name) => attr(img, name)).find(Boolean) ?? null;
+}
+
+const LOGO = /logo/i;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const XLINK_NS = 'http://www.w3.org/1999/xlink';
+const mentionsLogo = (node, names) => names.some((name) => LOGO.test(attr(node, name) ?? ''));
+const textContent = (node) => (node.nodeName === '#text' ? node.value : children(node).map(textContent).join(''));
+// Where a logo is looked for: a <header>, an element with class "logo", or one whose class or id
+// contains "logo" (the home link inside the header is within the header already).
+const logoScope = (node) => node.tagName === 'header' || mentionsLogo(node, ['class', 'id']);
+
+// The site's logo on the home page, inside a logo scope, in this order of preference: an <img>
+// whose src, alt, class or id contains "logo"; an inline <svg> with "logo" in its class, id,
+// aria-label or <title>; the first <img> inside a link to the home page; then the first <img>
+// inside a <header> or .logo. Returns { img }, { svg } or null.
+function findLogo(document, homeUrl) {
+  const home = new URL(homeUrl);
+  const isHome = (href) => {
+    const url = resolveUrl(href, homeUrl);
+    if (!url) return false;
+    const target = new URL(url);
+    return target.host.replace(/^www\./i, '') === home.host.replace(/^www\./i, '') && target.pathname === '/';
+  };
+  const images = [];
+  const svgs = [];
+  const visit = (node, inside, inHome) => {
+    const here = inside || (isElement(node) && logoScope(node));
+    const linked = inHome || (node.tagName === 'a' && isHome(attr(node, 'href')));
+    if (here && node.tagName === 'img' && imageSrc(node)) images.push({ node, linked });
+    if (node.tagName === 'svg') {
+      if (here) svgs.push(node);
+      return;
+    }
+    for (const child of children(node)) visit(child, here, linked);
+  };
+  visit(document, false, false);
+  const named = images.find(({ node }) => LOGO.test(imageSrc(node)) || mentionsLogo(node, ['alt', 'class', 'id']));
+  if (named) return { img: named.node };
+  const svg = svgs.find((node) => mentionsLogo(node, ['class', 'id', 'aria-label'])
+    || findAll(node, (n) => n.tagName === 'title').some((t) => LOGO.test(textContent(t))));
+  if (svg) return { svg };
+  const linked = images.find((i) => i.linked);
+  if (linked) return { img: linked.node };
+  const first = logoImage(document);
+  return first ? { img: first } : null;
+}
+
+// An inline <svg> as a file of its own: the namespaces a standalone file needs are added.
+function svgFile(node) {
+  const has = (name) => node.attrs.some((a) => a.name === name);
+  node.attrs = [...node.attrs];
+  if (!has('xmlns')) node.attrs.push({ name: 'xmlns', value: SVG_NS });
+  let markup = serializeOuter(node);
+  if (/\sxlink:/.test(markup) && !has('xmlns:xlink')) {
+    node.attrs.push({ name: 'xmlns:xlink', value: XLINK_NS });
+    markup = serializeOuter(node);
+  }
+  return `${markup.replace(/&nbsp;/g, '&#160;')}\n`;
 }
 
 // The first <img> (document order) inside a <header> or an element with class "logo".
@@ -232,9 +294,14 @@ async function main() {
       for (const kind of ['logo', 'favicon', 'apple-touch-icon']) absent(kind, 'not captured (no page snapshot answered 200)');
     } else {
       const document = parseHtml(readFileSync(join(dir, home.snapshot), 'utf8'));
-      const img = logoImage(document);
+      const logo = findLogo(document, home.url);
+      if (logo?.svg) {
+        mkdirSync(out, { recursive: true });
+        writeFileSync(join(out, 'logo.svg'), svgFile(logo.svg));
+        entries.push({ kind: 'logo', url: null, file: 'assets/logo.svg', status: 200, note: 'inline <svg> in the home page' });
+      }
       const targets = [
-        ['logo', img ? resolveUrl(imageSrc(img), home.url) : null, 'none (no <img> inside <header> or .logo)'],
+        ...(logo?.svg ? [] : [['logo', logo?.img ? resolveUrl(imageSrc(logo.img), home.url) : null, 'none (no <img> or logo <svg> inside <header> or a logo element)']]),
         ['favicon', resolveUrl(iconHref(document, ['icon']), home.url), 'none on the site'],
         ['apple-touch-icon', resolveUrl(iconHref(document, ['apple-touch-icon', 'apple-touch-icon-precomposed']), home.url), 'none on the site'],
       ];
