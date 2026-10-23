@@ -193,6 +193,9 @@ test('externalHost: only a POST action on another registrable domain posts elsew
   assert.equal(externalHost({ action: 'https://formspree.io/f/abc', method: 'post' }, '/', origins), 'formspree.io');
   assert.equal(externalHost({ action: 'https://forms.hsforms.com/submissions', method: 'post' }, '/', origins), 'forms.hsforms.com');
   assert.equal(externalHost({ action: SIGNUP_URL, method: 'get' }, '/', origins), null, 'a GET form is not a submission form');
+  for (const action of ['https://example.wpengine.com/contact/', 'https://staging-site.kinsta.cloud/signup/', 'https://dev-x.pantheonsite.io/form/', 'https://Example.WPEngine.com./x']) {
+    assert.equal(externalHost({ action, method: 'post' }, '/', origins), null, `${action} is a managed-WordPress staging host`);
+  }
   assert.equal(externalHost({ action: '', method: 'post' }, '/', origins), null);
   // Two-level public suffixes: the registrable domain keeps three labels.
   const uk = ['https://www.example.co.uk'];

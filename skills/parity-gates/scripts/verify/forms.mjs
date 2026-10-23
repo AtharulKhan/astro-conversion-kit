@@ -115,6 +115,14 @@ export function registrableDomain(hostname) {
   return TWO_LEVEL_SUFFIXES.has(lastTwo) ? labels.slice(-3).join('.') : lastTwo;
 }
 
+// Managed-WordPress staging hosts: a form posting to one of these posts to the old site, not to a
+// form service, even when its action is a page URL rather than a handler.
+const MANAGED_WP_SUFFIXES = [
+  'wpengine.com', 'wpenginepowered.com', 'kinsta.cloud', 'pantheonsite.io', 'flywheelsites.com',
+  'wpcomstaging.com', 'cloudwaysapps.com', 'mystagingwebsite.com', 'dreamhosters.com', 'instawp.xyz',
+];
+const managedWordPress = (hostname) => MANAGED_WP_SUFFIXES.some((s) => hostname === s || hostname.endsWith(`.${s}`));
+
 // WordPress's own form handlers: whatever host they are on, the form posts to the old site.
 const OLD_SITE_PATH = /\/(?:wp-admin\/admin-ajax\.php|wp-comments-post\.php|wp-admin\/admin-post\.php)$/i;
 const OLD_SITE_URL = /[?&]wpcf7|wp-json\/contact-form-7/i;
@@ -123,7 +131,8 @@ const OLD_SITE_URL = /[?&]wpcf7|wp-json\/contact-form-7/i;
 // service: a different registrable domain), else null: such a form works on a static host
 // unchanged and is kept as captured. Null for a form posting to the old site: an empty or relative
 // action, one on any host of the site's registrable domains (www, http, a subdomain, a
-// protocol-relative //host), and a WordPress form handler on any host.
+// protocol-relative //host), a WordPress form handler on any host, and any managed-WordPress
+// staging host (wpengine.com, kinsta.cloud, pantheonsite.io, ...).
 export function externalHost(form, page, origins = []) {
   if (!isPost(form)) return null;
   const action = (form.action ?? '').trim();
@@ -137,6 +146,7 @@ export function externalHost(form, page, origins = []) {
   }
   if (!/^https?:$/.test(url.protocol) || url.hostname === 'forms.invalid') return null;
   if (OLD_SITE_PATH.test(url.pathname) || OLD_SITE_URL.test(action)) return null;
+  if (managedWordPress(url.hostname.toLowerCase().replace(/\.$/, ''))) return null;
   const siteDomains = new Set(origins.map((o) => registrableDomain(new URL(o).hostname)));
   if (siteDomains.has(registrableDomain(url.hostname))) return null;
   return url.host;
