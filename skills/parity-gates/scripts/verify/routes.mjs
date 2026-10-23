@@ -33,8 +33,10 @@ A page may be built as <path>/index.html or <path>.html; both are accepted for e
 The .html form (build.format "file") is served at /about rather than /about/, so the live site's
 slashed URLs change: the redirects gate checks that they still answer.
 Redirect sources are allowed as pages (Astro writes a meta-refresh page for each redirect).
-The site's own scripts the capture saved (baseline/js.json) may be built at their live paths,
-and the live sitemap file names (baseline/sitemaps.json) at the root; built or not, they are
+The site's own scripts the capture saved (baseline/js.json) and its own stylesheets
+(baseline/css.json, which css-prune serves pruned at the same paths, or for a sheet captured
+under a query whose pathname another sheet has, at that path with the query before the extension)
+may be built at their live paths, and the live sitemap file names (baseline/sitemaps.json) at the root; built or not, they are
 never extras.
 A route captured at any status other than 200, 3xx, 404 or 410 (a 503, a 0 for a network error)
 was never read, so it fails as "not captured: <status>" unless a routes exception covers it:
@@ -50,6 +52,14 @@ function robotsOf(html) {
   return meta ? attr(meta, 'content') : null;
 }
 
+// Where css-prune serves a sheet captured under a query when another sheet with other bytes has
+// its pathname (convert-site css-prune.mjs variantPath: /t/style.css?ver=2 -> /t/style.ver-2.css).
+function variantPath(pathname, search) {
+  const tag = search.replace(/^\?/, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'variant';
+  const dot = pathname.lastIndexOf('.');
+  return dot > pathname.lastIndexOf('/') ? `${pathname.slice(0, dot)}.${tag}${pathname.slice(dot)}` : `${pathname}.${tag}`;
+}
+
 const decode = (path) => {
   try {
     return decodeURIComponent(path);
@@ -58,7 +68,7 @@ const decode = (path) => {
   }
 };
 
-export function checkRoutes({ dist, routes, media, redirects = [], scripts = [], sitemaps = [], exceptions = [], paths = () => true, allowExtra = () => false }) {
+export function checkRoutes({ dist, routes, media, redirects = [], scripts = [], stylesheets = [], sitemaps = [], exceptions = [], paths = () => true, allowExtra = () => false }) {
   const files = distFiles(dist);
   const present = new Set(files);
   const format = pageFormat(files);
@@ -116,6 +126,11 @@ export function checkRoutes({ dist, routes, media, redirects = [], scripts = [],
 
   for (const item of media) expected.add(decode(item.path).replace(/^\/+/, ''));
   for (const script of scripts) expected.add(decode(new URL(script.src).pathname).replace(/^\/+/, ''));
+  for (const sheet of stylesheets) {
+    const { pathname, search } = new URL(sheet.href);
+    expected.add(decode(pathname).replace(/^\/+/, ''));
+    if (search) expected.add(decode(variantPath(pathname, search)).replace(/^\/+/, ''));
+  }
   for (const name of sitemaps) expected.add(name);
   for (const redirect of redirects) pageFiles(redirect.from, format).forEach((c) => expected.add(c));
   for (const file of files) {
@@ -143,6 +158,7 @@ function main() {
     media: readJson(join(args.baseline, 'media.json')),
     redirects: readJson(join(args.baseline, 'redirects.json')),
     scripts: existsSync(join(args.baseline, 'js.json')) ? readJson(join(args.baseline, 'js.json')) : [],
+    stylesheets: existsSync(join(args.baseline, 'css.json')) ? readJson(join(args.baseline, 'css.json')) : [],
     sitemaps: existsSync(join(args.baseline, 'sitemaps.json')) ? readJson(join(args.baseline, 'sitemaps.json')) : [],
     exceptions: gateExceptions(NAME, args),
     paths: args.paths,

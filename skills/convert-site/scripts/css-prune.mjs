@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Builds one stylesheet from the captured CSS, dropping the rules no page used
-// according to css-coverage.mjs, and keeping the ones coverage cannot see.
+// Prunes the captured CSS, dropping the rules no page used according to css-coverage.mjs and
+// keeping the ones coverage cannot see: by default each linked stylesheet on its own at its live
+// path and each page's <style> blocks in that page's order; --single-sheet merges all into one.
 // Exit codes: 0 written, 1 a stylesheet file had no matching coverage (kept whole), 2 usage or input error.
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -9,24 +10,65 @@ import { fileURLToPath } from 'node:url';
 import * as csstree from 'css-tree';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { scopeInlineRules } from './lib/inline-scope.mjs';
+import { pageStyles } from './lib/head-css.mjs';
 
 const HELP = `Usage: node css-prune.mjs --css <capture/css dir> --coverage coverage.json
-                         --out <site.css> --report prune-report.json
+                         --report prune-report.json
+                         [--public public] [--inline-out src/styles/inline]
+                         [--capture <capture dir>]
                          [--widths 390,768,1440] [--origin https://www.example.com]
-                         [--pages-out <dir>]
+       node css-prune.mjs --single-sheet --css <capture/css dir> --coverage coverage.json
+                         --out <site.css> --report prune-report.json [--pages-out <dir>]
 
-Reads every .css file in --css (in capture/css/manifest.json order when present,
-[{ file, href|inline, pages[] }]), matches each to its coverage from
-css-coverage.mjs and writes one stylesheet in source order. Coverage URLs match
-a manifest href or finalUrl on path and query, ignoring the origin (then on
-path alone);
-without a manifest they match a file of the same basename. inline:<n> entries
-(one <style> block each) match every inline file (inline-<slug>.css, a page's
-blocks) that contains their text, trimmed, and serves one of their pages; an
-inline file's kept rules follow a comment naming its pages and file.
+Default (per sheet): live serves each page its own list of <link rel="stylesheet"> and
+<style> blocks in a page-specific order, and equal-specificity rules resolve by that
+order, so merging them changes the cascade (block themes above all). Each page's
+<head> list is read from --capture (default: the folder holding --css):
+inventory.json and the pages/ snapshots.
+  - Every same-origin stylesheet a page links (anywhere in the page) is pruned on
+    its own, with the coverage of its own href only (identical sheets under two
+    paths, as a multisite has, never share coverage), and written to
+    <--public>/<its live path>; the query string is dropped from the file name.
+    One pathname under several queries with the same bytes is one file pruned
+    with all their coverages; with other bytes the later one is written to the
+    path with its query before the extension (style.css?ver=2 -> style.ver-2.css)
+    and its pages link that. The site's host with or without www., on http or
+    https, counts as the site. A captured sheet only an @import reaches, whose
+    @import stays in the output (an unparsable parent, or an unparsable child
+    kept as an @import), is written at its live path too.
+  - Every distinct <style> block in a page's <head> is pruned against the
+    inline:<n> coverage entries of the same text and written to
+    <--inline-out>/inline-<page slug>-<n>.css, named after the first page that
+    has it (n counts that page's head <style> blocks); every inline-*.css already
+    there is removed first. A block no coverage saw is kept whole and listed in
+    uncoveredInline.
+  - report.heads maps each captured path to its head list in live order:
+    { kind: "link", href, media? } (href root-relative with live's query for a
+    same-origin sheet, absolute for another origin's, left as live links it) and
+    { kind: "inline", file }. The build passes it to Base.astro per page.
+  - No site.css is written: every rule stays in its live sheet or page
+    (report.siteCss is null).
+  - A sheet linked with a media attribute no tested width satisfies (print) is
+    kept whole: coverage runs on screen only. Its link keeps the media attribute.
+  - A same-origin link whose sheet was not captured is left out of heads and
+    listed in notCaptured; another origin's sheets are listed in external.
 
-Per-page inline rules: when two inline files have a rule with the same
-selector (inside the same @media, @supports or @layer) and other declarations,
+--single-sheet: one stylesheet of every .css file in --css (in
+capture/css/manifest.json order when present, [{ file, href|inline, pages[] }]),
+for a simple classic theme: one theme sheet and no <style> blocks whose order
+matters. Coverage URLs match a manifest href or finalUrl on path and query,
+ignoring the origin (then on path alone); without a manifest they match a file of
+the same basename. inline:<n> entries (one <style> block each) match every inline
+file (inline-<slug>.css, a page's blocks) that contains their text, trimmed, and
+serves one of their pages; an inline file's kept rules follow a comment naming its
+pages and file. A sheet linked with a media attribute other than "all" on every
+page (read from --capture when its inventory exists) is wrapped in that @media;
+its @layer statements and kept @import rules stay at the top of the file, in order,
+each @import with that media added (one with its own media list is kept as written,
+with a line on stderr).
+
+Per-page inline rules (--single-sheet): when two inline files have a rule with the
+same selector (inside the same @media, @supports or @layer) and other declarations,
 as block themes print with counter classes (.wp-elements-1 a { color: white }
 on one page, { color: black } on another), that rule, and every inline rule
 whose selector names one of its classes, is left out of --out and written to
@@ -49,8 +91,10 @@ Kept:
     narrow queries, features this script cannot evaluate): no evidence, no removal
   - other @media blocks only when a rule inside them is kept
 A stylesheet file that no coverage entry matches is kept whole and the exit
-code is 1. An inline file no coverage saw is kept whole too, listed in
-uncoveredInline, and does not change the exit code.
+code is 1. An inline file or block no coverage saw is kept whole too, listed in
+uncoveredInline, and does not change the exit code. A sheet or block css-tree
+cannot parse is kept byte for byte, listed in unparsed ({ href, error }) with one
+line on stderr, and does not change the exit code.
 
 Kept rules are copied from the source as written (comments inside them too);
 a pruned @media block is its original prelude around the kept rules.
@@ -59,39 +103,46 @@ An @import whose target is a captured file (its manifest href or finalUrl,
 resolved against the importing sheet's finalUrl or href) is dropped, and the
 target's pruned rules take its place, before the importer's own rules, inside
 the import's conditions (layer(x) as @layer x { }, supports() as @supports,
-a media list as @media). A sheet is emitted once, at the first place it is
-reached; a later import of it or its own place in the manifest adds nothing.
+a media list as @media). A sheet is emitted once per output file, at the first
+place it is reached; a later import of it adds nothing there.
 A sheet imported under a media list none of --widths satisfies is kept whole.
 An @import whose target was not captured (blocked-address, too-deep, 404, or
 not in the manifest) is kept and listed in unresolvedImports.
 
 Kept @import and @namespace rules, and @layer statements that come before a
-file's first style rule, are moved to the top of the output (layer statements
+file's first style rule, are moved to the top of the output file (layer statements
 first, in source order, then imports, then namespaces), because CSS only allows
 them there. This can change cascade order for a kept @import that sat after
 an inlined one or in a later file. @charset is dropped.
 
 Relative url() and @import references are rewritten against the stylesheet's
-manifest finalUrl or href (inline blocks: the first of their pages): same-origin targets
+manifest finalUrl or href (inline blocks: their page): same-origin targets
 become root-relative paths, other origins stay absolute; data:, # and
 root-relative references are left alone. --origin is the site's origin; it
 defaults to the most common origin among the manifest's hrefs and pages
 (the coverage URLs when there is no manifest).
 
-The report is { before: bytes, after: bytes, removedRules: n,
-keptBecause: { pseudo: n, atRule: n, untestedMedia: n, state: n }, unmatched: [file],
-uncoveredInline: [file], unresolvedImports: [{ file, href, reason }],
-pageSheets: [{ file, pages, rules }] },
-where keptBecause counts rules and blocks no page used that were kept by the
-exceptions above (untestedMedia also counts sheets imported under an untested
-media list; state the rules kept for stateRanges, printed as "kept for state:
-N rules"). Coverage written before stateRanges existed has none: run
+The report is { mode: "per-sheet" | "single-sheet", before: bytes, after: bytes,
+removedRules: n, keptBecause: { pseudo: n, atRule: n, untestedMedia: n, state: n },
+unmatched: [file], uncoveredInline: [file], unresolvedImports: [{ file, href, reason }],
+unparsed: [{ href, error }], pageSheets: [{ file, pages, rules }] } and, per sheet,
+siteCss: null, sheets: [{ href, file, bytesBefore, bytesAfter, rulesRemoved }],
+inline: [{ file, pages, bytesBefore, bytesAfter, rulesRemoved }], external: [href],
+notCaptured: [{ href, status }], heads: { <path>: [entry] }; where keptBecause
+counts rules and blocks no page used that were kept by the exceptions above
+(untestedMedia also counts sheets imported or linked under an untested media
+list; state the rules kept for stateRanges, printed as "kept for state: N
+rules"). Coverage written before stateRanges existed has none: run
 css-coverage.mjs again so interaction states are kept.
 
-  --widths     the viewport widths the coverage run used (default 390,768,1440)
-  --pages-out  folder for the per-page sheets (default: pages/ beside --out);
-               written only when some page has rules of its own; every
-               inline-*.css already in it is removed first (other files stay)
+  --widths       the viewport widths the coverage run used (default 390,768,1440)
+  --public       folder the sheets go to at their live paths (default public)
+  --inline-out   folder for the head <style> block files (default src/styles/inline)
+  --capture      the capture folder (default: the folder holding --css)
+  --single-sheet one merged --out instead; --out and --pages-out only work with it
+  --pages-out    folder for the per-page sheets (default: pages/ beside --out);
+                 written only when some page has rules of its own; every
+                 inline-*.css already in it is removed first (other files stay)
 
 Exit codes: 0 written, 1 a stylesheet file had no matching coverage (written, kept whole),
 2 usage or input error.`;
@@ -216,9 +267,11 @@ function urlReplacements(ast, text, base, siteOrigin) {
     enter(node) {
       if (node.type === 'Url') {
         if (this.atrule && this.atrule.name.toLowerCase() === 'namespace') return;
+        const original = sourceOf(text, node);
+        // A url( css-tree recovered from (no closing parenthesis) is left as written.
+        if (!original.trimEnd().endsWith(')')) return;
         const next = rewriteRef(node.value, base, siteOrigin);
         if (next === null) return;
-        const original = sourceOf(text, node);
         replacements.push({ start: node.loc.start.offset, end: node.loc.end.offset, text: `url(${quoteLike(original, next)})` });
       } else if (node.type === 'String' && this.atrule && this.atrule.name.toLowerCase() === 'import'
         && this.atrulePrelude && this.atrule.prelude.children?.first === node) {
@@ -530,37 +583,70 @@ function pageComment(file) {
   return `/* ${inner.replaceAll('*/', '* /')} */`;
 }
 
-export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
+const emptyReport = (mode) => ({
+  mode,
+  before: 0,
+  after: 0,
+  removedRules: 0,
+  keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0, state: 0 },
+  unmatched: [],
+  uncoveredInline: [],
+  unresolvedImports: [],
+  unparsed: [],
+  pageSheets: [],
+});
+
+// The capture's files and coverage, read and matched once for either mode.
+function load({ css, coverage, origin }) {
   const { files, hasManifest, manifest } = listFiles(css);
   if (!files.length) throw new UsageError(`--css ${css} holds no .css files`);
   if (!hasManifest) console.error(`warning: no manifest.json in ${css}; relative url() references are resolved against the matched coverage URLs`);
   const siteOrigin = origin ?? guessOrigin(files, coverage);
-  const assigned = assignCoverage(files, coverage);
-  const header = { layers: [], imports: [], namespaces: [] };
-  const bodies = [];
-  const report = {
-    before: 0,
-    after: 0,
-    removedRules: 0,
-    keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0, state: 0 },
-    unmatched: [],
-    uncoveredInline: [],
-    unresolvedImports: [],
-    pageSheets: [],
-  };
-  const emitted = new Set();
-  const inlineKept = new Map(); // inline file name -> its kept rules, split by scopeInlineRules
+  return { files, manifest, siteOrigin, assigned: assignCoverage(files, coverage) };
+}
 
+// Prunes text, or, when css-tree cannot parse it, keeps it byte for byte (listed under unparsed).
+// Returns pruneCss's result, with unparsed: true and css the original text in the second case.
+function pruneOrKeep(text, used, options, { report, name, href }) {
+  try {
+    return pruneCss(text, used, options);
+  } catch (error) {
+    report.unparsed.push({ href: href ?? name, error: error.message });
+    console.error(`css-prune: could not parse ${name}${href ? ` (${href})` : ''}: ${error.message}; kept it byte for byte`);
+    return {
+      css: text, header: { layers: [], imports: [], namespaces: [] }, imports: [], removedRules: 0,
+      keptBecause: { pseudo: 0, atRule: 0, untestedMedia: 0, state: 0 }, unparsed: true,
+    };
+  }
+}
+
+// render(file, { whole, emitted, header, inlineKept }) returns one file's kept text: the sheets it
+// imports (each in place, inside the import's conditions, pruned in turn) and then its own rules.
+// Each file is emitted once per emitted set; header collects the @layer statements, @import and
+// @namespace rules that must come first; an inline file's own rules go to inlineKept when given.
+// keepImport(target), when given (per-sheet mode), is called for an imported sheet css-tree cannot
+// parse: its @import stays in the output and the caller serves it at its live path, byte for
+// byte. Without it, such a sheet is inlined byte for byte with its url()s made root-relative.
+function renderer({ files, manifest, siteOrigin, assigned, widths, report, keepImport = null }) {
+  const parses = new Map();
+  const parsable = (file) => {
+    if (!parses.has(file.name)) {
+      try {
+        pruneCss(file.text, [], { widths });
+        parses.set(file.name, true);
+      } catch {
+        parses.set(file.name, false);
+      }
+    }
+    return parses.get(file.name);
+  };
   // Why an @import target is not among the captured files.
   const unresolvedReason = (href) => {
     const entry = href && manifest.find((e) => e?.href === href || e?.finalUrl === href);
     if (!entry) return 'not captured';
     return entry.file ? 'file missing' : String(entry.status ?? 'not saved');
   };
-
-  // One file's kept text: the sheets it imports (each in place, inside the import's
-  // conditions, pruned in turn) and then its own rules. Each file is emitted once.
-  const render = (file, whole = false) => {
+  const render = (file, { whole = false, emitted, header, inlineKept }) => {
     emitted.add(file.name);
     const slot = assigned.get(file.name);
     const inline = isInline(file);
@@ -576,7 +662,7 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
     }
     if (!slot.matched || whole) used = [[0, file.text.length]];
     const base = file.entry?.finalUrl ?? file.entry?.href ?? file.entry?.pages?.[0] ?? slot.url;
-    const result = pruneCss(file.text, used, { base, siteOrigin, widths, stateRanges: slot.stateRanges });
+    const result = pruneOrKeep(file.text, used, { base, siteOrigin, widths, stateRanges: slot.stateRanges }, { report, name: file.name, href: file.entry?.href });
     report.before += Buffer.byteLength(file.text);
     report.removedRules += result.removedRules;
     for (const reason of Object.keys(report.keptBecause)) report.keptBecause[reason] += result.keptBecause[reason];
@@ -594,22 +680,136 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
         return;
       }
       if (emitted.has(target.name)) return;
+      if (keepImport && !parsable(target)) {
+        header.imports.push(result.header.imports[i]);
+        keepImport(target);
+        return;
+      }
       // A sheet imported under a media query no tested width satisfies has no evidence against any rule.
       const untested = ref.media !== null && !mediaTested(ref.media, widths);
       if (untested) report.keptBecause.untestedMedia += 1;
-      const inner = render(target, whole || untested);
+      const inner = render(target, { whole: whole || untested, emitted, header, inlineKept });
       if (inner) parts.push(wrapImport(inner, ref));
     });
-    if (result.css && inline) inlineKept.set(file.name, result.css);
-    else if (result.css) parts.push(result.css);
+    const own = result.unparsed && !keepImport ? rewriteRawRefs(file.text, base, siteOrigin) : result.css;
+    if (own && inline && inlineKept) inlineKept.set(file.name, own);
+    else if (own) parts.push(own);
     return parts.join('\n');
   };
+  return render;
+}
 
+const newHeader = () => ({ layers: [], imports: [], namespaces: [] });
+const withHeader = (header, body) => [...header.layers, ...header.imports, ...header.namespaces, ...body].join('\n');
+
+// The stylesheet a link names: its manifest href or finalUrl, then the same path and query on
+// any origin (one file only). Keyed by href, so identical sheets under two paths stay apart.
+function fileForHref(files, href) {
+  const sheets = files.filter((f) => !isInline(f) && f.entry?.href);
+  const exact = sheets.find((f) => hrefsOf(f).includes(href));
+  if (exact) return exact;
+  const byPath = sheets.filter((f) => hrefsOf(f).some((h) => pathKey(h, true) === pathKey(href, true)));
+  return byPath.length === 1 ? byPath[0] : null;
+}
+
+// Where a sheet captured under a query is served when another sheet with other bytes already
+// has its pathname: the query, made file-name safe, before the extension
+// (/t/style.css?ver=2 -> /t/style.ver-2.css). The routes gate names it the same way.
+export function variantPath(pathname, search) {
+  const tag = search.replace(/^\?/, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'variant';
+  const dot = pathname.lastIndexOf('.');
+  return dot > pathname.lastIndexOf('/') ? `${pathname.slice(0, dot)}.${tag}${pathname.slice(dot)}` : `${pathname}.${tag}`;
+}
+
+// The site's own host, with or without www., on either scheme.
+const bareHost = (href) => {
+  try {
+    const url = new URL(href);
+    return /^https?:$/.test(url.protocol) ? url.hostname.replace(/^www\./, '') : null;
+  } catch {
+    return null;
+  }
+};
+
+// The url() and @import references of a sheet css-tree cannot parse, rewritten by text as
+// rewriteRef does (same-origin root-relative), for a sheet inlined away from its own path.
+function rewriteRawRefs(text, base, siteOrigin) {
+  const swap = (whole, quote, ref, wrap) => {
+    const next = rewriteRef(ref, base, siteOrigin);
+    return next === null ? whole : wrap(`${quote}${next}${quote}`);
+  };
+  return text
+    .replace(/url\(\s*(['"]?)([^'"()\s]+)\1\s*\)/gi, (whole, quote, ref) => swap(whole, quote, ref, (v) => `url(${v})`))
+    .replace(/@import\s+(['"])([^'"]+)\1/gi, (whole, quote, ref) => swap(whole, quote, ref, (v) => `@import ${v}`));
+}
+
+// Every captured page's stylesheets ({ record, head, links } in inventory order), read from
+// <capture>/inventory.json and the snapshots; null when the inventory is absent.
+function capturedPages(capture) {
+  const file = join(capture, 'inventory.json');
+  if (!existsSync(file)) return null;
+  const inventory = readJson(file, 'inventory');
+  if (!Array.isArray(inventory)) throw new UsageError(`${file} is not a JSON array`);
+  return inventory
+    .filter((record) => record?.snapshot && existsSync(join(capture, record.snapshot)))
+    .map((record) => ({ record, ...pageStyles(readFileSync(join(capture, record.snapshot), 'utf8'), record.finalUrl ?? record.url) }));
+}
+
+// The media a sheet is linked with, per file name: null when some page links it with no media
+// attribute or "all" (no condition), otherwise the media lists joined.
+function linkMedia(files, pages) {
+  const seen = new Map();
+  for (const { links } of pages ?? []) {
+    for (const link of links) {
+      const file = fileForHref(files, link.href);
+      if (!file) continue;
+      const list = seen.get(file.name) ?? new Set();
+      list.add(link.media && link.media.toLowerCase() !== 'all' ? link.media : null);
+      seen.set(file.name, list);
+    }
+  }
+  return new Map([...seen].map(([name, list]) => [name, list.has(null) ? null : [...list].join(', ')]));
+}
+
+// A hoisted @import rule of a sheet linked under media: the media list added when the rule has
+// none; one with its own media list is kept as written (two lists cannot be joined in general).
+function importUnder(rule, media, name) {
+  const node = csstree.parse(rule, { positions: true }).children.first;
+  const parts = node?.type === 'Atrule' ? importParts(node, { text: rule, base: null, siteOrigin: null }) : null;
+  if (!parts || parts.media) {
+    console.error(`css-prune: ${rule.trim()} in ${name} has its own media list; kept as written, not under the link's media (${media})`);
+    return rule;
+  }
+  return rule.replace(/\s*;?\s*$/, ` ${media};`);
+}
+
+// --single-sheet: one stylesheet of every captured file in source order, colliding per-page
+// inline rules split into page sheets. A sheet every page links with a media attribute is
+// wrapped in that @media (kept whole when no tested width satisfies it).
+export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin, capture = dirname(css) }) {
+  const loaded = load({ css, coverage, origin });
+  const { files } = loaded;
+  const report = emptyReport('single-sheet');
+  const render = renderer({ ...loaded, widths, report });
+  const media = linkMedia(files, capturedPages(capture));
+  const header = newHeader();
+  const emitted = new Set();
+  const inlineKept = new Map(); // inline file name -> its kept rules, split by scopeInlineRules
+  const bodies = [];
   for (const file of files) {
     if (emitted.has(file.name)) continue;
-    const text = render(file);
+    const condition = media.get(file.name) ?? null;
+    const untested = condition !== null && !mediaTested(condition, widths);
+    if (untested) report.keptBecause.untestedMedia += 1;
+    const own = newHeader();
+    const text = render(file, { whole: untested, emitted, header: own, inlineKept });
+    // CSS allows @import and @layer statements only at the top, so a wrapped sheet's stay there,
+    // in order; its @import takes the link's media.
+    header.layers.push(...own.layers);
+    header.namespaces.push(...own.namespaces);
+    header.imports.push(...(condition ? own.imports.map((rule) => importUnder(rule, condition, file.name)) : own.imports));
     if (isInline(file)) bodies.push({ file, before: text });
-    else if (text) bodies.push(text);
+    else if (text) bodies.push(condition ? wrapImport(text, { layer: null, supports: null, media: condition }) : text);
   }
   // Inline files are never import targets, so their kept rules are split once all are known.
   const scoped = scopeInlineRules([...inlineKept].map(([name, kept]) => ({ name, css: kept })));
@@ -625,9 +825,163 @@ export function prune({ css, coverage, widths = DEFAULT_WIDTHS, origin }) {
     return [before, split?.shared ? `${inlineComment(file)}\n${split.shared}` : ''].filter(Boolean).join('\n');
   }).filter(Boolean);
   report.pageSheets = pageSheets.map(({ file, pages, rules }) => ({ file, pages, rules }));
-  const output = `${[...header.layers, ...header.imports, ...header.namespaces, ...body].join('\n')}\n`;
+  const output = `${withHeader(header, body)}\n`;
   report.after = Buffer.byteLength(output);
   return { output, report, pageSheets };
+}
+
+// The used and state ranges coverage saw for each distinct inline block, by its trimmed text.
+function inlineCoverage(coverage) {
+  const byText = new Map();
+  for (const [key, { text = '', usedRanges = [], stateRanges = [] }] of Object.entries(coverage)) {
+    if (!key.startsWith('inline:')) continue;
+    const trimmed = text.trim();
+    if (!trimmed) continue;
+    const lead = text.length - text.trimStart().length;
+    const shift = (ranges) => ranges.map(([start, end]) => [Math.max(0, start - lead), Math.min(trimmed.length, end - lead)])
+      .filter(([start, end]) => end > start);
+    const slot = byText.get(trimmed) ?? { ranges: [], stateRanges: [] };
+    slot.ranges.push(...shift(usedRanges));
+    slot.stateRanges.push(...shift(stateRanges));
+    byText.set(trimmed, slot);
+  }
+  return byText;
+}
+
+// The default: each linked stylesheet pruned on its own and written at its live path under
+// publicDir, each page's head <style> blocks pruned into one file per distinct block, and every
+// page's head stylesheet order in report.heads ({ kind: 'link', href, media? } and
+// { kind: 'inline', file }). Returns { report, sheets: [{ path, css }], inline: [{ name, css }] }.
+export function prunePerSheet({ css, coverage, widths = DEFAULT_WIDTHS, origin, capture = dirname(css), publicDir }) {
+  const pages = capturedPages(capture);
+  if (!pages) {
+    throw new UsageError(`per-sheet mode reads each page's head from ${join(capture, 'inventory.json')} and its snapshots, `
+      + 'which do not exist: pass --capture <capture dir>, or --single-sheet for one merged file');
+  }
+  const loaded = load({ css, coverage, origin });
+  const { files, siteOrigin } = loaded;
+  const report = { ...emptyReport('per-sheet'), siteCss: null, sheets: [], inline: [], external: [], notCaptured: [], heads: {} };
+  const toWrite = [];
+  const queued = new Set();
+  const media = linkMedia(files, pages);
+  const site = bareHost(siteOrigin);
+  // The site's own host, www or not, on either scheme: served from public/, never from live.
+  const sameSite = (href) => Boolean(site) && bareHost(href) === site;
+
+  // Sheets by pathname: the same bytes under several queries are one file pruned with all their
+  // coverages; other bytes under the same pathname go to variantPath, which their pages link.
+  const own = files.filter((f) => !isInline(f) && f.entry?.href && sameSite(f.entry.href));
+  const served = new Map(); // file name -> { primary, url } (url: the served path, root-relative)
+  for (const file of own) {
+    const { pathname, search } = new URL(file.entry.href);
+    const twin = own.find((f) => served.has(f.name) && new URL(f.entry.href).pathname === pathname && f.text === file.text);
+    if (twin) {
+      const { primary, url } = served.get(twin.name);
+      const [into, from] = [loaded.assigned.get(primary.name), loaded.assigned.get(file.name)];
+      into.ranges.push(...from.ranges);
+      into.stateRanges.push(...from.stateRanges);
+      into.matched ||= from.matched;
+      served.set(file.name, { primary, url });
+      continue;
+    }
+    const taken = [...served.values()].some((s) => s.url === pathname);
+    served.set(file.name, { primary: file, url: taken ? variantPath(pathname, search) : pathname });
+  }
+  const enqueue = (file) => {
+    const primary = file && served.get(file.name)?.primary;
+    if (!primary || queued.has(primary.name)) return;
+    queued.add(primary.name);
+    toWrite.push(primary);
+  };
+  const render = renderer({ ...loaded, widths, report, keepImport: enqueue });
+  // A link's href: same-site sheets at the path they are served at, with live's query.
+  const linkHref = (href) => {
+    const file = fileForHref(files, href);
+    const url = new URL(href);
+    return (file && served.get(file.name)?.url) ?? url.pathname;
+  };
+
+  // Linked sheets in source order, then the sheets only an @import left in the output reaches,
+  // each pruned with its own coverage only.
+  const linked = new Set(pages.flatMap(({ links }) => links.map((link) => fileForHref(files, link.href)?.name).filter(Boolean)));
+  for (const file of files) if (linked.has(file.name)) enqueue(file);
+  const sheets = [];
+  for (let i = 0; i < toWrite.length; i += 1) {
+    const file = toWrite[i];
+    const condition = media.get(file.name) ?? null;
+    const untested = condition !== null && !mediaTested(condition, widths);
+    if (untested) report.keptBecause.untestedMedia += 1;
+    const before = { bytes: report.before, rules: report.removedRules, unparsed: report.unparsed.length };
+    const header = newHeader();
+    const body = render(file, { whole: untested, emitted: new Set(), header });
+    const keptAsIs = report.unparsed.slice(before.unparsed).some((u) => u.href === file.entry.href);
+    // An unparsable sheet keeps its @imports: the captured sheets they name are served too.
+    if (keptAsIs) {
+      const hrefs = hrefsOf(file);
+      for (const child of files) if (child.entry?.importedBy?.some((h) => hrefs.includes(h))) enqueue(child);
+    }
+    const text = keptAsIs ? file.text : `${withHeader(header, [body].filter(Boolean))}\n`;
+    const path = join(publicDir, decodeURIComponent(served.get(file.name).url));
+    sheets.push({ path, css: text });
+    report.after += Buffer.byteLength(text);
+    const row = { file: path, bytesBefore: report.before - before.bytes, bytesAfter: Buffer.byteLength(text), rulesRemoved: report.removedRules - before.rules };
+    for (const twin of own.filter((f) => served.get(f.name).primary === file)) report.sheets.push({ href: twin.entry.href, ...row });
+  }
+
+  // Head <style> blocks: one file per distinct block, named after the first page that has it.
+  const covered = inlineCoverage(coverage);
+  const blocks = new Map(); // trimmed text -> report.inline row
+  const inline = [];
+  for (const { record, head } of pages) {
+    const slug = basename(record.snapshot).replace(/\.html?$/i, '');
+    const list = [];
+    let n = 0;
+    for (const item of head) {
+      if (item.kind === 'link') {
+        const file = fileForHref(files, item.href);
+        const entry = { kind: 'link', href: sameSite(item.href) ? linkHref(item.href) + new URL(item.href).search : item.href, ...(item.media ? { media: item.media } : {}) };
+        if (!sameSite(item.href)) {
+          if (!report.external.includes(item.href)) report.external.push(item.href);
+        } else if (!file) {
+          if (!report.notCaptured.some((row) => row.href === item.href)) {
+            const status = loaded.manifest.find((e) => e?.href === item.href)?.status ?? 'not captured';
+            report.notCaptured.push({ href: item.href, status });
+            console.error(`css-prune: ${item.href} (linked by ${record.path}) was not captured (${status}); its link is left out`);
+          }
+          continue;
+        }
+        list.push(entry);
+        continue;
+      }
+      n += 1;
+      const trimmed = item.text.trim();
+      if (!trimmed) continue;
+      let row = blocks.get(trimmed);
+      if (!row) {
+        const name = `inline-${slug}-${n}.css`;
+        const slot = covered.get(trimmed);
+        if (!slot) {
+          report.uncoveredInline.push(name);
+          console.error(`no coverage saw the <style> block ${name} (${record.path}); kept it whole`);
+        }
+        const used = slot ? slot.ranges : [[0, trimmed.length]];
+        const result = pruneOrKeep(trimmed, used, { base: record.finalUrl ?? record.url, siteOrigin, widths, stateRanges: slot?.stateRanges ?? [] }, { report, name: `${name} (${record.path})` });
+        const text = result.unparsed ? item.text : `${withHeader(result.header, [result.css].filter(Boolean))}\n`;
+        report.before += Buffer.byteLength(trimmed);
+        report.after += Buffer.byteLength(text);
+        report.removedRules += result.removedRules;
+        for (const reason of Object.keys(report.keptBecause)) report.keptBecause[reason] += result.keptBecause[reason];
+        row = { file: name, pages: [], bytesBefore: Buffer.byteLength(trimmed), bytesAfter: Buffer.byteLength(text), rulesRemoved: result.removedRules };
+        blocks.set(trimmed, row);
+        report.inline.push(row);
+        inline.push({ name, css: text });
+      }
+      if (!row.pages.includes(record.path)) row.pages.push(record.path);
+      list.push({ kind: 'inline', file: row.file });
+    }
+    report.heads[record.path] = list;
+  }
+  return { report, sheets, inline };
 }
 
 function parseWidths(value) {
@@ -650,6 +1004,10 @@ function parse(argv) {
         report: { type: 'string' },
         widths: { type: 'string', default: DEFAULT_WIDTHS.join(',') },
         origin: { type: 'string' },
+        capture: { type: 'string' },
+        public: { type: 'string', default: 'public' },
+        'inline-out': { type: 'string', default: join('src', 'styles', 'inline') },
+        'single-sheet': { type: 'boolean', default: false },
         'pages-out': { type: 'string' },
         help: { type: 'boolean', default: false },
       },
@@ -658,14 +1016,61 @@ function parse(argv) {
     throw new UsageError(error.message);
   }
   if (values.help) return { help: true };
-  for (const name of ['css', 'coverage', 'out', 'report']) if (!values[name]) throw new UsageError(`--${name} is required`);
-  values.pagesOut = values['pages-out'] ?? join(dirname(values.out), 'pages');
+  for (const name of ['css', 'coverage', 'report']) if (!values[name]) throw new UsageError(`--${name} is required`);
+  values.singleSheet = values['single-sheet'];
+  if (values.singleSheet && !values.out) throw new UsageError('--out is required with --single-sheet');
+  if (!values.singleSheet && (values.out || values['pages-out'])) {
+    throw new UsageError(`${values.out ? '--out' : '--pages-out'} is for --single-sheet; the default writes each sheet under --public and the inline blocks to --inline-out`);
+  }
+  if (values.singleSheet) values.pagesOut = values['pages-out'] ?? join(dirname(values.out), 'pages');
+  values.inlineOut = values['inline-out'];
+  values.capture ??= dirname(values.css);
   let origin;
   if (values.origin) {
     origin = originOf(values.origin);
     if (!origin) throw new UsageError(`--origin is not an http(s) URL: ${values.origin}`);
   }
   return { ...values, widths: parseWidths(values.widths), origin };
+}
+
+// Removes a previous run's inline-*.css from dir, so none is left for a block or page set that no
+// longer has one; other files stay.
+function clearInline(dir) {
+  if (!existsSync(dir)) return;
+  for (const name of readdirSync(dir)) {
+    if (/^inline-.*\.css$/.test(name)) rmSync(join(dir, name), { force: true });
+  }
+}
+
+const summaryLine = ({ before, after, removedRules, keptBecause }) => `css: ${before} -> ${after} bytes, ${removedRules} rules removed `
+  + `(kept unused: ${keptBecause.pseudo} pseudo, ${keptBecause.atRule} at-rule, ${keptBecause.untestedMedia} untested media; `
+  + `kept for state: ${keptBecause.state} rules)`;
+
+function writeSingle(options, result) {
+  for (const file of [options.out, options.report]) mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(options.out, result.output);
+  writeFileSync(options.report, `${JSON.stringify(result.report, null, 2)}\n`);
+  clearInline(options.pagesOut);
+  if (result.pageSheets.length) {
+    mkdirSync(options.pagesOut, { recursive: true });
+    for (const sheet of result.pageSheets) writeFileSync(join(options.pagesOut, sheet.file), sheet.css);
+    console.log(`wrote ${result.pageSheets.length} per-page sheet(s) to ${options.pagesOut}: link each only on the pages pageSheets lists in ${options.report}`);
+  }
+  console.log(`${summaryLine(result.report)}; wrote ${options.out}`);
+}
+
+function writePerSheet(options, result) {
+  mkdirSync(dirname(options.report), { recursive: true });
+  writeFileSync(options.report, `${JSON.stringify(result.report, null, 2)}\n`);
+  for (const sheet of result.sheets) {
+    mkdirSync(dirname(sheet.path), { recursive: true });
+    writeFileSync(sheet.path, sheet.css);
+  }
+  clearInline(options.inlineOut);
+  mkdirSync(options.inlineOut, { recursive: true });
+  for (const block of result.inline) writeFileSync(join(options.inlineOut, block.name), block.css);
+  console.log(`${summaryLine(result.report)}; wrote ${result.sheets.length} sheet(s) at their live paths under ${options.public} `
+    + `and ${result.inline.length} inline block file(s) to ${options.inlineOut}; no site.css: give each page its head list from heads in ${options.report}`);
 }
 
 function main() {
@@ -682,29 +1087,16 @@ function main() {
     if (!coverage || typeof coverage !== 'object' || Array.isArray(coverage)) {
       throw new UsageError(`${options.coverage} is not a coverage object`);
     }
-    result = prune({ css: options.css, coverage, widths: options.widths, origin: options.origin });
+    const input = { css: options.css, coverage, widths: options.widths, origin: options.origin, capture: options.capture };
+    result = options.singleSheet ? prune(input) : prunePerSheet({ ...input, publicDir: options.public });
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     console.error(`css-prune: ${error.message}\nRun with --help for usage.`);
     process.exit(2);
   }
-  for (const file of [options.out, options.report]) mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(options.out, result.output);
-  writeFileSync(options.report, `${JSON.stringify(result.report, null, 2)}\n`);
-  // A previous run's sheets go first, so none is left for a page set that no longer has one.
-  if (existsSync(options.pagesOut)) {
-    for (const name of readdirSync(options.pagesOut)) {
-      if (/^inline-.*\.css$/.test(name)) rmSync(join(options.pagesOut, name), { force: true });
-    }
-  }
-  if (result.pageSheets.length) {
-    mkdirSync(options.pagesOut, { recursive: true });
-    for (const sheet of result.pageSheets) writeFileSync(join(options.pagesOut, sheet.file), sheet.css);
-    console.log(`wrote ${result.pageSheets.length} per-page sheet(s) to ${options.pagesOut}: link each only on the pages pageSheets lists in ${options.report}`);
-  }
-  const { before, after, removedRules, keptBecause, unmatched } = result.report;
-  console.log(`css: ${before} -> ${after} bytes, ${removedRules} rules removed (kept unused: ${keptBecause.pseudo} pseudo, `
-    + `${keptBecause.atRule} at-rule, ${keptBecause.untestedMedia} untested media; kept for state: ${keptBecause.state} rules); wrote ${options.out}`);
+  if (options.singleSheet) writeSingle(options, result);
+  else writePerSheet(options, result);
+  const { unmatched } = result.report;
   if (unmatched.length) {
     console.error(`css-prune: ${unmatched.length} file(s) had no matching coverage and were kept whole: ${unmatched.join(', ')}`);
     process.exit(1);

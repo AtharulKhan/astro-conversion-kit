@@ -23,13 +23,19 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
   media.json      [{ path, bytes, contentType, referencedBy }] for every media file answering 200
                   (referencedBy: the pages that use it, from capture/media.json); a size the
                   capture listed but did not download keeps downloaded: false and its reason
-                  (bytes null), so the media gate counts it as skipped
+                  (bytes null), so the media gate counts it as skipped; a file saved from a
+                  query-string variant because the bare path failed keeps downloadedFrom, and
+                  resized: true when that copy is resized (the media gate counts those)
   forms.json      { "<path>": [{ action, method, fields[] }] }
   scripts.json    { "<vendor>": { id, ids[], pages[], keep } }; keep is true, set it to false
                   to drop a vendor from the build
   js.json         [{ src, file, pages[] }]: the site's own script files the capture saved
                   (capture/js/manifest.json; file is relative to the capture), [] when none.
                   The routes gate lets the build serve each at its live path
+  css.json        [{ href, file, pages[] }]: the live site's own stylesheets the capture saved
+                  (capture/css/manifest.json, same host as the site, no inline blocks; file is
+                  relative to the capture), [] when none. The routes gate lets the build serve
+                  each at its live path, as css-prune writes them
   sitemaps.json   [name]: the live site's sitemap file names the capture saved (capture/sitemaps/),
                   which the routes gate lets the build serve at the root
   text/           the visible text of each page, copied from the capture
@@ -197,6 +203,22 @@ export function buildForms(inventory) {
   return forms;
 }
 
+// The saved stylesheets of capture/css/manifest.json on the site's host (www or not), as
+// { href, file, pages }; inline blocks and other hosts' sheets are left out.
+export function buildCss(manifest, origin) {
+  const host = (href) => {
+    try {
+      return new URL(href).hostname.replace(/^www\./, '');
+    } catch {
+      return null;
+    }
+  };
+  const site = origin ? host(origin) : null;
+  return (manifest ?? [])
+    .filter((e) => e.file && e.href && !e.inline && site && host(e.href) === site)
+    .map((e) => ({ href: e.href, file: `css/${e.file}`, pages: [...(e.pages ?? [])].sort() }));
+}
+
 // The saved same-origin scripts of capture/js/manifest.json, as { src, file, pages }.
 export function buildJs(manifest) {
   return (manifest ?? [])
@@ -233,6 +255,10 @@ export function baselineMedia(media) {
     .filter((m) => m.status === 200 || m.downloaded === false)
     .map((m) => {
       const entry = { path: m.path, bytes: m.bytes, contentType: m.contentType, referencedBy: m.referencedBy ?? [] };
+      // A stand-in media.mjs saved because the bare path failed: where it came from, and whether
+      // it is a resized copy rather than the original.
+      if (m.downloadedFrom) entry.downloadedFrom = m.downloadedFrom;
+      if (m.resized === true) entry.resized = true;
       return m.downloaded === false ? { ...entry, bytes: null, contentType: null, downloaded: false, reason: m.reason ?? 'unreferenced size' } : entry;
     });
 }
@@ -356,6 +382,7 @@ function build(capture, out, csvFile) {
   writeJson(join(out, 'forms.json'), baseline.forms);
   writeJson(join(out, 'scripts.json'), baseline.scripts);
   writeJson(join(out, 'js.json'), buildJs(readJson(join(capture, 'js', 'manifest.json'), [])));
+  writeJson(join(out, 'css.json'), buildCss(readJson(join(capture, 'css', 'manifest.json'), []), readJson(join(capture, 'meta.json'), {}).origin));
   const sitemapDir = join(capture, 'sitemaps');
   writeJson(join(out, 'sitemaps.json'), existsSync(sitemapDir) ? readdirSync(sitemapDir).filter((f) => /\.xml$/i.test(f)).sort() : []);
   writeJson(join(out, 'counts.json'), counts);

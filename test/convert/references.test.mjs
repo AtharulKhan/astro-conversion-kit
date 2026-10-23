@@ -256,29 +256,48 @@ test('SKILL.md: the post-plan status is required non-interactively, state.mjs ca
   assert.match(skill, /Stop any review server you started \(`npm run review:serve -- --stop`, and `npx astro preview stop` if you used the preview\)/);
 });
 
-test('build-rules and phases: site.css linked by URL before the head slot, page sheets from pageSheets, uncoveredInline', () => {
+test('build-rules and phases: each sheet at its live path and each page\'s head CSS in live order by default', () => {
   const rules = flat(read('references/build-rules.md'));
-  assert.match(rules, /linked once by `Base\.astro`: the template imports it by URL \(`import siteCss from '\.\.\/styles\/site\.css\?url'`\) and links it before the head slot/);
+  assert.match(rules, /\*\*Each live stylesheet at its live path, each page's head CSS in live order\*\* is the default, recorded as a decision in the plan \(topic "CSS per live sheet", default "per sheet"\)/);
+  assert.match(rules, /with the coverage of its own href only, so identical sheets a multisite serves under two paths never share coverage/);
+  assert.match(rules, /the page passes it to `Base\.astro` as `css`, which prints the links and the `<style>` blocks in that order before the head slot/);
+  assert.match(rules, /A link keeps its live `media` attribute; a sheet linked with a media no tested width satisfies \(`print`\) is kept whole/);
+  assert.match(rules, /`--single-sheet` merges everything into `src\/styles\/site\.css` instead, for a simple classic theme only: one theme stylesheet and no `<style>` blocks whose order matters/);
+  assert.match(rules, /A sheet or block css-tree cannot parse is kept byte for byte and listed under `unparsed`/);
+  const phases = flat(read('references/phases.md'));
+  assert.match(phases, /css-prune\.mjs --css capture\/css --coverage capture\/css-coverage\.json --report \.conversion\/css-prune-report\.json`\. It writes each linked sheet, pruned, to `public\/` at its live path/);
+  assert.match(phases, /the content extractor copies `heads\[<path>\]` into each page's data, and the page passes it to `Base\.astro` as `css`/);
+  assert.match(phases, /The routes gate takes each sheet at its live path as built \(`baseline\/css\.json`\): no `--allow-extra` is needed for them/);
+  assert.doesNotMatch(phases, /sheets\[\]\.href` to the `--allow-extra`/);
+  assert.match(rules, /The baseline lists the captured sheets \(`baseline\/css\.json`\), so the routes gate takes each file at its live path as built, not as an extra/);
+});
+
+test('build-rules and phases: --single-sheet links site.css by URL before the head slot, page sheets from pageSheets, uncoveredInline', () => {
+  const rules = flat(read('references/build-rules.md'));
+  assert.match(rules, /`Base\.astro` then imports it by URL \(`import siteCss from '\.\.\/styles\/site\.css\?url'`\) and links it before the head slot/);
   assert.match(rules, /Never switch to a plain `import '\.\.\/styles\/site\.css'`/);
   assert.match(rules, /those go to `src\/styles\/pages\/<inline file>`, listed under `pageSheets` \(`file`, `pages`, `rules`\) in `\.conversion\/css-prune-report\.json`/);
   assert.match(rules, /Link each page sheet only on the pages it lists, after `site\.css` \(Base\.astro's `pageSheet` prop\); never copy its rules into `site\.css`/);
   assert.match(rules, /WordPress 6\.9\+'s `\/\*# sourceURL=\.\.\. \*\/` comments change nothing/);
   assert.match(rules, /`uncoveredInline` lists the pages' `<style>` sets no coverage run saw/);
   const phases = flat(read('references/phases.md'));
-  assert.match(phases, /When it prints `wrote N per-page sheet\(s\)`, give each page its `pageSheet` from the report's `pageSheets`/);
+  assert.match(phases, /`--single-sheet --out src\/styles\/site\.css` merge it all into one file, a decision; when it then prints `wrote N per-page sheet\(s\)`, give each page its `pageSheet` from the report's `pageSheets`/);
   assert.match(phases, /css-prune clears the old `inline-\*\.css` in `src\/styles\/pages\/` on each run, so commit the folder as it leaves it/);
   assert.match(rules, /every rule naming its class \(a class it styles, not one inside its `:not\(\)`\/`:where\(\)`\): those go to/);
 });
 
 test('phases and build-rules: VIP concatenated scripts, --allow-extra on routes only, WordPress API link exceptions, Lighthouse optional', () => {
   const phases = flat(read('references/phases.md'));
-  assert.match(phases, /`\/_static\/\?\?a\.js,b\.js`\) cannot be served by a static host and `assets\.mjs` does not rewrite them: you save each concatenation as one file at `\/_static\/concat\/<hash>\.js`/);
+  assert.match(phases, /`\/_static\/\?\?a\.js,b\.js`\) cannot be served by a static host and `assets\.mjs` does not rewrite them: `npm run assets:copy` writes each captured concatenation as one file at `\/_static\/concat\/<sha1>\.js` and maps each URL to its file in `public\/_static\/concat\/manifest\.json`/);
+  assert.match(phases, /--out baseline --check npm run links:exceptions `npm run baseline` also writes/);
+  assert.match(phases, /1\. Media \(`build-rules\.md`, "Media"\) and fonts: `npm run assets:copy` \(`copy-assets\.mjs`\)/);
   assert.match(phases, /pass `--allow-extra '\/_static\/concat\/\*'` on every routes gate run/);
   assert.match(phases, /Only `routes\.mjs` \(and `npm run verify`, which hands it on\) accepts `--allow-extra`; the other single gate scripts exit 2 on it/);
   assert.match(phases, /Lighthouse is optional: when it is not installed the step is reported as skipped, never as a failure/);
   const rules = flat(read('references/build-rules.md'));
   assert.match(rules, /\*\*WordPress API head links are kept as captured\.\*\*/);
-  assert.match(rules, /The build generates their links exceptions, one row per API link \(reason "WordPress API link kept as captured"\), rather than dropping the links/);
+  assert.match(rules, /`npm run links:exceptions` \(`link-exceptions\.mjs --baseline baseline --capture capture --out exceptions\.json`\) writes their links exceptions, one row per API link per page \(reason "WordPress API link kept as captured"\), and one per link to a page live answered 404 or 410 \(reason "broken on live"\), rather than dropping the links/);
+  assert.match(rules, /`npm run assets:copy` \(`copy-assets\.mjs --capture capture --site \.`\) does the copying/);
 });
 
 test('intake and plan: the forms answer applies only when the capture finds a POST form', () => {

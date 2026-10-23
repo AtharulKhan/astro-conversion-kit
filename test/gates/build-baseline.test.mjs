@@ -229,6 +229,27 @@ test('js.json lists the saved same-origin scripts from capture/js/, [] when the 
   assert.deepEqual(readJson(out, 'js.json'), []);
 });
 
+test('css.json lists the captured same-origin stylesheets from capture/css/, never inline blocks or other origins, [] when none', async (t) => {
+  const origin = readJson(baseline, 'meta.json').origin;
+  const manifest = readJson(capture, join('css', 'manifest.json'));
+  const theme = manifest.find((e) => e.href === `${origin}/wp-content/themes/fixture/style.css?ver=1.4.2`);
+  assert.deepEqual(readJson(baseline, 'css.json'), [{ href: theme.href, file: `css/${theme.file}`, pages: [...theme.pages].sort() }]);
+  const copy = join(root, 'css-other');
+  const out = join(root, 'css-other-out', 'baseline');
+  t.after(() => {
+    rmSync(copy, { recursive: true, force: true });
+    rmSync(join(root, 'css-other-out'), { recursive: true, force: true });
+  });
+  cpSync(capture, copy, { recursive: true });
+  writeFileSync(join(copy, 'css', '9.css'), 'a{}');
+  writeFileSync(join(copy, 'css', 'manifest.json'), JSON.stringify([...manifest, { file: '9.css', href: 'https://fonts.example.org/x.css', pages: ['/'], status: 200 }]));
+  assert.equal((await build(['--capture', copy, '--out', out])).code, 0);
+  assert.deepEqual(readJson(out, 'css.json').map((e) => e.href), [theme.href], 'another origin\'s sheet is not ours to serve');
+  rmSync(join(copy, 'css'), { recursive: true });
+  assert.equal((await build(['--capture', copy, '--out', out])).code, 0);
+  assert.deepEqual(readJson(out, 'css.json'), []);
+});
+
 test("sitemaps.json lists the live site's sitemap file names the capture saved", () => {
   assert.deepEqual(readJson(baseline, 'sitemaps.json'), ['category-sitemap.xml', 'page-sitemap.xml', 'post-sitemap.xml', 'sitemap_index.xml']);
 });
@@ -254,6 +275,31 @@ test('an unreferenced size (downloaded: false) is kept in baseline/media.json wi
   // Without such entries nothing changes: no unreferencedSizes key, no extra fields.
   assert.equal(readJson(baseline, 'counts.json').unreferencedSizes, undefined);
   assert.equal(readFileSync(join(baseline, 'media.json'), 'utf8').includes('downloaded'), false);
+});
+
+test('a resized stand-in (resized, downloadedFrom) keeps both fields in baseline/media.json', async (t) => {
+  const marked = join(root, 'capture-resized');
+  const out = join(root, 'baseline-resized');
+  cpSync(capture, marked, { recursive: true });
+  t.after(() => rmSync(marked, { recursive: true, force: true }));
+  const media = readJson(capture, 'media.json');
+  const first = media.find((m) => m.status === 200);
+  const rest = media.filter((m) => m !== first);
+  const from =`${first.url}?w=1024`;
+  writeFileSync(join(marked, 'media.json'), JSON.stringify([{ ...first, resized: true, downloadedFrom: from }, ...rest]));
+  const result = await build(['--capture', marked, '--out', out]);
+  assert.equal(result.code, 0, result.stderr);
+  const entry = readJson(out, 'media.json').find((m) => m.path === first.path);
+  assert.equal(entry.resized, true);
+  assert.equal(entry.downloadedFrom, from);
+  assert.equal(entry.bytes, first.bytes);
+  // A cache-buster stand-in is the original file: downloadedFrom only.
+  writeFileSync(join(marked, 'media.json'), JSON.stringify([{ ...first, downloadedFrom: `${first.url}?ver=3` }, ...rest]));
+  assert.equal((await build(['--capture', marked, '--out', out])).code, 0);
+  const plain = readJson(out, 'media.json').find((m) => m.path === first.path);
+  assert.equal(plain.resized, undefined);
+  assert.equal(plain.downloadedFrom, `${first.url}?ver=3`);
+  assert.equal(readFileSync(join(baseline, 'media.json'), 'utf8').includes('resized'), false);
 });
 
 test('counts.json sums the baseline', () => {

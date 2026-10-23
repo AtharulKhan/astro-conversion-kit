@@ -205,8 +205,13 @@ are on `astro-rebuild`.
     S phase baseline
     npm run baseline
     node $KIT/skills/parity-gates/scripts/build-baseline.mjs --out baseline --check
+    npm run links:exceptions
 
-`npm run baseline` also writes `redirects.csv` (from, to, status, source, note). Commit
+`npm run baseline` also writes `redirects.csv` (from, to, status, source, note).
+`npm run links:exceptions` (`link-exceptions.mjs`) appends to `exceptions.json` one `link`
+record per WordPress API head link per page (reason "WordPress API link kept as captured") and
+one per link to a page live answered 404 or 410 (reason "broken on live"); it never adds a
+record twice, so run it again whenever the baseline or `redirects.csv` changes. Commit
 `chore: baseline from capture`. From here `baseline/` is never edited, apart from the `keep`
 flags in `baseline/scripts.json` (`third-party.md`).
 
@@ -218,11 +223,24 @@ flags in `baseline/scripts.json` (`third-party.md`).
 
 Read `build-rules.md`, `forms.md`, `third-party.md` and your host file first. In this order:
 
-1. Media (`build-rules.md`, "Media") and fonts; for `store`, upload now (host file).
-2. CSS: `node $KIT/skills/convert-site/scripts/css-prune.mjs --css capture/css --coverage capture/css-coverage.json --out src/styles/site.css --report .conversion/css-prune-report.json`. When it prints `wrote N per-page sheet(s)`, give each page its `pageSheet`
+1. Media (`build-rules.md`, "Media") and fonts: `npm run assets:copy` (`copy-assets.mjs`)
+   copies the captured scripts, fonts, root icons, web manifest and the media outside the
+   media prefix (every media file in mode `repo`) to `public/` at their live paths, and exits 1
+   naming any file the capture lists but does not hold; for `store`, upload now (host file).
+2. CSS: `node $KIT/skills/convert-site/scripts/css-prune.mjs --css capture/css --coverage capture/css-coverage.json --report .conversion/css-prune-report.json`.
+   It writes each linked sheet, pruned, to `public/` at its live path and each head `<style>`
+   block to `src/styles/inline/`, and lists every page's head CSS in live order under `heads`
+   in the report: the content extractor copies `heads[<path>]` into each page's data, and the
+   page passes it to `Base.astro` as `css` (`build-rules.md`, "CSS"). css-prune clears the old
+   `inline-*.css` in `src/styles/inline/` on each run, so commit the folder as it leaves it.
+   The routes gate takes each sheet at its live path as built (`baseline/css.json`): no
+   `--allow-extra` is needed for them.
+   Exit 1 means a stylesheet had no coverage and was kept whole: record a decision.
+   Only for a simple classic theme (one theme sheet, no `<style>` blocks whose order
+   matters) may `--single-sheet --out src/styles/site.css` merge it all into one file, a
+   decision; when it then prints `wrote N per-page sheet(s)`, give each page its `pageSheet`
    from the report's `pageSheets`. css-prune clears the old `inline-*.css` in
    `src/styles/pages/` on each run, so commit the folder as it leaves it.
-   Exit 1 means a stylesheet had no coverage and was kept whole: record a decision.
 3. One layout per template, with the header, navigation and footer as components.
 4. The representative page of each template, its content moved from the captured markup.
 5. Forms (`forms.md`) and third-party scripts (`third-party.md`).
@@ -247,8 +265,9 @@ representatives:
 The media gate with `--paths` checks the media those pages reference (`referencedBy` in
 `baseline/media.json`), so "media: 0 checked" means those pages reference no media file. Add `--allow-extra /thank-you/` to the routes gate when that page is new (`forms.md`).
 Query-concatenated script URLs (WordPress VIP's `/_static/??a.js,b.js`) cannot be served by a
-static host and `assets.mjs` does not rewrite them: you save each concatenation as one file at
-`/_static/concat/<hash>.js`, point the markup at it (a decision row), and pass
+static host and `assets.mjs` does not rewrite them: `npm run assets:copy` writes each captured
+concatenation as one file at `/_static/concat/<sha1>.js` and maps each URL to its file in
+`public/_static/concat/manifest.json`; point the markup at it (a decision row), and pass
 `--allow-extra '/_static/concat/*'` on every routes gate run. Only `routes.mjs` (and
 `npm run verify`, which hands it on) accepts `--allow-extra`; the other single gate scripts
 exit 2 on it with "Unknown option '--allow-extra'" and their usage text. Each of
@@ -377,7 +396,12 @@ is on the needs-you list; also `placeholders.form-id` while the form id is missi
 then a draft, `forms.md`); the two predecessor slash checks when every row is a trailing-slash
 rule or a slash-only redirect (a known launch-skills limitation); and `predecessor.coverage`
 when live publishes no sitemap (the capture saved none) and every page the crawl found is
-built or on a decision row. A missing root icon counts as live's when the capture's probe
+built or on a decision row. Also `output.og-image` for an image under the media prefix when
+`docs/media-plan.json` keeps media off the repo (`store`, `live-temporary`) and the rewrite for
+that prefix is configured; and `output.noindex-utility-pages` for a demo, preview or test page
+live indexed too, with a decision row naming it. pre-launch lists at most 20 rows per check
+and keeps no fuller list: a longer check is accepted only when a decision row names its id and
+its count equals live's (titles, descriptions, h1, utility pages). A missing root icon counts as live's when the capture's probe
 (`capture/meta.json` `icons`) saw live answer 404; never invent one to pass. Everything
 else blocks and is fixed on the branch, as the `pre-launch` skill's triage says. Keep its
 accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`forms`,

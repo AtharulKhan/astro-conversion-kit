@@ -57,9 +57,11 @@ parity and this file is wrong: say so and fix this file.
   unchanged otherwise.
 - **WordPress API head links are kept as captured.** `wp-json/` (`rel="https://api.w.org/"`),
   `xmlrpc.php?rsd` (`EditURI`) and `wp-json/wp/v2/pages/N` (`alternate`) stay in the head
-  although nothing answers them on a static host. The build generates their links exceptions,
-  one row per API link (reason "WordPress API link kept as captured"), rather than dropping the
-  links.
+  although nothing answers them on a static host. `npm run links:exceptions`
+  (`link-exceptions.mjs --baseline baseline --capture capture --out exceptions.json`) writes
+  their links exceptions, one row per API link per page (reason "WordPress API link kept as
+  captured"), and one per link to a page live answered 404 or 410 (reason "broken on live"),
+  rather than dropping the links.
 - **Same-origin asset URLs are root-relative, by default.** A `<script src>`, a `<link href>` for
   a stylesheet, icon or preload, an `<img src>` and `srcset`, and a `<video>`, `<audio>` or
   `<source>` `src` (and `poster`) that the captured markup writes absolute to the live origin
@@ -72,33 +74,61 @@ parity and this file is wrong: say so and fix this file.
 
 ## CSS
 
-- Coverage first, then prune: `capture/css-coverage.json` (phase 2) and `css-prune.mjs` into
-  `src/styles/site.css`, linked once by `Base.astro`: the template imports it by URL
-  (`import siteCss from '../styles/site.css?url'`) and links it before the head slot, so a
-  page's own head content comes after it. Never switch to a plain `import '../styles/site.css'`:
-  Astro puts that link at the end of `<head>`, after every `set:html` head block. The scaffold
-  ships a one-line placeholder `site.css` so it builds before the prune replaces it, and
-  `src/styles/pages/` may be absent. The pruned file is the stylesheet; it is
-  never rewritten, reformatted or "cleaned up". The used rules of the head's `<style>` blocks
-  (WordPress emits several per page) are in it, each page's set under a comment naming its pages,
-  except a rule another page defines differently (a block theme's counter classes: `.wp-elements-1 a`
-  is white on one page and black on the next) and every rule naming its class (a class it styles, not one inside its `:not()`/`:where()`): those go to
+- **Each live stylesheet at its live path, each page's head CSS in live order** is the default,
+  recorded as a decision in the plan (topic "CSS per live sheet", default "per sheet"). Live
+  serves every page its own list of `<link rel="stylesheet">` and `<style>` blocks, interleaved
+  in a page-specific order, and rules of equal specificity resolve by that order: merged into one
+  file, a later page's copy of a block theme's global layout rule overrides a page's own
+  container rule (a post's H1 capped at 792 px instead of 900 px). Coverage first, then prune:
+  `capture/css-coverage.json` (phase 2) and `css-prune.mjs`, which reads each page's `<head>`
+  from `capture/inventory.json` and the snapshots, prunes every same-origin linked sheet on its
+  own (with the coverage of its own href only, so identical sheets a multisite serves under two
+  paths never share coverage) into `public/<live path>` (the query string dropped from the file
+  name, kept in the link), and every distinct head `<style>` block into
+  `src/styles/inline/inline-<page>-<n>.css`. The report's `heads` gives each path its list in
+  live order (`{ kind: "link", href, media? }`, `{ kind: "inline", file }`): the content
+  extractor copies it into each page's data and the page passes it to `Base.astro` as `css`,
+  which prints the links and the `<style>` blocks in that order before the head slot (the 404 and
+  thank-you pages pass the list of the page whose head they copy). No `site.css` is written
+  (`siteCss: null` in the report), and none is linked when a page passes `css`. A link keeps its
+  live `media` attribute; a sheet linked with a media no tested width satisfies (`print`) is kept
+  whole, because coverage runs on screen only. Another origin's sheet stays linked as live links
+  it (`external`); a same-origin link whose sheet was not captured is left out (`notCaptured`).
+  The baseline lists the captured sheets (`baseline/css.json`), so the routes gate takes each
+  file at its live path as built, not as an extra. One pathname captured under two queries is one
+  file when the bytes are the same; with other bytes the second is served at the query-named
+  path (`style.ver-2.css`) and its pages link that. A captured sheet only an `@import` reaches
+  (the parent or the child cannot be parsed, so the `@import` stays) is served at its live path
+  too. A link to the site on another scheme or the www/apex twin is the site's own sheet.
+- `--single-sheet` merges everything into `src/styles/site.css` instead, for a simple classic
+  theme only: one theme stylesheet and no `<style>` blocks whose order matters. `Base.astro`
+  then imports it by URL (`import siteCss from '../styles/site.css?url'`) and links it before the
+  head slot, so a page's own head content comes after it. Never switch to a plain
+  `import '../styles/site.css'`: Astro puts that link at the end of `<head>`, after every
+  `set:html` head block. The scaffold ships a one-line placeholder `site.css` so it builds before
+  the prune replaces it, and `src/styles/pages/` may be absent. The used rules of the head's
+  `<style>` blocks are in it, each page's set under a comment naming its pages, except a rule
+  another page defines differently (a block theme's counter classes: `.wp-elements-1 a` is white
+  on one page and black on the next) and every rule naming its class (a class it styles, not one inside its `:not()`/`:where()`): those go to
   `src/styles/pages/<inline file>`, listed under `pageSheets` (`file`, `pages`, `rules`) in
   `.conversion/css-prune-report.json`. Link each page sheet only on the pages it lists, after
-  `site.css` (Base.astro's `pageSheet` prop); never copy its rules into `site.css`. Inline blocks
-  are known by their text, so WordPress 6.9+'s `/*# sourceURL=... */` comments change nothing.
+  `site.css` (Base.astro's `pageSheet` prop); never copy its rules into `site.css`. A sheet
+  linked with a media attribute is wrapped in that `@media`. Vite processes `site.css`, so
+  invalid live CSS (a stray `false;` in an embed's sheet) can fail the build; the default
+  serves sheets from `public/` and prints `<style>` blocks raw, untouched by Vite.
+- In both modes the pruned files are the stylesheets; they are never rewritten, reformatted or
+  "cleaned up". Inline blocks are known by their text, so WordPress 6.9+'s
+  `/*# sourceURL=... */` comments change nothing.
   A captured `@import` is replaced by the imported sheet's pruned rules in place; one whose
   target was not captured stays an `@import` and is listed under `unresolvedImports` in
   `.conversion/css-prune-report.json`: check each one loads from the new site or restore its
-  rules. Exit 1 means a stylesheet file (`unmatched`) never appeared in coverage and was kept
+  rules. A sheet or block css-tree cannot parse is kept byte for byte and listed under
+  `unparsed`. Exit 1 means a stylesheet file (`unmatched`) never appeared in coverage and was kept
   whole: re-run coverage on the pages that link it.
   `uncoveredInline` lists the pages' `<style>` sets no coverage run saw (usually pages past the
-  coverage cap of 10 per template); they are kept whole, so nothing is lost but bytes. Add one of
-  their pages to the coverage routes and run coverage and the prune again when the bytes matter.
-- **One stylesheet for every template** is the v0.1 default, recorded as a decision in the plan
-  (topic "one pruned site.css", default "one file", cost if wrong "each page loads rules other
-  templates use"). Splitting it per template is an improvement the suggestions report may
-  propose, never part of the default build.
+  coverage cap of 10 per template); they are kept whole. Per sheet they stay on their own pages,
+  so nothing is lost but bytes; merged (`--single-sheet`) they reach every page. Add one of
+  their pages to the coverage routes and run coverage and the prune again.
 - Coverage clicks each menu and accordion toggle once, and the prune keeps every state rule
   (`.open`, `.menu-open`, `.is-active`, `[aria-expanded="true"]`, …) whose element was on a
   covered page: the report counts them as `keptBecause.state` ("kept for state: N rules").
@@ -112,9 +142,10 @@ parity and this file is wrong: say so and fix this file.
 
 ## Media and fonts
 
-- **Original paths, always.** Mode `repo`: copy the capture's download into `public/` so every
-  file is at its site path (`cp -R .conversion/media-cache/. public/`), every file the capture
-  listed, referenced or not
+- **Original paths, always.** `npm run assets:copy` (`copy-assets.mjs --capture capture
+  --site .`) does the copying. Mode `repo`: it copies the capture's download
+  (`.conversion/media-cache/`) into `public/` so every file is at its site path, every file the
+  capture listed, referenced or not
   (WordPress image sizes included). Mode `store` or `live-temporary`: nothing under the media
   prefix goes in `public/`; the host file says how the prefix is reached. In every mode, files
   outside the media prefix are copied to `public/` at their live paths (the media gate checks
@@ -133,8 +164,9 @@ parity and this file is wrong: say so and fix this file.
 - Every `root-icon` entry in `capture/assets/index.json` that has a `file` is copied byte for
   byte to `public/<path>` (`assets/root-favicon.ico` → `public/favicon.ico`,
   `assets/root-apple-touch-icon.png` → `public/apple-touch-icon.png`). One with `file: null` is
-  an icon live did not serve at the root (its status and note say why); copy-assets copies each
-  `root-icon` entry with a `file` to `public/` plus its `path`.
+  an icon live did not serve at the root (its status and note say why); `npm run assets:copy`
+  copies each `root-icon` entry with a `file` to `public/` plus its `path`, and the fonts and
+  the web manifest with them.
 
 ## Scripts
 
@@ -143,7 +175,8 @@ parity and this file is wrong: say so and fix this file.
   `baseline/js.json`). The default is to copy each one that drives visible behaviour (a lazy
   loader, a menu toggle, a scroll reveal, a slider), and the vendor library it needs, to its
   live path under `public/`, so the captured `<script src>` tags keep working; the routes gate
-  allows those paths. Rebuilding one as a small inline script against the same markup, or
+  allows those paths. `npm run assets:copy` copies every script the capture saved; a script
+  dropped by a decision row loses its `<script>` tag, and its file is left unused. Rebuilding one as a small inline script against the same markup, or
   dropping it, is a decision row per script.
 - Scripts that do nothing on a static site (`wp-emoji`, `admin-bar`, `comment-reply`,
   `wp-embed` and the like) are dropped by default, with their `<script>` tags, under one decision

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import * as csstree from 'css-tree';
 import { startFixture } from '../fixture/serve.mjs';
 import { mergeRanges } from '../../skills/convert-site/scripts/css-coverage.mjs';
-import { mediaTested, pruneCss, rewriteRef } from '../../skills/convert-site/scripts/css-prune.mjs';
+import { mediaTested, pruneCss, rewriteRef, variantPath } from '../../skills/convert-site/scripts/css-prune.mjs';
 import { stateBases } from '../../skills/convert-site/scripts/lib/state-selectors.mjs';
 import { scopeInlineRules } from '../../skills/convert-site/scripts/lib/inline-scope.mjs';
 
@@ -163,7 +163,7 @@ test('coverage hovers the first link a person could point at, not a clipped skip
 test('pruning removes the unused rules, keeps pseudo rules and @font-face, and copies kept source as written', async () => {
   const out = join(TMP, 'site.css');
   const report = join(TMP, 'prune-report.json');
-  const result = await pruneCli(['--css', captureCss('capture-css'), '--coverage', COVERAGE, '--out', out, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', captureCss('capture-css'), '--coverage', COVERAGE, '--out', out, '--report', report]);
   assert.equal(result.code, 0, result.stderr);
   const css = readFileSync(out, 'utf8');
   for (const selector of LEFTOVER) assert.ok(!css.includes(selector), `${selector} removed`);
@@ -184,7 +184,7 @@ test('pruning removes the unused rules, keeps pseudo rules and @font-face, and c
   assert.deepEqual(errors, []);
 
   const summary = readJson(report);
-  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'pageSheets', 'removedRules', 'uncoveredInline', 'unmatched', 'unresolvedImports']);
+  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'mode', 'pageSheets', 'removedRules', 'uncoveredInline', 'unmatched', 'unparsed', 'unresolvedImports']);
   assert.deepEqual(summary.pageSheets, []);
   assert.deepEqual(Object.keys(summary.keptBecause).sort(), ['atRule', 'pseudo', 'state', 'untestedMedia']);
   assert.deepEqual(summary.unmatched, []);
@@ -198,7 +198,7 @@ test('without a manifest, coverage URLs match files by basename and still resolv
   const out = join(TMP, 'basename.css');
   const report = join(TMP, 'basename-report.json');
   const dir = captureCss('capture-basename', { file: 'style.css', manifest: false });
-  const result = await pruneCli(['--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stderr, /no manifest\.json/);
   const css = readFileSync(out, 'utf8');
@@ -213,7 +213,7 @@ test('coverage keys match the manifest on path and query whatever their origin',
   const rekeyed = Object.fromEntries(Object.entries(coverage).map(([key, value]) => [key.replace(fixture.origin, 'https://staging.example.com'), value]));
   writeFileSync(moved, JSON.stringify(rekeyed));
   const out = join(TMP, 'other-origin.css');
-  const result = await pruneCli(['--css', captureCss('capture-other-origin'), '--coverage', moved, '--out', out, '--report', join(TMP, 'other-origin.json')]);
+  const result = await pruneCli(['--single-sheet', '--css', captureCss('capture-other-origin'), '--coverage', moved, '--out', out, '--report', join(TMP, 'other-origin.json')]);
   assert.equal(result.code, 0, result.stderr);
   const css = readFileSync(out, 'utf8');
   assert.ok(css.includes('.site-header {'));
@@ -227,7 +227,7 @@ test('a file with no matching coverage is kept whole and the exit code is 1', as
   });
   const out = join(TMP, 'unmatched.css');
   const report = join(TMP, 'unmatched-report.json');
-  const result = await pruneCli(['--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
   assert.equal(result.code, 1);
   assert.match(result.stderr, /2\.css/);
   const css = readFileSync(out, 'utf8');
@@ -250,7 +250,7 @@ test('inline <style> blocks of a real capture are matched to their pages: pruned
   assert.deepEqual(inline.map((entry) => entry.pages), [['/'], ['/contact/']]);
   const css = join(TMP, 'inline-site.css');
   const report = join(TMP, 'inline-report.json');
-  const result = await pruneCli(['--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report]);
   assert.equal(result.code, 0, result.stderr);
   const summary = readJson(report);
   assert.deepEqual(summary.unmatched, []);
@@ -284,7 +284,7 @@ test('per-page inline rules that collide (same selector, other declarations) go 
   mkdirSync(pagesOut, { recursive: true });
   writeFileSync(join(pagesOut, 'inline-stale.css'), '.old { color: red; }\n');
   writeFileSync(join(pagesOut, 'notes.css'), '/* not ours */\n');
-  const result = await pruneCli(['--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report, '--pages-out', pagesOut]);
+  const result = await pruneCli(['--single-sheet', '--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report, '--pages-out', pagesOut]);
   assert.equal(result.code, 0, result.stderr);
   const homeRule = '.wp-elements-1 { scroll-margin-top: 16px; }';
   const contactRule = '.wp-elements-1 { scroll-margin-top: 48px; }';
@@ -346,7 +346,7 @@ test('an inline file no coverage saw is kept whole and listed, without failing t
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify([...manifest, { file: 'inline-about.css', inline: true, pages: ['/about/'] }]));
   const out = join(TMP, 'inline-uncovered.css');
   const report = join(TMP, 'inline-uncovered.json');
-  const result = await pruneCli(['--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', dir, '--coverage', COVERAGE, '--out', out, '--report', report]);
   assert.equal(result.code, 0, result.stderr);
   assert.ok(readFileSync(out, 'utf8').includes('/* inline <style> blocks of /about/ (inline-about.css) */\n.about-only { color: red; }'));
   assert.deepEqual(readJson(report).unmatched, []);
@@ -390,7 +390,7 @@ test('an @import of a captured sheet is replaced by that sheet\'s pruned rules, 
   }));
   const out = join(TMP, 'imports.css');
   const report = join(TMP, 'imports-report.json');
-  const result = await pruneCli(['--css', dir, '--coverage', coverageFile, '--out', out, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', dir, '--coverage', coverageFile, '--out', out, '--report', report]);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(readFileSync(out, 'utf8'), [
     '@import url("https://cdn.example.com/blocked.css");',
@@ -617,7 +617,7 @@ test('the pruned stylesheet keeps the open-menu and state rules and says how man
   writeFileSync(join(dir, 's.css'), MENU_CSS);
   const out = join(TMP, 'menu.css');
   const report = join(TMP, 'menu-report.json');
-  const result = await pruneCli(['--css', dir, '--coverage', file, '--out', out, '--report', report]);
+  const result = await pruneCli(['--single-sheet', '--css', dir, '--coverage', file, '--out', out, '--report', report]);
   assert.equal(result.code, 0, result.stderr);
   const css = readFileSync(out, 'utf8');
   assert.ok(css.includes('#menu-top.menu-open { display: block; }'), css);
@@ -644,4 +644,361 @@ test('stateBases strips state classes, attributes and pseudos down to the elemen
   assert.deepEqual(bases('.tab.is-active:hover'), ['.tab']);
   assert.deepEqual(bases('details[open] summary'), ['details summary']);
   assert.deepEqual(bases('.plain .rule'), []);
+});
+
+// --- per-sheet mode (the default) ----------------------------------------------------------
+
+const SITE_ORIGIN = 'https://www.example.com';
+
+// Used ranges covering the rules that start with each of the given selectors.
+function usedRules(text, selectors) {
+  return selectors.map((selector) => {
+    const at = text.indexOf(`${selector} {`);
+    assert.ok(at !== -1, `${selector} in ${text}`);
+    return [at, text.indexOf('}', at) + 1];
+  });
+}
+
+// A capture folder the way capture.mjs leaves it: css/ (numbered sheets and the manifest),
+// pages/<slug>.html snapshots and inventory.json. pages: [{ path, slug, head }], head being the
+// page's <head> stylesheet markup in order. sheets: [{ file, href, text }].
+function pageCapture(name, { sheets, pages }) {
+  const dir = join(TMP, name);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(join(dir, 'css'), { recursive: true });
+  mkdirSync(join(dir, 'pages'), { recursive: true });
+  for (const sheet of sheets) writeFileSync(join(dir, 'css', sheet.file), sheet.text);
+  const linking = (href) => pages.filter((page) => page.head.includes(new URL(href).pathname)).map((page) => page.path);
+  writeFileSync(join(dir, 'css', 'manifest.json'), JSON.stringify(sheets.map(({ file, href }) => ({ file, href, pages: linking(href), status: 200 }))));
+  const inventory = pages.map(({ path, slug, head }) => {
+    writeFileSync(join(dir, 'pages', `${slug}.html`), `<!doctype html><html><head><title>${slug}</title>\n${head}\n</head><body><p class="x">${slug}</p></body></html>`);
+    return { url: `${SITE_ORIGIN}${path}`, path, status: 200, finalUrl: `${SITE_ORIGIN}${path}`, snapshot: `pages/${slug}.html` };
+  });
+  writeFileSync(join(dir, 'inventory.json'), JSON.stringify(inventory));
+  return dir;
+}
+
+const THEME_A = '.a-home { color: red; }\n.a-about { color: green; }\n.a-unused { color: blue; }\n';
+const BLOCKS_B = '.b-home { margin: 0; }\n.b-unused { margin: 1px; }\n';
+const PRINT = 'a, a:visited { text-decoration: underline; }\n.print-only { display: block; }\n';
+const HOME_STYLE = '\n.s-home { padding: 0; }\n.s-home-unused { padding: 1px; }\n';
+const SHARED_STYLE = '.layout { max-width: 640px; }\n.layout-unused { max-width: 1px; }';
+const ABOUT_STYLE = '.wp-container-1 { max-width: 900px; }';
+
+function twoSheetCapture(name) {
+  const dir = pageCapture(name, {
+    sheets: [
+      { file: '1.css', href: `${SITE_ORIGIN}/wp-content/themes/t/a.css?ver=1.2`, text: THEME_A },
+      { file: '2.css', href: `${SITE_ORIGIN}/wp-includes/css/b.css`, text: BLOCKS_B },
+      { file: '3.css', href: `${SITE_ORIGIN}/wp-content/themes/t/print.css`, text: PRINT },
+    ],
+    pages: [
+      { path: '/', slug: 'home', head: [
+        '<link rel="stylesheet" href="/wp-content/themes/t/a.css?ver=1.2" media="all">',
+        `<style id="home-inline-css">${HOME_STYLE}</style>`,
+        '<link rel="stylesheet" href="https://www.example.com/wp-includes/css/b.css">',
+        `<style>${SHARED_STYLE}</style>`,
+      ].join('\n') },
+      { path: '/about/', slug: 'about', head: [
+        `<style>${SHARED_STYLE}</style>`,
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">',
+        '<link rel="stylesheet" href="/wp-content/themes/t/print.css" media="print">',
+        '<link rel="stylesheet" href="/wp-content/themes/t/a.css?ver=1.2" media="all">',
+        `<style>${ABOUT_STYLE}</style>`,
+      ].join('\n') },
+    ],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({
+    // A rule only /about/ uses is used all the same: coverage merges every page's ranges.
+    [`${SITE_ORIGIN}/wp-content/themes/t/a.css?ver=1.2`]: { text: THEME_A, usedRanges: usedRules(THEME_A, ['.a-home', '.a-about']) },
+    [`${SITE_ORIGIN}/wp-includes/css/b.css`]: { text: BLOCKS_B, usedRanges: usedRules(BLOCKS_B, ['.b-home']) },
+    // Chromium applies no print rule on screen: coverage sees nothing used in the print sheet.
+    [`${SITE_ORIGIN}/wp-content/themes/t/print.css`]: { text: PRINT, usedRanges: [] },
+    'inline:1': { text: HOME_STYLE, usedRanges: usedRules(HOME_STYLE, ['.s-home']), pages: ['/'] },
+    'inline:2': { text: SHARED_STYLE, usedRanges: usedRules(SHARED_STYLE, ['.layout']), pages: ['/', '/about/'] },
+    'inline:3': { text: ABOUT_STYLE, usedRanges: [[0, ABOUT_STYLE.length]], pages: ['/about/'] },
+  }));
+  return { dir, coverage };
+}
+
+const perSheetCli = (dir, coverage, extra = []) => pruneCli([
+  '--css', join(dir, 'css'), '--coverage', coverage, '--report', join(dir, 'report.json'),
+  '--public', join(dir, 'public'), '--inline-out', join(dir, 'inline'), ...extra,
+]);
+
+test('per-sheet: each linked sheet is pruned on its own at its live path, inline blocks per page, and each page keeps its head order', async () => {
+  const { dir, coverage } = twoSheetCapture('per-sheet');
+  const pub = join(dir, 'public');
+  const inlineOut = join(dir, 'inline');
+  mkdirSync(inlineOut, { recursive: true });
+  writeFileSync(join(inlineOut, 'inline-stale-1.css'), '.old { color: red; }\n');
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+
+  // Live paths, query string dropped from the file name.
+  const a = readFileSync(join(pub, 'wp-content', 'themes', 't', 'a.css'), 'utf8');
+  assert.ok(a.includes('.a-home { color: red; }') && a.includes('.a-about { color: green; }'), a);
+  assert.ok(!a.includes('.a-unused'), 'an unused rule is removed');
+  const b = readFileSync(join(pub, 'wp-includes', 'css', 'b.css'), 'utf8');
+  assert.equal(b, '.b-home { margin: 0; }\n', 'one sheet\'s rules never land in another');
+  // A print sheet: coverage is screen-only, so it is kept whole and its link keeps media="print".
+  assert.equal(readFileSync(join(pub, 'wp-content', 'themes', 't', 'print.css'), 'utf8'), PRINT);
+
+  const summary = readJson(join(dir, 'report.json'));
+  assert.equal(summary.mode, 'per-sheet');
+  assert.equal(summary.siteCss, null, 'nothing is left for a global site.css');
+  assert.deepEqual(summary.sheets.map(({ href, file }) => ({ href, file })), [
+    { href: `${SITE_ORIGIN}/wp-content/themes/t/a.css?ver=1.2`, file: join(pub, 'wp-content', 'themes', 't', 'a.css') },
+    { href: `${SITE_ORIGIN}/wp-includes/css/b.css`, file: join(pub, 'wp-includes', 'css', 'b.css') },
+    { href: `${SITE_ORIGIN}/wp-content/themes/t/print.css`, file: join(pub, 'wp-content', 'themes', 't', 'print.css') },
+  ]);
+  for (const sheet of summary.sheets) {
+    assert.deepEqual(Object.keys(sheet).sort(), ['bytesAfter', 'bytesBefore', 'file', 'href', 'rulesRemoved']);
+    assert.equal(sheet.bytesAfter, statSync(sheet.file).size);
+  }
+  assert.deepEqual(summary.sheets.map((s) => s.rulesRemoved), [1, 1, 0]);
+  assert.deepEqual(summary.external, ['https://fonts.googleapis.com/css2?family=Inter']);
+
+  // Each page's own order, links root-relative with their query, inline blocks as files.
+  assert.deepEqual(summary.heads['/'], [
+    { kind: 'link', href: '/wp-content/themes/t/a.css?ver=1.2', media: 'all' },
+    { kind: 'inline', file: 'inline-home-1.css' },
+    { kind: 'link', href: '/wp-includes/css/b.css' },
+    { kind: 'inline', file: 'inline-home-2.css' },
+  ]);
+  assert.deepEqual(summary.heads['/about/'], [
+    { kind: 'inline', file: 'inline-home-2.css' },
+    { kind: 'link', href: 'https://fonts.googleapis.com/css2?family=Inter' },
+    { kind: 'link', href: '/wp-content/themes/t/print.css', media: 'print' },
+    { kind: 'link', href: '/wp-content/themes/t/a.css?ver=1.2', media: 'all' },
+    { kind: 'inline', file: 'inline-about-2.css' },
+  ]);
+  assert.deepEqual(readdirSync(inlineOut).sort(), ['inline-about-2.css', 'inline-home-1.css', 'inline-home-2.css'], 'stale inline files removed');
+  assert.equal(readFileSync(join(inlineOut, 'inline-home-1.css'), 'utf8'), '.s-home { padding: 0; }\n');
+  assert.equal(readFileSync(join(inlineOut, 'inline-home-2.css'), 'utf8'), '.layout { max-width: 640px; }\n');
+  assert.equal(readFileSync(join(inlineOut, 'inline-about-2.css'), 'utf8'), `${ABOUT_STYLE}\n`);
+  assert.deepEqual(summary.inline.map(({ file, pages }) => ({ file, pages })), [
+    { file: 'inline-home-1.css', pages: ['/'] },
+    { file: 'inline-home-2.css', pages: ['/', '/about/'] },
+    { file: 'inline-about-2.css', pages: ['/about/'] },
+  ]);
+  assert.deepEqual(summary.pageSheets, [], 'each page keeps its own blocks, so nothing collides');
+  assert.deepEqual(summary.unmatched, []);
+  assert.deepEqual(summary.unparsed, []);
+  assert.match(result.stdout, /wrote 3 sheet\(s\) at their live paths under .*public and 3 inline block file\(s\) to .*inline; no site\.css/);
+});
+
+test('per-sheet: identical sheets under two paths (a multisite) keep their own coverage, never each other\'s', async () => {
+  const text = '.c-block { margin-bottom: 2rem; }\n.b-gallery { margin-bottom: 0; }\n';
+  const main = `${SITE_ORIGIN}/wp-content/themes/x/style.css`;
+  const sub = `${SITE_ORIGIN}/president/wp-content/themes/x/style.css`;
+  const dir = pageCapture('multisite', {
+    sheets: [{ file: '1.css', href: main, text }, { file: '2.css', href: sub, text }],
+    pages: [
+      { path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/themes/x/style.css">' },
+      { path: '/president/', slug: 'president', head: '<link rel="stylesheet" href="/president/wp-content/themes/x/style.css">' },
+    ],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({
+    [main]: { text, usedRanges: usedRules(text, ['.c-block']) },
+    [sub]: { text, usedRanges: usedRules(text, ['.b-gallery']) },
+  }));
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+  const pub = join(dir, 'public');
+  assert.equal(readFileSync(join(pub, 'wp-content', 'themes', 'x', 'style.css'), 'utf8'), '.c-block { margin-bottom: 2rem; }\n');
+  assert.equal(readFileSync(join(pub, 'president', 'wp-content', 'themes', 'x', 'style.css'), 'utf8'), '.b-gallery { margin-bottom: 0; }\n');
+});
+
+test('a sheet css-tree cannot parse is kept byte for byte and listed under unparsed, without changing the exit code', async () => {
+  const broken = `${'@media screen{'.repeat(20000)}.deep { color: red; }`;
+  const href = `${SITE_ORIGIN}/wp-content/plugins/mc/embed.css`;
+  const dir = pageCapture('unparsed', {
+    sheets: [{ file: '1.css', href, text: broken }],
+    pages: [{ path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/plugins/mc/embed.css">' }],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({ [href]: { text: broken, usedRanges: [] } }));
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(readFileSync(join(dir, 'public', 'wp-content', 'plugins', 'mc', 'embed.css'), 'utf8'), broken);
+  const { unparsed } = readJson(join(dir, 'report.json'));
+  assert.equal(unparsed.length, 1);
+  assert.equal(unparsed[0].href, href);
+  assert.match(unparsed[0].error, /call stack/);
+  assert.equal(result.stderr.trim().split('\n').filter((line) => line.includes('could not parse')).length, 1, result.stderr);
+});
+
+test('--single-sheet wraps a sheet linked with a media attribute in that @media and keeps a print sheet whole', async () => {
+  const { dir, coverage } = twoSheetCapture('single-media');
+  const out = join(dir, 'site.css');
+  const result = await pruneCli(['--single-sheet', '--css', join(dir, 'css'), '--coverage', coverage, '--out', out, '--report', join(dir, 'r.json')]);
+  assert.equal(result.code, 0, result.stderr);
+  const css = readFileSync(out, 'utf8');
+  assert.ok(css.includes(`@media print {\n${PRINT.trimEnd()}\n}`), css);
+  assert.ok(!/@media all/.test(css), 'media="all" adds no wrapper');
+  assert.equal(readJson(join(dir, 'r.json')).mode, 'single-sheet');
+});
+
+test('--single-sheet keeps a media-linked sheet\'s hoisted @import and @layer lines at the top, in order, the @import under the link\'s media', async () => {
+  const href = `${SITE_ORIGIN}/wp-content/themes/t/print.css`;
+  const text = '@layer base;\n@import url("https://cdn.example.org/p.css");\n@import url("https://cdn.example.org/q.css") screen;\n.print-only { display: block; }\n';
+  const theme = '.t { color: red; }\n';
+  const dir = pageCapture('single-hoist', {
+    sheets: [{ file: '1.css', href: `${SITE_ORIGIN}/wp-content/themes/t/a.css`, text: theme }, { file: '2.css', href, text }],
+    pages: [{ path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/themes/t/a.css">\n<link rel="stylesheet" href="/wp-content/themes/t/print.css" media="print">' }],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({ [`${SITE_ORIGIN}/wp-content/themes/t/a.css`]: { text: theme, usedRanges: [[0, theme.length]] }, [href]: { text, usedRanges: [] } }));
+  const out = join(dir, 'site.css');
+  const result = await pruneCli(['--single-sheet', '--css', join(dir, 'css'), '--coverage', coverage, '--out', out, '--report', join(dir, 'r.json')]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(readFileSync(out, 'utf8'), [
+    '@layer base;',
+    '@import url("https://cdn.example.org/p.css") print;',
+    '@import url("https://cdn.example.org/q.css") screen;',
+    '.t { color: red; }',
+    '@media print {\n.print-only { display: block; }\n}',
+    '',
+  ].join('\n'));
+  assert.match(result.stderr, /q\.css.*has its own media list.*print/);
+});
+
+test('a malformed url() is left as written, never rewritten', () => {
+  const result = pruneCss('.a { b: url(}', [[0, 13]], { base: 'https://www.example.com/x/a.css', siteOrigin: 'https://www.example.com' });
+  assert.equal(result.css, '.a { b: url(}');
+});
+
+// --- one path, several queries; sheets only an @import reaches; host variants ------------------
+
+const T = `${SITE_ORIGIN}/wp-content/themes/t`;
+const deep = (rules) => `${'@media screen{'.repeat(20000)}${rules}`;
+const usedOf = (text, selectors) => ({ text, usedRanges: usedRules(text, selectors) });
+
+test('per-sheet: one pathname under two queries with the same bytes is one file pruned with both coverages', async () => {
+  const text = '.a { color: red; }\n.b { color: green; }\n.c { color: blue; }\n';
+  const dir = pageCapture('same-path-same-bytes', {
+    sheets: [{ file: '1.css', href: `${T}/style.css?ver=1`, text }, { file: '2.css', href: `${T}/style.css?ver=2`, text }],
+    pages: [
+      { path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/themes/t/style.css?ver=1">' },
+      { path: '/about/', slug: 'about', head: '<link rel="stylesheet" href="/wp-content/themes/t/style.css?ver=2">' },
+    ],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({ [`${T}/style.css?ver=1`]: usedOf(text, ['.a']), [`${T}/style.css?ver=2`]: usedOf(text, ['.b']) }));
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+  const file = join(dir, 'public', 'wp-content', 'themes', 't', 'style.css');
+  assert.equal(readFileSync(file, 'utf8'), '.a { color: red; }\n.b { color: green; }\n');
+  const summary = readJson(join(dir, 'report.json'));
+  assert.deepEqual(summary.sheets.map(({ href, file: f }) => ({ href, file: f })), [{ href: `${T}/style.css?ver=1`, file }, { href: `${T}/style.css?ver=2`, file }]);
+  assert.deepEqual(summary.heads['/about/'], [{ kind: 'link', href: '/wp-content/themes/t/style.css?ver=2' }]);
+});
+
+test('per-sheet: one pathname under two queries with other bytes keeps both, the second at a query-named path its pages link', async () => {
+  const one = '.a { color: red; }\n.x { color: blue; }\n';
+  const two = '.b { color: green; }\n.y { color: blue; }\n';
+  const dir = pageCapture('same-path-other-bytes', {
+    sheets: [{ file: '1.css', href: `${T}/style.css?ver=1`, text: one }, { file: '2.css', href: `${T}/style.css?ver=2`, text: two }],
+    pages: [
+      { path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/themes/t/style.css?ver=1">' },
+      { path: '/about/', slug: 'about', head: '<link rel="stylesheet" href="/wp-content/themes/t/style.css?ver=2">' },
+    ],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({ [`${T}/style.css?ver=1`]: usedOf(one, ['.a']), [`${T}/style.css?ver=2`]: usedOf(two, ['.b']) }));
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+  const folder = join(dir, 'public', 'wp-content', 'themes', 't');
+  assert.equal(readFileSync(join(folder, 'style.css'), 'utf8'), '.a { color: red; }\n');
+  assert.equal(readFileSync(join(folder, 'style.ver-2.css'), 'utf8'), '.b { color: green; }\n');
+  assert.equal(variantPath('/wp-content/themes/t/style.css', '?ver=2'), '/wp-content/themes/t/style.ver-2.css');
+  const summary = readJson(join(dir, 'report.json'));
+  assert.deepEqual(summary.sheets.map((s) => s.file), [join(folder, 'style.css'), join(folder, 'style.ver-2.css')]);
+  assert.deepEqual(summary.heads['/'], [{ kind: 'link', href: '/wp-content/themes/t/style.css?ver=1' }]);
+  assert.deepEqual(summary.heads['/about/'], [{ kind: 'link', href: '/wp-content/themes/t/style.ver-2.css?ver=2' }]);
+});
+
+test('per-sheet: a sheet only an @import reaches is written at its live path when its parent keeps the @import (an unparsable parent or child)', async () => {
+  const child = '.c1 { color: red; }\n.c2 { color: blue; }\n';
+  const parentBroken = `@import url("child.css");\n${deep('.p { color: red; }')}`;
+  const parent = '@import url("child2.css");\n.p { color: red; }\n';
+  const child2Broken = deep('.q { background: url(img/q.png); }');
+  const dir = pageCapture('import-only', {
+    sheets: [
+      { file: '1.css', href: `${T}/broken-parent.css`, text: parentBroken },
+      { file: '2.css', href: `${T}/child.css`, text: child },
+      { file: '3.css', href: `${T}/parent.css`, text: parent },
+      { file: '4.css', href: `${T}/child2.css`, text: child2Broken },
+    ],
+    pages: [{ path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/themes/t/broken-parent.css">\n<link rel="stylesheet" href="/wp-content/themes/t/parent.css">' }],
+  });
+  const manifest = readJson(join(dir, 'css', 'manifest.json'));
+  manifest[1].importedBy = [`${T}/broken-parent.css`];
+  manifest[3].importedBy = [`${T}/parent.css`];
+  writeFileSync(join(dir, 'css', 'manifest.json'), JSON.stringify(manifest));
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({
+    [`${T}/broken-parent.css`]: { text: parentBroken, usedRanges: [] },
+    [`${T}/child.css`]: usedOf(child, ['.c1']),
+    [`${T}/parent.css`]: usedOf(parent, ['.p']),
+    [`${T}/child2.css`]: { text: child2Broken, usedRanges: [] },
+  }));
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+  const folder = join(dir, 'public', 'wp-content', 'themes', 't');
+  assert.equal(readFileSync(join(folder, 'broken-parent.css'), 'utf8'), parentBroken, 'the unparsable parent is kept byte for byte');
+  assert.equal(readFileSync(join(folder, 'child.css'), 'utf8'), '.c1 { color: red; }\n', 'its child is served at its live path, pruned with its own coverage');
+  assert.equal(readFileSync(join(folder, 'parent.css'), 'utf8'), '@import url("/wp-content/themes/t/child2.css");\n.p { color: red; }\n', 'an unparsable child stays an @import');
+  assert.equal(readFileSync(join(folder, 'child2.css'), 'utf8'), child2Broken, 'and is served byte for byte at its live path, its relative url()s intact');
+  const { sheets, unparsed } = readJson(join(dir, 'report.json'));
+  assert.deepEqual(sheets.map((s) => s.href), [`${T}/broken-parent.css`, `${T}/parent.css`, `${T}/child.css`, `${T}/child2.css`]);
+  assert.deepEqual(unparsed.map((u) => u.href), [`${T}/broken-parent.css`, `${T}/child2.css`]);
+});
+
+test('--single-sheet: an unparsable imported sheet inlined byte for byte has its relative url()s made root-relative first', async () => {
+  const parent = '@import url("sub/child.css");\n.p { color: red; }\n';
+  const child = deep('.q { background: url(img/q.png); } .r { background: url("../r.png"); }');
+  const dir = pageCapture('single-unparsed-child', {
+    sheets: [{ file: '1.css', href: `${T}/parent.css`, text: parent }, { file: '2.css', href: `${T}/sub/child.css`, text: child }],
+    pages: [{ path: '/', slug: 'home', head: '<link rel="stylesheet" href="/wp-content/themes/t/parent.css">' }],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({ [`${T}/parent.css`]: usedOf(parent, ['.p']), [`${T}/sub/child.css`]: { text: child, usedRanges: [] } }));
+  const out = join(dir, 'site.css');
+  const result = await pruneCli(['--single-sheet', '--css', join(dir, 'css'), '--coverage', coverage, '--out', out, '--report', join(dir, 'r.json')]);
+  assert.equal(result.code, 0, result.stderr);
+  const css = readFileSync(out, 'utf8');
+  assert.ok(css.includes('url(/wp-content/themes/t/sub/img/q.png)'), css.slice(-200));
+  assert.ok(css.includes('url("/wp-content/themes/t/r.png")'), css.slice(-200));
+  assert.ok(!css.includes('url(img/q.png)'));
+});
+
+test('per-sheet: a link to the site under another scheme or the www/apex variant is the site\'s own sheet, served from public/', async () => {
+  const text = '.a { color: red; }\n.b { color: blue; }\n';
+  const dir = pageCapture('host-variants', {
+    sheets: [{ file: '1.css', href: `${T}/a.css`, text }],
+    pages: [{ path: '/', slug: 'home', head: '<link rel="stylesheet" href="http://example.com/wp-content/themes/t/a.css">' }],
+  });
+  const coverage = join(dir, 'coverage.json');
+  writeFileSync(coverage, JSON.stringify({ [`${T}/a.css`]: usedOf(text, ['.a']) }));
+  const result = await perSheetCli(dir, coverage);
+  assert.equal(result.code, 0, result.stderr);
+  const summary = readJson(join(dir, 'report.json'));
+  assert.deepEqual(summary.heads['/'], [{ kind: 'link', href: '/wp-content/themes/t/a.css' }]);
+  assert.deepEqual(summary.external, []);
+  assert.equal(readFileSync(join(dir, 'public', 'wp-content', 'themes', 't', 'a.css'), 'utf8'), '.a { color: red; }\n');
+});
+
+test('css-prune usage: --out needs --single-sheet, and per-sheet mode needs the capture\'s inventory', async () => {
+  const { dir, coverage } = twoSheetCapture('usage');
+  const out = await perSheetCli(dir, coverage, ['--out', join(dir, 'site.css')]);
+  assert.equal(out.code, 2);
+  assert.match(out.stderr, /--out is for --single-sheet/);
+  rmSync(join(dir, 'inventory.json'));
+  const bare = await perSheetCli(dir, coverage);
+  assert.equal(bare.code, 2);
+  assert.match(bare.stderr, /inventory\.json/);
 });
