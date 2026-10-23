@@ -57,14 +57,23 @@ browser) and whether each is installed and logged in. Every script prints `--hel
 Averages over 45 WordPress conversions run with the kit, intake to pull request. Every run passed
 the pixel-parity review at all three widths.
 
-Public demos, converted by a coding agent following the skills as published:
-[sxsw.com](https://sxsw-com-astro-v2.vercel.app) (WordPress VIP, block theme, 71 pages) and
-[harvard.edu](https://harvard-edu-astro.vercel.app) (WordPress multisite, 457 pages). Drag between
-the live page and the Astro build on the
-[before and after page](https://astro-conversion-kit-demos.vercel.app); the counts, timings and
-screenshots are in [docs/examples](docs/examples/README.md).
+### Demos
 
-![sxsw.com /about/ at 1440 px: the live WordPress page on the left, the Astro build on the right, 0.00 % of pixels differ](docs/examples/sxsw-about-1440.png)
+Public WordPress sites converted by a coding agent following the skills as published. Each link
+is the Astro build on Vercel; each image is the live WordPress page beside the Astro build.
+Counts and timings are in [docs/examples](docs/examples/README.md).
+
+**sxsw.com** (WordPress VIP, block theme, 71 pages): https://sxsw-com-astro-v2.vercel.app
+
+![sxsw.com home page hero, before on WordPress and after on Astro, with the hero video playing on both](docs/examples/sxsw-home.gif)
+
+**harvard.edu** (WordPress multisite, 457 pages): https://harvard-edu-astro.vercel.app
+
+![harvard.edu /ai/ page, before on WordPress and after on Astro](docs/examples/harvard-ai-1440.png)
+
+**angrybirds.com** (WordPress on WP Engine, 388 pages, media in Vercel Blob): https://angrybirds-com.vercel.app
+
+![angrybirds.com home page, before on WordPress and after on Astro](docs/examples/angrybirds-home-1440.png)
 
 ## What happens
 
