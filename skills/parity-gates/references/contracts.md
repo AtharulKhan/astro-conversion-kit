@@ -58,7 +58,8 @@ Fields are named `input`, `select` and `textarea` elements in document order, wi
 button, reset and image inputs.
 Every form is recorded, a search box (`method: "get"`) too. The forms gate treats only a `post`
 form as a submission form (endpoint, honeypot, thank-you page); a `get` form must keep live's
-action path, method and fields.
+action path, method and fields, and so must a `post` form whose action is on another origin
+(kept as is: it already posts to a third party).
 
 ## baseline/scripts.json
 

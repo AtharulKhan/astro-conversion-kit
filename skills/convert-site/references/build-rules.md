@@ -30,7 +30,12 @@ parity and this file is wrong: say so and fix this file.
 
 ## URLs in the captured markup
 
-- **Content links stay as captured.** Every `<a href>` (and `<area href>`, a form `action`, and
+- **Forms that already post elsewhere stay as captured.** A POST form whose `action` is on
+  another origin (a newsletter list host, a form service) is kept exactly as captured and listed
+  in the plan under "Forms kept as is" with its action host; only a POST form posting to the
+  old site (an empty or relative action, the live origin, `/wp-admin/admin-ajax.php`,
+  `/wp-comments-post.php`) is rewired to the form endpoint (`forms.md`).
+- **Content links stay as captured.** Every `<a href>` (and `<area href>`, a form `action` other than the rewired ones above, and
   the head's canonical, alternate, REST and oEmbed links) keeps the URL the capture saved, a
   same-origin absolute one (`https://<live host>/team`) included: never rewrite one to
   root-relative or to another host. The links gate counts same-origin absolute links as internal.

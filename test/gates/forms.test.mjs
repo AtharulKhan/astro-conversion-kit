@@ -139,6 +139,42 @@ test('a GET search form is compared with live: action path, method and fields; n
   assert.match(result.stdout, /\/blog\/ method: expected "get", got "post"/);
 });
 
+// A newsletter signup that already posts to a third party (a Mailchimp-style list host).
+const SIGNUP_ACTION = 'https://example.us1.list-manage.com/subscribe/post?u=abc&amp;id=def';
+const SIGNUP_URL = 'https://example.us1.list-manage.com/subscribe/post?u=abc&id=def';
+const SIGNUP = `<form action="${SIGNUP_ACTION}" method="post" class="signup"><input type="email" name="EMAIL"><input type="text" name="b_abc_def" tabindex="-1" value=""><input type="submit" value="Subscribe"></form>`;
+
+test('a POST form whose action is on another origin is kept as is: compared like live, no endpoint, honeypot or thank-you', async () => {
+  const base = join(root, 'baseline-signup');
+  cpSync(baseline, base, { recursive: true });
+  const captured = JSON.parse(readFileSync(join(base, 'forms.json'), 'utf8'));
+  const field = (name, type) => ({ name, type, required: false });
+  captured['/about/'] = [{ action: SIGNUP_URL, method: 'post', fields: [field('EMAIL', 'email'), field('b_abc_def', 'text')] }];
+  writeFileSync(join(base, 'forms.json'), JSON.stringify(captured));
+  const dist = makeDist(join(root, 'dist-signup'));
+  edit(dist, 'about/index.html', '</main>', `${SIGNUP}</main>`);
+
+  const kept = await forms(dist, ['--paths', '/about/'], base);
+  assert.equal(kept.code, 0, kept.stdout + kept.stderr);
+  assert.match(kept.stdout, /^ {2}1 form kept as is \(posts to example\.us1\.list-manage\.com\)$/m);
+  assert.match(kept.stdout, /^forms: 1 checked, 0 failed$/m);
+  const strict = await forms(dist, ['--paths', '/about/', '--endpoint', ENDPOINT, '--honeypot', '_gotcha', '--thank-you', '/thank-you/'], base);
+  assert.equal(strict.code, 0, strict.stdout + strict.stderr);
+
+  // Rewired to the form service, it is no longer the live signup.
+  const rewired = makeDist(join(root, 'dist-signup-rewired'));
+  edit(rewired, 'about/index.html', '</main>', `${SIGNUP.replace(SIGNUP_ACTION, ENDPOINT)}</main>`);
+  const failed = await forms(rewired, ['--paths', '/about/', '--endpoint', ENDPOINT], base);
+  assert.equal(failed.code, 1, failed.stdout);
+  assert.match(failed.stdout, new RegExp(`^ {2}/about/ action: expected "${SIGNUP_URL.replace(/[?.]/g, '\\$&')}", got "/contact/"$`, 'm'));
+
+  // The contact form still posts to the old site, so the whole baseline still needs --endpoint.
+  assert.equal((await forms(dist, [], base)).code, 2);
+  const all = await forms(dist, ['--endpoint', ENDPOINT], base);
+  assert.equal(all.code, 0, all.stdout);
+  assert.match(all.stdout, /^forms: 3 checked, 0 failed, 1 skipped \(thank-you not checked\)$/m);
+});
+
 test('--endpoint is required when the baseline has a form', async () => {
   const result = await forms(good);
   assert.equal(result.code, 2);
