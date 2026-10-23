@@ -113,20 +113,25 @@ live origin, so its canonicals and sitemap stay on it.
     PROPOSALS=on npm run build && npm run verify:proposals -- --endpoint ... --thank-you ...                 # proposals
     PUBLIC_INDEXABLE=true npm run build && npm run verify:release -- --endpoint ... --thank-you ...          # release
 
-After a staging deploy, check it over HTTP against the baseline (the bypass value from the
-environment, never pasted in chat). A release deploy is checked the same way without
-`--expect-noindex`:
+After a staging deploy, check it over HTTP against the baseline. A release deploy is checked
+the same way without `--expect-noindex`:
 
-    npm run verify:live -- --base https://my-site.vercel.app --expect-noindex --bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"
-    node <skill-dir>/scripts/verify-live.mjs --base https://my-site.vercel.app --expect-noindex --bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"    # fallback
+    npm run verify:live -- --base https://my-site.vercel.app --expect-noindex
+    node <skill-dir>/scripts/verify-live.mjs --base https://my-site.vercel.app --expect-noindex    # fallback
+
+`--bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"` applies only when staging was deliberately
+protected (the bypass value from the environment, never pasted in chat); a public staging alias
+needs none.
 
 It checks every baseline route at 200 (or a `--sample`), every redirect in one hop with the same
 kind of status, noindex on pages iff `--expect-noindex`, the sitemap, and 20 media files by
 bytes (or `--media-manifest`, whose `url` may be the store's absolute URL or a site path checked
 at `<base><path>`). Every request times out after 30 s, a failure of that check rather than a
 block. Exit 3 means it was blocked: wait and rerun. Exit 3 with `deployment protection:` means
-Vercel answered with its login redirect (302 to `vercel.com/sso-api`): pass `--bypass`, or the
-bypass secret has to be created first (a needs-you item), then rerun. A failure marked
+Vercel answered with its login redirect (302 to `vercel.com/sso-api`): use the project's
+production alias (public by default) rather than the raw deployment URL; only when staging was
+deliberately protected, pass `--bypass`, or the bypass secret has to be created first (a
+needs-you item), then rerun. A failure marked
 `unverified live` is a shortlink the capture never requested.
 
 ## Present the result

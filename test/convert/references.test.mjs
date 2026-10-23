@@ -59,7 +59,14 @@ test('intake.md: the message asks only what the owner knows, the Vercel team inc
 test('hosting-vercel.md: link with the team slug, deploy, protection only when the owner opted in, and the needs-you line when a step fails', () => {
   const vercel = read('references/hosting-vercel.md');
   // The default path: link, then deploy, nothing in between.
-  assert.ok(vercel.includes('    npx vercel link --yes --project <slug> --scope <scope>\n    npx vercel deploy --yes --scope <scope>\n'), 'the default two steps');
+  assert.ok(vercel.includes('    npx vercel link --yes --project <slug> --scope <scope>\n    npx vercel deploy --prod --yes --scope <scope>\n'), 'the default two steps');
+  const flatAll = vercel.replace(/\s+/g, ' ');
+  assert.match(flatAll, /every staging deploy is a production deploy: `npx vercel deploy --prod --yes --scope <scope>` from `astro-rebuild`, every time, until launch/);
+  assert.match(flatAll, /Before the custom domain is attached \(launch day, from `main`\), the production alias `<slug>\.vercel\.app` is staging/);
+  assert.match(flatAll, /the `alias` list of `deployment`/);
+  assert.match(flatAll, /`https:\/\/<slug>\.vercel\.app` as the fallback/);
+  assert.match(flatAll, /one GET that answers 200 with the staging noindex/);
+  assert.match(flatAll, /Never the raw deployment URL/);
   const optIn = vercel.split('**Protection, only when the owner opted in.**')[1];
   assert.ok(optIn, 'the opt-in paragraph');
   const steps = [
@@ -78,7 +85,7 @@ test('hosting-vercel.md: link with the team slug, deploy, protection only when t
   assert.match(flat, /`vercel git connect` is not needed after `link`/);
   assert.match(flat, /first deploy of a new project is a production deploy/);
   assert.match(flat, /read `deployment\.url` and `deployment\.target`/);
-  assert.match(flat, /Record the alias: `S set staging '"https:\/\/<slug>\.vercel\.app"'`/);
+  assert.match(flat, /`S set staging '"<alias>"'`/);
   assert.match(flat, /does not read `\.gitignore`/);
   assert.match(flat, /`\/dist\/`, `\/\.conversion\/`/);
   assert.match(flat, /`302` to `https:\/\/vercel\.com\/sso-api\?\.\.\.`, not a 401/);
@@ -114,6 +121,8 @@ test('runbook.md launch day sets protection back to preview before the productio
   assert.match(flat, /[Ww]ith the default public staging there is no protection step/);
   const sectionA = read('references/runbook.md').split('## A.')[1].split('\n## ')[0].replace(/\s+/g, ' ');
   assert.match(sectionA, /Vercel, only when the owner opted in to protecting staging: create the Protection Bypass for Automation secret/);
+  const closeout = read('references/runbook.md').split('## B. Closeout')[1].split('\n## ')[0].replace(/\s+/g, ' ');
+  assert.match(closeout, /every staging redeploy is `npx vercel deploy --prod --yes --scope <team slug>` from `astro-rebuild`/);
 });
 
 test('phases.md: the staging deploy links, deploys and takes the alias; the protection PATCH only in the opt-in branch', () => {
@@ -121,6 +130,8 @@ test('phases.md: the staging deploy links, deploys and takes the alias; the prot
   assert.match(prelaunch, /on Vercel: link with the team slug, deploy, take the URL from the deploy JSON/);
   assert.match(prelaunch, /only when the owner opted in to protection \(`publicStaging` `false`\), the protection PATCH comes between link and deploy/);
   assert.match(prelaunch, /never the raw deployment URL/);
+  assert.match(prelaunch, /`npx vercel deploy --prod --yes --scope <scope>` from `astro-rebuild`/);
+  assert.match(prelaunch, /every redeploy before launch updates what reviewers and the audit see/);
 });
 
 test('a protected site ends the run with the resume command; SKILL.md has the nvm line and the scaffold exception', () => {

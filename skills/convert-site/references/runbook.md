@@ -49,6 +49,11 @@ Typical run-specific lines (keep the ones that apply):
       looser threshold is a `docs/visual-overrides.json` entry with its decision id, at most 2 %.
 - [ ] `npm run redirects:build` output committed.
 - [ ] Staging: `<staging url>`, noindexed (`npm run verify:live -- --base <staging url> --expect-noindex`).
+      Vercel with the default public staging: every staging redeploy is
+      `npx vercel deploy --prod --yes --scope <team slug>` from `astro-rebuild`, until launch;
+      before the domain is attached (launch day, from `main`) the production alias
+      `<project>.vercel.app` is staging. With protection opted in, redeploys stay
+      `npx vercel deploy --yes --scope <team slug>` previews.
 - [ ] The one test submission sent to the intake address (date), receipt confirmed by the person.
 - [ ] `docs/suggestions.md` read; the items wanted are picked for `--apply` after launch.
 - [ ] The PR reviewed and merged by the person.

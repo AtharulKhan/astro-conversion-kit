@@ -73,8 +73,11 @@ Deployment Protection covers preview deployments and raw deployment URLs but lea
 production alias `<name>.vercel.app` public, and the first deploy of a new project goes there,
 so that alias is the staging URL: anyone with the link can open it, every page carries
 `noindex, nofollow` and robots.txt blocks everything, and the link is meant to be shared with
-reviewers. No protection setting is changed, and `verify-live` and `launch-audit` run against
-the alias (the raw `*-<hash>.vercel.app` deployment URL stays protected, and a script pointed at
+reviewers. No protection setting is changed; every staging redeploy is
+`npx vercel deploy --prod` from the conversion branch, because until the custom domain is
+attached on launch day the production alias is staging. `verify-live` and `launch-audit` run
+against the alias (taken from the deploy JSON's `alias` list, confirmed with one GET that
+answers 200 with the noindex) (the raw `*-<hash>.vercel.app` deployment URL stays protected, and a script pointed at
 it gets a 302 to `vercel.com/sso-api`, which `verify-live` reports as deployment protection,
 exit 3). Protection is opt-in: when the owner asks for staging behind Vercel Authentication,
 the project is set to protect every deployment before its first deploy

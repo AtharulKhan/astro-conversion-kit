@@ -174,12 +174,9 @@ export function createVerifier({ base, bypass, delay = 500, timeout = REQUEST_TI
         blocks = 0;
         const location = response.headers.get('location');
         if (isVercelProtection(response.status, location)) {
-          const where = new URL(url);
-          const path = where.origin === baseUrl.origin ? `${where.pathname}${where.search}` : url;
           throw new Stopped(
-            `deployment protection: ${path} answered ${response.status} to ${new URL(location).origin}/sso-api; ` +
-              'pass --bypass <secret>, or have the person create the bypass secret (Settings, Deployment Protection, ' +
-              'Protection Bypass for Automation) and run it again',
+            `deployment protection: ${url} redirected to vercel.com/sso-api; use the project's production alias ` +
+              '(public by default), or pass --bypass if staging was deliberately protected',
           );
         }
         return { status: response.status, headers: response.headers, body };
