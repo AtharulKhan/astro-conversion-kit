@@ -36,7 +36,8 @@ test('the home page record carries head, body classes and vendors', () => {
     { href: `${ORIGIN}/wp-content/themes/fixture/style.css?ver=1.4.2`, inline: false },
     { href: null, inline: true },
     { href: null, inline: true },
-  ], 'the theme stylesheet and two WordPress <style> blocks');
+    { href: null, inline: true },
+  ], 'the theme stylesheet and three WordPress <style> blocks');
   assert.equal(record.shortlink, '/?p=2');
   assert.deepEqual(record.alternates, [{ href: `${ORIGIN}/feed/`, type: 'application/rss+xml', hreflang: null }]);
 });

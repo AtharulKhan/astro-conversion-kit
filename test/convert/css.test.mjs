@@ -9,6 +9,7 @@ import { startFixture } from '../fixture/serve.mjs';
 import { mergeRanges } from '../../skills/convert-site/scripts/css-coverage.mjs';
 import { mediaTested, pruneCss, rewriteRef } from '../../skills/convert-site/scripts/css-prune.mjs';
 import { stateBases } from '../../skills/convert-site/scripts/lib/state-selectors.mjs';
+import { scopeInlineRules } from '../../skills/convert-site/scripts/lib/inline-scope.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const SCRIPTS = join(ROOT, 'skills', 'convert-site', 'scripts');
@@ -183,7 +184,8 @@ test('pruning removes the unused rules, keeps pseudo rules and @font-face, and c
   assert.deepEqual(errors, []);
 
   const summary = readJson(report);
-  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'removedRules', 'uncoveredInline', 'unmatched', 'unresolvedImports']);
+  assert.deepEqual(Object.keys(summary).sort(), ['after', 'before', 'keptBecause', 'pageSheets', 'removedRules', 'uncoveredInline', 'unmatched', 'unresolvedImports']);
+  assert.deepEqual(summary.pageSheets, []);
   assert.deepEqual(Object.keys(summary.keptBecause).sort(), ['atRule', 'pseudo', 'state', 'untestedMedia']);
   assert.deepEqual(summary.unmatched, []);
   assert.ok(summary.removedRules >= 20, `removedRules ${summary.removedRules}`);
@@ -263,6 +265,52 @@ test('inline <style> blocks of a real capture are matched to their pages: pruned
   }
   for (const gone of ['img.wp-smiley', '.has-vivid-red-color', '.wpcf7-not-valid-tip']) assert.ok(!text.includes(gone), `${gone} removed`);
   assert.ok(!text.includes('.woocommerce-cart'), 'the theme sheet is still pruned');
+});
+
+test('per-page inline rules that collide (same selector, other declarations) go to that page\'s own sheet, never the global one', async () => {
+  // Block themes print core-block-supports with counter classes: .wp-elements-1 on the home page
+  // and on /contact/ styles different elements. Merged into one sheet, the last page would win.
+  const out = join(TMP, 'capture-collide');
+  rmSync(out, { recursive: true, force: true });
+  const captured = await run(join(ROOT, 'skills', 'capture-site', 'scripts', 'capture.mjs'), [
+    fixture.origin, '--out', out, '--delay', '0', '--no-rest', '--no-wayback',
+  ]);
+  assert.equal(captured.code, 0, captured.stderr);
+  const [home, contact] = readJson(join(out, 'css', 'manifest.json')).filter((entry) => entry.inline);
+  const css = join(TMP, 'collide', 'site.css');
+  const pagesOut = join(TMP, 'collide', 'pages');
+  const report = join(TMP, 'collide', 'report.json');
+  const result = await pruneCli(['--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report, '--pages-out', pagesOut]);
+  assert.equal(result.code, 0, result.stderr);
+  const homeRule = '.wp-elements-1 { scroll-margin-top: 16px; }';
+  const contactRule = '.wp-elements-1 { scroll-margin-top: 48px; }';
+  const global = readFileSync(css, 'utf8');
+  assert.ok(!global.includes('.wp-elements-1'), global.slice(-600));
+  assert.ok(global.includes(':root{--wp--preset--color--black'), 'blocks the pages share stay in the global sheet');
+  const homeSheet = readFileSync(join(pagesOut, home.file), 'utf8');
+  const contactSheet = readFileSync(join(pagesOut, contact.file), 'utf8');
+  assert.ok(homeSheet.includes(homeRule) && !homeSheet.includes(contactRule), homeSheet);
+  assert.ok(contactSheet.includes(contactRule) && !contactSheet.includes(homeRule), contactSheet);
+  assert.ok(!homeSheet.includes(':root{'), 'shared rules are not repeated per page');
+  assert.deepEqual(readJson(report).pageSheets, [
+    { file: home.file, pages: ['/'], rules: 1 },
+    { file: contact.file, pages: ['/contact/'], rules: 1 },
+  ]);
+});
+
+test('scopeInlineRules splits colliding rules inside @media, takes their counter class along, and leaves agreeing files unchanged', () => {
+  const a = '.x { color: red; }\n@media (min-width: 600px) {\n  .wp-container-2 { gap: 1px; }\n  .y { margin: 0; }\n}\n.wp-container-2 > * { flex: 1; }';
+  const b = '.x { color: red; }\n@media (min-width: 600px) {\n  .wp-container-2 { gap: 9px; }\n}';
+  const c = '.x {  color: red; }';
+  const split = scopeInlineRules([{ name: 'a', css: a }, { name: 'b', css: b }, { name: 'c', css: c }]);
+  assert.deepEqual(split.get('a'), {
+    shared: '.x { color: red; }\n@media (min-width: 600px) {\n  .y { margin: 0; }\n}',
+    own: '@media (min-width: 600px) {\n  .wp-container-2 { gap: 1px; }\n}\n.wp-container-2 > * { flex: 1; }',
+    rules: 2,
+  });
+  assert.equal(split.get('b').own, '@media (min-width: 600px) {\n  .wp-container-2 { gap: 9px; }\n}');
+  assert.equal(split.get('b').shared, '.x { color: red; }');
+  assert.deepEqual(split.get('c'), { shared: c, own: '', rules: 0 }, 'whitespace alone is no collision');
 });
 
 test('an inline file no coverage saw is kept whole and listed, without failing the run', async () => {
