@@ -67,6 +67,18 @@ Cloudflare: a query row (`/?p=7`) cannot be matched by `_redirects` and goes to
 `cloudflare-query-redirects.csv`, to be created as a Single Redirect (a "needs you" item). A
 query row whose target is its own path (`/?p=2` to `/`) is a no-op and is left out on both hosts.
 
+A captured row (any `source` but `decision`) is a live URL and holds no parameters: for Vercel
+every `:` and `*` in it is escaped (`/foo:bar/` is written `/foo\:bar/`, and so is
+`/trackshttps://www.example.com/x/`, a broken live href the capture followed); `//` is kept.
+Only a `decision` row uses `:name` parameters and `*` splats, and even there a `:` before a
+digit (a port) is escaped. Vercel rejects a bare `:`, and so does the gates' simulation of it.
+A source with no valid form (no leading `/`, whitespace, a control character; on Cloudflare also
+a captured `:<name>` or `*`, which `_redirects` cannot escape) is dropped, named on stderr and
+listed as `{ source, reason }` in `redirects-skipped.json`. That file sits beside
+`redirects.csv` (the site root), never under `public/`, so it is not deployed. The redirects gate
+and `verify-live` count a listed row as skipped, never passed. When the path should simply have no redirect, record a "no redirect" exception
+instead (section 4): `{ "kind": "redirect", "path": "<source>", "reason": "...", "action": "none", "approvedBy": "...", "date": "..." }`.
+
 ## 3. Verify
 
     npm run build
@@ -82,16 +94,21 @@ rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 
 | Gate | Passes when | A skip means |
 |---|---|---|
-| `forms` | Each live form is on its page with the same field names in order and method; a POST form's action is `--endpoint` and it carries `--honeypot`; a GET form (a search box) keeps live's action path and needs neither ("N search/GET forms compared") | No `--thank-you`: the thank-you page of the POST forms was not checked |
+| `forms` | Each live form is on its page with the same field names in order and method; a POST form's action is `--endpoint` and it carries `--honeypot`; a GET form (a search box) keeps live's action path and needs neither ("N search/GET forms compared"); a POST form whose live action is on another registrable domain (a newsletter list host; www, http, subdomains and WordPress handlers such as `admin-ajax.php` or `?wpcf7` count as the site) is kept as is, compared like a GET form by its full action URL, and needs no `--endpoint` ("N forms kept as is (posts to <host>)") | No `--thank-you`: the thank-you page of the POST forms was not checked |
 | `headers` | Host config sends nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors on every path, and, when not indexable, `X-Robots-Tag: noindex` on every path or (Vercel) the meta robots noindex on every built page; a preview-host rule (`https://*.pages.dev/*`) counts only for the preview host; with `PUBLIC_INDEXABLE=true` noindex on every path is forbidden | |
 | `links` | Every internal href and src resolves to a built page or file, a redirect source or baseline media, or lands on a built page in one hop through the compiled rules (`vercel.json` or `dist/_redirects`: the slash rules and every `redirects.csv` row), as live redirected it ("N links resolved through redirects"); two hops or a missing target fail; with no host config, `/about` where the build serves `/about/` fails | |
-| `media` | Every baseline media file is served by the build with the same bytes (`--paths` picks a file by its path or by a page that references it): in `dist/` in plan mode `repo`; under the plan's `prefix`, in the store manifest (`store`) or still on live (`live-temporary`); outside the prefix, in `dist/` in every mode. With `PUBLIC_INDEXABLE=true`, `live-temporary` fails every file (a release build may not serve media from the live site) | Plan mode `live-temporary` on a staging build: files under the prefix are served from live, not checked |
-| `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external); no source is also a built file; no built page or file is redirected away from its own URL (`built page redirected by rule <rule>`; no exception covers it, fix the rule) | A no-op query row, or any query row on Cloudflare |
+| `media` | Every baseline media file is served by the build with the same bytes (`--paths` picks a file by its path or by a page that references it): in `dist/` in plan mode `repo`; under the plan's `prefix`, in the store manifest (`store`) or still on live (`live-temporary`); outside the prefix, in `dist/` in every mode. With `PUBLIC_INDEXABLE=true`, `live-temporary` fails every file under the prefix (a release build may not serve media from the live site; a plan without a prefix covers every file) and still checks the files outside it in `dist/` | Plan mode `live-temporary` on a staging build: files under the prefix are served from live, not checked |
+| `redirects` | Every baseline redirect and csv row answers in one hop with the same status, and the target answers 200 in `dist/` (or is external, or under a prefix in baseline `meta.json` `excluded`: then only the first hop is checked); no source is also a built file; no built page or file is redirected away from its own URL (`built page redirected by rule <rule>`; no exception covers it, fix the rule); a path with a "no redirect" exception (`kind: "redirect"`, `action: "none"`) is not redirected at all | A no-op query row, any query row on Cloudflare, or a source with no valid form that `redirects-skipped.json` lists with a reason (`not compiled`) |
 | `routes` | Every page, post, archive and feed at 200 is built, noindex routes still say noindex, nothing extra is built (the capture's own scripts in `baseline/js.json` at their live paths, the live sitemap names in `baseline/sitemaps.json`, and the launch icon set are not extras); a route captured at any status other than 200, 3xx, 404 or 410 fails as `not captured: <status>` unless a `routes` exception skips it or names its built replacement | A `routes` exception with `to: "skip"`: that route was never captured |
 | `scripts` | Each kept vendor is on exactly its live pages with the same ids; a dropped one on none; no new vendor | |
 | `seo` | Title, description, canonical, robots, lang, h1, h2, og and JSON-LD @types equal per page; site URLs on the site's origin. Unless `PUBLIC_INDEXABLE=true`, robots must carry the staging `noindex, nofollow` and the rest of it equals live's past those two; a release build compares robots exactly | |
 | `sitemaps` | Every top sitemap in `dist/` (Astro's `sitemap-index.xml`, or a live name in `baseline/sitemaps.json` such as `wp-sitemap.xml` or `sitemap_index.xml`) lists exactly the indexable 200 pages on the origin (percent escapes compare case-blind: `%c3` is `%C3`); every robots.txt `Sitemap:` line is on the origin and names a file in `dist/`, or is a line the live robots.txt (`capture/robots.txt`) carried verbatim; every feed is built with as many items | |
 | `text` | Each page's visible text equals `baseline/text/` (word diff, 5 words of context) | |
+
+A capture made with `--exclude` records its path prefixes in `baseline/meta.json` `excluded`: the
+`links` gate does not check a link under one (like a link to another host, noted "N links under
+excluded paths ... not checked"), and the `sitemaps` gate accepts a robots.txt `Sitemap:` line under
+one when the live robots.txt carried it verbatim (a multisite sub-site's sitemap on the same host).
 
 ## 4. Differences and decisions
 
@@ -101,6 +118,14 @@ build adds, `to: ""` one it removes; an exception that no longer matches, or nam
 does not check, **fails** the gate. Every oddity on the live site (a missing H1, a dead tag, a
 broken link) is reproduced by default and gets a decision row (id, topic, choice, default,
 reason, cost if wrong) saying so and what the fix would be.
+
+One record has a `kind` instead of a `field`: `{ "kind": "redirect", "path": "<source>",
+"reason": "...", "action": "none", "approvedBy": "...", "date": "..." }` means "no redirect for
+this path, on purpose" (a live redirect recorded for a broken href that nothing should
+redirect). Every key is required: it removes a live behaviour, so it is signed off like any
+exception. The redirects gate requests the path and passes it only when the rules do not
+redirect it; on a path the gate does not check it fails as `path not checked`; `verify-live`
+skips it with the reason. Every other gate ignores it.
 
 ## 5. Staging, proposals and release builds
 
@@ -126,7 +151,9 @@ needs none.
 It checks every baseline route at 200 (or a `--sample`), every redirect in one hop with the same
 kind of status, noindex on pages iff `--expect-noindex`, the sitemap, and 20 media files by
 bytes (or `--media-manifest`, whose `url` may be the store's absolute URL or a site path checked
-at `<base><path>`). Every request times out after 30 s, a failure of that check rather than a
+at `<base><path>`). A redirect listed in `redirects-skipped.json` or covered by a "no redirect"
+exception (`--skipped`, `--exceptions`; both read from the site root by default) is skipped and
+named with its reason. Every request times out after 30 s, a failure of that check rather than a
 block. Exit 3 means it was blocked: wait and rerun. Exit 3 with `deployment protection:` means
 Vercel answered with its login redirect (302 to `vercel.com/sso-api`): use the project's
 production alias (public by default) rather than the raw deployment URL; only when staging was

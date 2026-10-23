@@ -4,20 +4,23 @@
 // external URL; no redirect source is also a page or file in dist; and no built page or file is
 // redirected away from its own URL by the rules (the slash rules included).
 import { existsSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
-import { applyExceptions, exceptionFailure } from '../lib/exceptions.mjs';
+import { applyExceptions, exceptionFailure, isNoRedirect } from '../lib/exceptions.mjs';
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
-import { isDynamic, isExternal, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
+import { SKIPPED_JSON, hostSourceProblem, isDynamic, isExternal, isLiteral, isNoop, readRedirectsCsv, readSkippedListing } from '../lib/redirects-csv.mjs';
 import { hostResolver } from '../lib/host-resolver.mjs';
+import { excludedBy } from '../lib/excluded.mjs';
 
 const NAME = 'redirects';
 const DEFAULT_CSV = 'redirects.csv';
 const UNVERIFIED = ' [unverified live]';
 export const SKIP_NOOP = 'noop: destination equals source path';
 export const SKIP_CLOUDFLARE_QUERY = 'query redirect, needs a Cloudflare Single Redirect';
+export const SKIP_NOT_COMPILED = `not compiled (${SKIPPED_JSON})`;
+const NO_REDIRECT = 'no redirect (exception)';
 const SAMPLE = 'sample';
 const OPTIONS = {
   host: { type: 'string', default: '', description: 'vercel or cloudflare (default: whichever config exists)' },
@@ -45,6 +48,13 @@ redirect away fails as "built page redirected by rule <rule>" (a slash rule that
 correct the redirects.csv row that catches the page) instead.
 A redirect exception (field "redirect", path = the source, from = the baseline target, to = the
 new target) approves a changed target. Write the host config with build-redirects.mjs first.
+A "no redirect" exception { kind: "redirect", path, reason, action: "none", approvedBy, date } says the path has
+no redirect on purpose: it is requested and passes only when the rules do not redirect it.
+A source with no valid form (no leading /, whitespace, a control character) that build-redirects
+dropped and listed with a reason in ${SKIPPED_JSON} beside the csv is skipped (${SKIP_NOT_COMPILED}).
+Any other row missing from the config fails as "no redirect".
+A target under a prefix the capture left out (baseline meta.json "excluded") is not built: like
+an external target, only the first hop's location and status are checked.
 `;
 
 const show = (hops, max = 4) =>
@@ -75,10 +85,10 @@ function servedPaths(dist) {
 // The entries to check, by source: baseline redirects first, then redirects.csv rows not in it.
 function entriesOf(baseline, rows) {
   const entries = new Map();
-  for (const r of baseline) entries.set(r.from, { from: r.from, to: r.to, status: r.status, unverified: r.verified === false });
+  for (const r of baseline) entries.set(r.from, { from: r.from, to: r.to, status: r.status, source: r.source, unverified: r.verified === false });
   for (const row of rows) {
     if (entries.has(row.from)) continue;
-    entries.set(row.from, { from: row.from, to: row.to, status: row.status, unverified: /unverified/i.test(row.note) });
+    entries.set(row.from, { from: row.from, to: row.to, status: row.status, source: row.source, unverified: /unverified/i.test(row.note) });
   }
   return [...entries.values()];
 }
@@ -150,11 +160,15 @@ export function builtUrls(files, routes = []) {
   return urls;
 }
 
-export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true }) {
+// notCompiled: source -> reason, from build-redirects' SKIPPED_JSON.
+export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true, notCompiled = new Map(), excluded = [] }) {
   const relevant = exceptions.filter((e) => e.field === 'redirect');
+  const noRedirect = new Set(exceptions.filter(isNoRedirect).map((e) => e.path));
   const entries = entriesOf(baseline, rows).filter((e) => paths(e.from));
   const known = new Set(entries.map((e) => e.from));
-  const failures = relevant.filter((e) => paths(e.path) && !known.has(e.path)).map((e) => exceptionFailure(e, 'path not checked'));
+  const failures = [...relevant, ...exceptions.filter(isNoRedirect)]
+    .filter((e) => paths(e.path) && !known.has(e.path))
+    .map((e) => exceptionFailure(e, 'path not checked'));
   const skips = [];
   const { served, pages } = servedPaths(dist);
   const local = (url) => {
@@ -167,6 +181,16 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
     const { expected, staleExceptions } = applyExceptions({ redirect: local(entry.to) }, entry.from, relevant);
     failures.push(...staleExceptions.map((e) => exceptionFailure(e, 'no longer matches the baseline')));
     const target = expected.redirect;
+    if (noRedirect.has(entry.from)) {
+      checked += 1;
+      const { hops } = resolve(entry.from);
+      if (hops.length) failures.push({ path: entry.from, field: 'redirect', expected: NO_REDIRECT, actual: show(hops) });
+      continue;
+    }
+    if (notCompiled.has(entry.from) && hostSourceProblem(entry, host)) {
+      skips.push({ from: entry.from, reason: `${SKIP_NOT_COMPILED}: ${notCompiled.get(entry.from)}` });
+      continue;
+    }
     if (isNoop({ from: entry.from, to: target })) {
       skips.push({ from: entry.from, reason: SKIP_NOOP });
       continue;
@@ -175,7 +199,7 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
       skips.push({ from: entry.from, reason: SKIP_CLOUDFLARE_QUERY });
       continue;
     }
-    const dynamic = isDynamic(entry.from);
+    const dynamic = !isLiteral(entry) && isDynamic(entry.from);
     const requests = dynamic ? samplesFor(entry.from, target, pages) : [{ url: entry.from, target }];
     for (const request of requests) {
       checked += 1;
@@ -187,6 +211,16 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
       if (last !== null && !want.includes('?')) last = withoutQuery(last);
       const same = dynamic ? (a, b) => unslash(a) === unslash(b) : (a, b) => a === b;
 
+      // A target the capture left out (meta.excluded) is not built: like an external target, only
+      // the first hop's location and status are checked.
+      if (!isExternal(want) && excludedBy(excluded, withoutQuery(want))) {
+        let first = hops.length ? local(hops[0].to) : null;
+        if (first !== null && !want.includes('?')) first = withoutQuery(first);
+        if (hops.length === 0) fail('redirect', want, `no redirect: ${final.status} at ${final.path}`);
+        else if (!same(first, want)) fail('redirect', want, show(hops, 1));
+        else if (hops[0].status !== entry.status) fail('status', entry.status, `${hops[0].status}`);
+        continue;
+      }
       if (final.status === 'loop') fail('loop', `1 hop to ${want}`, show(hops));
       else if (hops.length === 0) fail('redirect', want, `no redirect: ${final.status} at ${final.path}`);
       else if (!same(last, want)) fail('redirect', want, show(hops));
@@ -219,6 +253,15 @@ const exit2 = (message) => {
   process.exit(2);
 };
 
+// build-redirects' listing of dropped sources: source -> reason, for the entries with a reason.
+function readNotCompiled(file) {
+  try {
+    return readSkippedListing(file);
+  } catch (error) {
+    return exit2(error.message);
+  }
+}
+
 // Cloudflare reads the _redirects Astro copied into dist/ from public/; a copy anywhere else is not
 // what deploys.
 function pickHost(args) {
@@ -246,11 +289,12 @@ function main() {
   let rows = [];
   if (existsSync(args.csv)) {
     try {
-      rows = readRedirectsCsv(args.csv);
+      rows = readRedirectsCsv(args.csv, { lenientFrom: true });
     } catch (error) {
       exit2(error.message);
     }
   } else if (args.csv !== DEFAULT_CSV) exit2(`not found: ${args.csv}`);
+  const notCompiled = readNotCompiled(join(dirname(args.csv), SKIPPED_JSON));
   const metaFile = join(args.baseline, 'meta.json');
   const meta = existsSync(metaFile) ? readJson(metaFile) : {};
   const origins = [meta.origin, meta.canonicalOrigin].filter(Boolean).map((o) => o.replace(/\/+$/, ''));
@@ -270,6 +314,8 @@ function main() {
     exceptions: gateExceptions(NAME, args),
     origins,
     paths: args.paths,
+    notCompiled,
+    excluded: Array.isArray(meta.excluded) ? meta.excluded : [],
   });
   report(NAME, results, { json: args.json });
 }

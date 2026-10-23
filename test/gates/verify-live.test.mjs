@@ -169,6 +169,39 @@ test('a redirect that takes two hops fails; a failing unverified shortlink fails
   assert.deepEqual(json.skipped, []);
 });
 
+test('a redirect build-redirects dropped (redirects-skipped.json) or a no-redirect exception covers is skipped with its reason', async () => {
+  const base = join(root, 'baseline-dropped');
+  cpSync(baseline, base, { recursive: true });
+  const extra = [
+    { from: '/two words/', to: '/contact/', status: 301, source: 'crawl' },
+    { from: '/no-more/', to: '/contact/', status: 301, source: 'crawl' },
+  ];
+  writeFileSync(join(base, 'redirects.json'), JSON.stringify([...JSON.parse(readFileSync(join(baseline, 'redirects.json'), 'utf8')), ...extra]));
+  const host = await serve(good);
+  const run = (args = []) => verifyLive(['--base', host.origin, '--baseline', base, '--delay', '0', ...args]);
+  const failed = await run(['--json']);
+  assert.equal(failed.code, 1, 'neither is redirected by the deploy');
+  assert.deepEqual(JSON.parse(failed.stdout).failures.map((f) => f.path).sort(), ['/no-more/', '/two words/']);
+
+  const skippedFile = join(root, 'dropped-redirects-skipped.json');
+  writeFileSync(skippedFile, JSON.stringify([{ source: '/two words/', reason: 'contains whitespace: no vercel rule can match it' }]));
+  const exceptionsFile = join(root, 'dropped-exceptions.json');
+  writeFileSync(exceptionsFile, JSON.stringify([{ kind: 'redirect', path: '/no-more/', reason: 'a broken live href', action: 'none', approvedBy: 'client', date: '2026-10-23' }]));
+  const args = ['--skipped', skippedFile, '--exceptions', exceptionsFile];
+  const passed = await run(args);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^ {2}skipped redirect \/two words\/: not compiled \(redirects-skipped\.json\): contains whitespace/m);
+  assert.match(passed.stdout, /^ {2}skipped redirect \/no-more\/: no redirect \(exception\): a broken live href$/m);
+  assert.match(passed.stdout, /^verify-live: 2 redirects skipped with a reason$/m);
+  const json = JSON.parse((await run([...args, '--json'])).stdout);
+  assert.deepEqual(json.skipped.filter((s) => s.check === 'redirect').map((s) => s.path), ['/two words/', '/no-more/']);
+  assert.equal(json.failed, 0);
+  // A listing only counts for a source that really has no valid form.
+  writeFileSync(skippedFile, JSON.stringify([{ source: '/no-more/', reason: 'listed by hand' }]));
+  assert.equal((await run(['--skipped', skippedFile])).code, 1);
+  assert.equal((await run(['--skipped', join(root, 'missing.json')])).code, 2);
+});
+
 test('a query redirect whose target is its own path must answer 200 in place', async () => {
   const host = await serve(good);
   const result = await live(host.origin);

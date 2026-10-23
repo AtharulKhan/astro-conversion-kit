@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Brand assets: the logo, the favicon, the apple-touch-icon and every web font, saved byte for
-// byte into <capture>/assets/ so the build can use the originals.
+// byte into <capture>/assets/ so the build can use the originals; the root icons capture.mjs
+// saved (assets/root-favicon.ico, assets/root-apple-touch-icon.png) are listed with them.
 // Sources: <link rel=icon|apple-touch-icon> and the logo (findLogo: in <header> first, then in
 // other logo elements, an image or inline <svg> named logo, the home link's image, else the
 // first <img>) on the home page snapshot, and every @font-face src in the stylesheets under <capture>/css/.
@@ -13,9 +14,10 @@ import * as csstree from 'css-tree';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { serializeOuter } from 'parse5';
 import { attr, children, findAll, isElement, parseHtml } from '../../parity-gates/scripts/lib/html.mjs';
+import { excludedBy, parseExclude } from './lib/exclude.mjs';
 import { BLOCK_LIMIT, DEFAULT_CONCURRENCY, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, MAX_FILE_BYTES, pacing, POLITE_DELAY_MS } from './lib/http.mjs';
 
-const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--concurrency <n>] [--polite] [--ua "<string>"] [--max-file-bytes <n>]
+const USAGE = `Usage: node assets.mjs --capture <dir> [--exclude <prefix>[,...]] [--delay <ms>] [--concurrency <n>] [--polite] [--ua "<string>"] [--max-file-bytes <n>]
 
 Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
 (logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is found on the home page inside
@@ -26,6 +28,10 @@ alt, class or id says "logo", else an inline <svg> that does (saved as logo.svg)
 capture.mjs; without it, fonts are reported as not captured).
 
   --capture <dir>   the capture folder written by capture.mjs
+  --exclude <prefix>[,<prefix>...]  also leave out assets on the site whose path starts with
+                    one of these (repeatable); the capture's own --exclude prefixes (meta.json
+                    excluded) always apply. One under a prefix is listed with the note
+                    "excluded (under <prefix>)" and never requested
   --delay <ms>      time between request starts on a host (default ${DEFAULT_DELAY_MS})
   --concurrency <n> requests in flight on a host at once (default ${DEFAULT_CONCURRENCY})
   --polite          one request at a time, ${POLITE_DELAY_MS} ms apart; --delay and
@@ -35,7 +41,10 @@ capture.mjs; without it, fonts are reported as not captured).
                     listed with status "too-large"
   --help            show this help
 
-Writes <dir>/assets/index.json listing each asset looked for. An asset that does not answer
+Writes <dir>/assets/index.json listing each asset looked for, and the root icons capture.mjs
+asked for (kind "root-icon", with path: /favicon.ico or /apple-touch-icon.png, and file:
+assets/root-favicon.ico or assets/root-apple-touch-icon.png when live served it), which the
+build copies to public/ at that path. An asset that does not answer
 200 is a warning on stderr and is listed there as missing. Files stream to disk; a host that
 resolves to a loopback, private or link-local address (other than the site's own) is not
 requested and is listed with status "blocked-address".
@@ -194,13 +203,20 @@ function extensionFor(url, contentType) {
 }
 
 function parseArgs(argv) {
-  const args = { capture: null, delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
+  const args = { capture: null, exclude: [], delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i) => (i < argv.length && !argv[i].startsWith('--') ? argv[i] : null);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--capture' && value(i + 1)) args.capture = argv[(i += 1)];
     else if (arg === '--ua' && value(i + 1)) args.ua = argv[(i += 1)];
+    else if (arg === '--exclude' && value(i + 1)) {
+      try {
+        args.exclude = parseExclude([...args.exclude, argv[(i += 1)]]);
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
     else if (arg === '--delay' && value(i + 1)) {
       args.delayMs = Number(argv[(i += 1)]);
       if (!Number.isInteger(args.delayMs) || args.delayMs < 0) return { error: '--delay needs a whole number' };
@@ -247,7 +263,18 @@ async function main() {
 
   const fontNames = new Map(); // file name -> url, so two fonts with one name do not overwrite
   // Saves url as <out>/<stem><ext>, or fonts/<name> (kept when already saved).
+  const prefixes = [...(meta.excluded ?? []), ...args.exclude];
+  const site = origin ? new URL(origin).host.replace(/^www\./i, '').toLowerCase() : null;
+  const excludedPrefix = (url) => {
+    const target = new URL(url);
+    return target.host.replace(/^www\./i, '').toLowerCase() === site ? excludedBy(prefixes, target.pathname) : null;
+  };
   const save = async (kind, url, stem, { keepName = false } = {}) => {
+    const prefix = excludedPrefix(url);
+    if (prefix) {
+      entries.push({ kind, url, file: null, status: null, note: `excluded (under ${prefix})` });
+      return;
+    }
     let name = null;
     if (keepName) {
       const original = basename(new URL(url).pathname) || 'font';
@@ -309,11 +336,14 @@ async function main() {
         if (url) await save(kind, url, kind);
         else absent(kind, missing);
       }
-      // The root icons browsers and launch checks ask for whatever the head links; saved when the
-      // capture's probe (meta.json icons) saw live answer 200.
-      for (const [path, stem] of [['/favicon.ico', 'root-favicon'], ['/apple-touch-icon.png', 'root-apple-touch-icon']]) {
-        if (origin && meta.icons?.[path] === 200) await save(stem, new URL(path, origin).href, stem);
-      }
+    }
+
+    // The root icons capture.mjs saved (meta.json icons), listed so the build ships each at its
+    // live path: { kind: "root-icon", url, path, file, status, note }. Never requested here.
+    for (const [path, icon] of Object.entries(meta.icons ?? {})) {
+      if (!icon || typeof icon !== 'object' || !origin) continue; // a capture older than the saved bytes
+      const note = icon.file ? null : icon.note ?? `live answered ${icon.status}`;
+      entries.push({ kind: 'root-icon', url: new URL(path, origin).href, path, file: icon.file, status: icon.status, note });
     }
 
     const fonts = origin ? fontUrls(dir, origin) : null;

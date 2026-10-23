@@ -30,7 +30,12 @@ parity and this file is wrong: say so and fix this file.
 
 ## URLs in the captured markup
 
-- **Content links stay as captured.** Every `<a href>` (and `<area href>`, a form `action`, and
+- **Forms that already post elsewhere stay as captured.** A POST form whose `action` is on
+  another registrable domain (a newsletter list host, a form service) is kept exactly as captured and listed
+  in the plan under "Forms kept as is" with its action host; only a POST form posting to the
+  old site (an empty or relative action, the live origin, `/wp-admin/admin-ajax.php`,
+  `/wp-comments-post.php`) is rewired to the form endpoint (`forms.md`).
+- **Content links stay as captured.** Every `<a href>` (and `<area href>`, a form `action` other than the rewired ones above, and
   the head's canonical, alternate, REST and oEmbed links) keeps the URL the capture saved, a
   same-origin absolute one (`https://<live host>/team`) included: never rewrite one to
   root-relative or to another host. The links gate counts same-origin absolute links as internal.
@@ -46,9 +51,10 @@ parity and this file is wrong: say so and fix this file.
   (canonical, alternate, og) alone and keeps any href that a `link` exception records exactly
   as recorded. Record it in `proposals.json` with `field: "markup"`, one record per page it
   changes (`from` the live href form, `to` the root-relative one); no gate compares it, since the
-  links gate already counts both forms as internal. A reference implementation is
-  `src/lib/links.mjs` in the angrybirds.com demo
-  ([ethanplusai/angrybirds-com#2](https://github.com/ethanplusai/angrybirds-com/pull/2)).
+  links gate already counts both forms as internal. The helper is a dozen lines: match
+  `href="https://www.example.com/..."` (and the `http://`, `//` and apex forms) in the body
+  markup, replace the origin with nothing when `proposalOn(id)` is true, and return the markup
+  unchanged otherwise.
 - **WordPress API head links are kept as captured.** `wp-json/` (`rel="https://api.w.org/"`),
   `xmlrpc.php?rsd` (`EditURI`) and `wp-json/wp/v2/pages/N` (`alternate`) stay in the head
   although nothing answers them on a static host. The build generates their links exceptions,
@@ -124,6 +130,11 @@ parity and this file is wrong: say so and fix this file.
   with the same families, weights and styles. Replacing a font service link with local
   `@font-face` rules is a decision row; the visual review proves it.
 - Logo, favicon, apple-touch-icon and the web manifest from `capture/assets/`, same paths.
+- Every `root-icon` entry in `capture/assets/index.json` that has a `file` is copied byte for
+  byte to `public/<path>` (`assets/root-favicon.ico` → `public/favicon.ico`,
+  `assets/root-apple-touch-icon.png` → `public/apple-touch-icon.png`). One with `file: null` is
+  an icon live did not serve at the root (its status and note say why); copy-assets copies each
+  `root-icon` entry with a `file` to `public/` plus its `path`.
 
 ## Scripts
 

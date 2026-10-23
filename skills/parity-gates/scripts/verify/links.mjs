@@ -14,6 +14,7 @@ import { relTokens } from '../lib/head.mjs';
 import { srcsetUrls } from '../lib/srcset.mjs';
 import { distFiles, feedFiles, htmlPages, originOf, pageFiles, pageFormat, readJson, requireInputs } from '../lib/dist.mjs';
 import { findHost, hostResolver } from '../lib/host-resolver.mjs';
+import { excludedBy } from '../lib/excluded.mjs';
 
 const NAME = 'links';
 const OPTIONS = {
@@ -31,6 +32,9 @@ dist/_redirects; the slash rules and every redirects.csv row) take it to a built
 one hop, as live redirected it; the summary notes "N links resolved through redirects". Two
 hops, or a hop to a page that is not built, still fail. Without a host config the note says so
 and no link is resolved that way.
+A link whose path is under a prefix the capture left out (--exclude, baseline/meta.json
+excluded: a multisite's sub-site, a section the owner kept) is not checked, like a link to
+another host: the build serves no such page.
 `;
 export const BROKEN = 'a built page, file, redirect source or media path';
 const SKIP_SCHEME = /^(?:mailto|tel|sms|javascript|data|blob|about):/i;
@@ -102,6 +106,7 @@ export function checkLinks({ dist, redirects, media, meta, exceptions, origin = 
   const relevant = exceptions.filter((e) => e.field === 'link');
   const pages = htmlPages(files).filter((p) => paths(p.path));
   let viaRedirect = 0;
+  let excluded = 0;
   const known = new Set(pages.map((p) => p.path));
   const failures = relevant.filter((e) => paths(e.path) && !known.has(e.path)).map((e) => exceptionFailure(e, 'path not checked'));
   for (const page of pages) {
@@ -117,6 +122,10 @@ export function checkLinks({ dist, redirects, media, meta, exceptions, origin = 
         continue;
       }
       if (!internal.has(url.origin)) continue;
+      if (excludedBy(meta.excluded, url.pathname)) {
+        excluded += 1;
+        continue;
+      }
       const expected = resolveLink(url, context);
       if (expected && resolve && oneHop(resolve, url)) viaRedirect += 1;
       else if (expected) broken.push({ href, expected });
@@ -131,6 +140,7 @@ export function checkLinks({ dist, redirects, media, meta, exceptions, origin = 
     }
   }
   const notes = [resolve ? `${viaRedirect} links resolved through redirects` : 'no host config (vercel.json or dist/_redirects): no link resolved through redirects'];
+  if (meta.excluded?.length) notes.push(`${excluded} links under excluded paths (${meta.excluded.join(', ')}) not checked`);
   return { checked: pages.length, failures, notes };
 }
 

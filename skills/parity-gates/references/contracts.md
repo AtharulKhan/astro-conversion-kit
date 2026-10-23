@@ -58,7 +58,8 @@ Fields are named `input`, `select` and `textarea` elements in document order, wi
 button, reset and image inputs.
 Every form is recorded, a search box (`method: "get"`) too. The forms gate treats only a `post`
 form as a submission form (endpoint, honeypot, thank-you page); a `get` form must keep live's
-action path, method and fields.
+action path, method and fields, and so must a `post` form whose action is on another registrable domain
+(kept as is: it already posts to a third party).
 
 ## baseline/scripts.json
 
@@ -119,7 +120,8 @@ vendors.
 
 - `from`: a root-relative path, optionally with a query (`/?p=7`), or a catch-all: a trailing
   `/*` (the target may use `:splat`) or a `:name*` or `:name+` parameter (the target may use
-  `:name`).
+  `:name`). Catch-alls and parameters are read only on a `decision` row; on a captured row
+  every `:` and `*` is a literal character of the live URL.
   Matching is case-sensitive. No spaces: encode them as `%20`.
 - `to`: a root-relative path or an absolute URL.
 - `status`: 301, 302, 303, 307 or 308.
@@ -131,7 +133,19 @@ vendors.
   A hop row keeps the head's status and source; it is in `baseline/redirects.json` too.
 
 The file is RFC 4180 CSV (quote a field holding a comma). A malformed file makes
-`build-redirects.mjs` exit 2 naming the line.
+`build-redirects.mjs` exit 2 naming the line; a `from` with no valid host form (no leading `/`,
+whitespace, a control character) is not malformed: the row is dropped and listed in
+`redirects-skipped.json`.
+
+## redirects-skipped.json
+
+Written beside `redirects.csv` by `build-redirects.mjs` when a row's source has no valid form,
+removed by a run that drops nothing:
+
+    [{ "source": "/two words/", "reason": "contains whitespace: no host rule can match it" }]
+
+The redirects gate skips a listed row (`not compiled`) when its source really has no valid form
+and the reason is not empty; any other row missing from the config fails.
 
 ## cloudflare-query-redirects.csv
 

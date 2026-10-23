@@ -74,14 +74,31 @@ source. Run each step as its own command, in this order:
    pass `--verify-shortlinks`. After the crawl it requests one path that cannot exist
    (`/<32 hex>/`) once, so the site's own 404 page is saved as `pages/404.html` (`meta.json`
    `notFound`; a site that answers 200 or redirects there is recorded with no page), and asks
-   for `/favicon.ico` and `/apple-touch-icon.png` once each (`meta.json` `icons`: path to
-   status). URLs are keyed with upper-case percent escapes (`%c3%a9` and `%C3%A9` are one URL),
+   for `/favicon.ico` and `/apple-touch-icon.png` once each, redirects followed (`meta.json`
+   `icons`: path to `{ status, file, contentType, bytes }`); one that answers 200 is saved byte
+   for byte as `assets/root-favicon.ico` or `assets/root-apple-touch-icon.png` (an HTML answer
+   is not saved and has a `note`; one over 5 MB is status `"too-large"`), and `assets.mjs` lists
+   it in `assets/index.json` as kind `"root-icon"` with its `path`, so the build ships it there.
+   URLs are keyed with upper-case percent escapes (`%c3%a9` and `%C3%A9` are one URL),
    so a page linked with both spellings is captured once. A sitemap robots.txt names that answers 404 (or any non-200) is listed in
    `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`. A sitemap on
    another host (robots.txt naming a sister site's, or an index listing one; www and apex count
    as one host) is listed there as `{ url, host, skipped: "other host" }` and never fetched, so
    none of its URLs enter the crawl. Two sitemap URLs with the same file name never overwrite
    each other: the second is saved with a suffix from its directory path (`page-sitemap-es.xml`).
+   `--exclude <prefix>[,<prefix>...]` leaves parts of the host out (a WordPress multisite's
+   sub-sites such as `/president/`, or a section the owner keeps): a URL whose path starts with
+   one is never requested, whether a sitemap, the REST lists, a link or a redirect leads there.
+   A sitemap under one is listed in `sitemaps/index.json` as `{ url, skipped: "excluded" }`; a
+   redirect into one is recorded with that target, unrequested; links to one stay in the saved
+   HTML and are listed in `links.json` `excluded`, not `internal`; `meta.json` `excluded` names
+   the prefixes and the baseline carries them. Prefixes and paths compare in one form, so
+   `/présidence/`, `/pr%c3%a9sidence/` and `/pr%C3%A9sidence/` are the same prefix. A stylesheet
+   or root icon that redirects under one is not followed there (the sheet is listed with status
+   `"excluded"`). `--resume` keeps them; a prefix added on `--resume` removes what was already
+   captured under it (its pages with their `pages/` and `text/` files, redirects from it, feeds
+   and sitemaps under it, and stylesheets and scripts only those pages used) and prints what it
+   removed. `media.mjs` and `assets.mjs` skip files under them too.
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
@@ -220,7 +237,9 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     inventory.json        one record per page: status, head tags, JSON-LD, headings, forms, links
     pages/  text/         raw HTML and visible text per page
     redirects.json        every redirect, chains collapsed, hops kept; shortlinks marked verified or not
-    links.json            internal and external links, with the pages that carry them
+    links.json            { internal, external } maps of link -> [pages that carry it]; with
+                          --exclude also "excluded": { "<path>": [pages] }, the links under an
+                          excluded prefix (kept in the HTML, never in internal, never requested)
     scripts.json          third-party vendors with their ids and pages
     media.json            every media file with sources, pages, status, type and bytes; a size
                           only the REST list names: downloaded: false, "unreferenced size"
@@ -238,13 +257,15 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
                           not saved (an HTTP status, "off-site" for a redirect off the host,
                           "too-large" over 5 MB); [] when the site has none
     templates.json        template clusters with a representative page each
-    assets/               logo, icons, fonts, index.json
+    assets/               logo, icons, fonts, index.json; root-favicon.ico and
+                          root-apple-touch-icon.png when live served them at the root
     screens/live/         live screenshots and manifest.json (gitignored)
     lighthouse-live/      Lighthouse reports, when run (gitignored)
     pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)
     sitemaps/             every sitemap robots.txt names, the default index, and their children;
                           index.json: every sitemap URL asked for { url, status, file }, and
-                          { url, host, skipped: "other host" } for one on another host
+                          { url, host, skipped: "other host" } for one on another host,
+                          { url, skipped: "excluded" } for one under an --exclude prefix
     feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 

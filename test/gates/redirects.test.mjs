@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -270,6 +270,102 @@ test('a built file whose extension the compiler never saw is caught as redirecte
   const result = await gate(vercelDir, dist);
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^ {2}\/wp-content\/uploads\/2026\/01\/data\.Qxz redirected: expected "no redirect", got "built file redirected by rule [^"]+: 308 \/wp-content\/uploads\/2026\/01\/data\.Qxz\/"$/m);
+});
+
+const COLON_SOURCE = '/trackshttps://www.example.com/exhibitor-contact/';
+
+test('a source with a bare ":" compiles to its escaped form and the gate passes it; an unescaped one is rejected like Vercel does', async () => {
+  const dir = await site('site-colon', 'vercel', { rows: [`${COLON_SOURCE},/contact/,301,crawl,`] });
+  assert.ok(vercelConfig(dir).redirects.some((r) => r.source === '/trackshttps\\://www.example.com/exhibitor-contact/'));
+  const passed = await gate(dir, good, ['--paths', COLON_SOURCE]);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^redirects: 1 checked, 0 failed$/m);
+  const raw = vercelConfig(dir);
+  raw.redirects.unshift({ source: COLON_SOURCE, destination: '/contact/', statusCode: 301 });
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify(raw));
+  const rejected = await gate(dir, good, ['--paths', COLON_SOURCE]);
+  assert.equal(rejected.code, 2, rejected.stdout);
+  assert.match(rejected.stderr, /vercel\.json: .*":" with no parameter name/);
+});
+
+test('a captured source with a mid-segment ":name" or a port is a literal URL: requested as it is, never as a sample', async () => {
+  // A sample (/p/sample/) would not match the literal rule /p/\:id/ and would fail as "no redirect".
+  const rows = ['/p/:id/,/contact/,301,crawl,', '/x/http://host:8080/y,/contact/,301,crawl,'];
+  const dir = await site('site-literal-colons', 'vercel', { rows });
+  const result = await gate(dir, good, ['--paths', '/p/:id/,/x/http://host:8080/y']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^redirects: 2 checked, 0 failed$/m);
+  assert.doesNotMatch(result.stdout, /sample/);
+});
+
+test('a target under a baseline meta.excluded prefix is checked like an external one: status and location of the first hop only', async () => {
+  const excluded = join(root, 'baseline-excluded');
+  cpSync(baseline, excluded, { recursive: true });
+  const meta = JSON.parse(readFileSync(join(excluded, 'meta.json'), 'utf8'));
+  writeFileSync(join(excluded, 'meta.json'), JSON.stringify({ ...meta, excluded: ['/private/'] }));
+  // /private/area is unslashed: on an "always" site the slash rule adds a second hop the gate ignores.
+  const rows = ['/go-private,/private/area/,301,decision,', '/go-private-bare,/private/area,301,decision,'];
+  const dir = await site('site-excluded', 'vercel', { rows });
+  const paths = ['--paths', '/go-private,/go-private-bare'];
+  const run = (base) => runGate('redirects', ['--dist', good, '--baseline', base, ...paths], { cwd: dir });
+  const plain = await run(baseline);
+  assert.equal(plain.code, 1, 'without the exclusion the target must be built');
+  assert.match(plain.stdout, /\/go-private target: expected "a page or file in dist", got "404 at \/private\/area\/"/);
+  const passed = await run(excluded);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^redirects: 2 checked, 0 failed$/m);
+  // The first hop still has to land on the target with the row's status.
+  const config = vercelConfig(dir);
+  config.redirects = config.redirects.map((r) => (r.source === '/go-private' ? { ...r, destination: '/private/other/', statusCode: 302 } : r));
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify(config));
+  const wrong = await run(excluded);
+  assert.equal(wrong.code, 1);
+  assert.match(wrong.stdout, /\/go-private redirect: expected "\/private\/area\/", got "302 \/private\/other\/"/);
+});
+
+const SPACED = '/two words/';
+const NO_REDIRECT = { kind: 'redirect', path: SPACED, reason: 'a broken live href; nothing to redirect', action: 'none', approvedBy: 'client', date: '2026-10-23' };
+
+for (const host of ['vercel', 'cloudflare']) {
+  test(`${host}: a source with no valid form passes only when redirects-skipped.json lists it or an exception says no redirect`, async () => {
+    const dir = await site(`site-unescapable-${host}`, host, { rows: [`${SPACED},/contact/,301,crawl,`] });
+    const dist = host === 'cloudflare' ? cloudflareBuild(dir, `dist-unescapable-${host}`) : good;
+    const listing = join(dir, 'redirects-skipped.json');
+    const listed = JSON.parse(readFileSync(listing, 'utf8'));
+    assert.deepEqual(listed.map((s) => s.source), [SPACED]);
+    const skipped = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(skipped.code, 0, skipped.stdout + skipped.stderr);
+    assert.match(skipped.stdout, /^ {2}\/two words\/ skipped: not compiled \(redirects-skipped\.json\): .*whitespace/m);
+    assert.match(skipped.stdout, /^redirects: 0 checked, 0 failed, 1 skipped \(not compiled \(redirects-skipped\.json\)\)$/m);
+
+    writeFileSync(listing, JSON.stringify([{ source: SPACED, reason: '' }]));
+    const noReason = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(noReason.code, 1, 'a listing without a reason does not count');
+    rmSync(listing);
+    const failed = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(failed.code, 1, failed.stdout);
+    assert.match(failed.stdout, /\/two words\/ redirect: expected "\/contact\/", got "no redirect: 404/);
+
+    writeFileSync(join(dir, 'exceptions.json'), JSON.stringify([NO_REDIRECT]));
+    const excepted = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(excepted.code, 0, excepted.stdout + excepted.stderr);
+    assert.match(excepted.stdout, /^redirects: 1 checked, 0 failed$/m);
+  });
+}
+
+test('a "no redirect" exception fails when the build still redirects the path, and on a path the gate does not check', async () => {
+  writeFileSync(join(vercelDir, 'exceptions.json'), JSON.stringify([
+    { ...NO_REDIRECT, path: '/old-services' },
+    { ...NO_REDIRECT, path: '/nowhere' },
+  ]));
+  try {
+    const result = await gate(vercelDir, good, ['--paths', '/old-services,/nowhere']);
+    assert.equal(result.code, 1, result.stdout);
+    assert.match(result.stdout, /^ {2}\/old-services redirect: expected "no redirect \(exception\)", got "301 \/services\/"$/m);
+    assert.match(result.stdout, /\/nowhere exception: .*"path not checked"/);
+  } finally {
+    rmSync(join(vercelDir, 'exceptions.json'));
+  }
 });
 
 test('usage and missing inputs exit 2; --help exits 0', async () => {

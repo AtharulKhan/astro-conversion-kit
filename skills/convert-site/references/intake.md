@@ -58,6 +58,8 @@ opening explaining what a repository, a staging deploy and a pull request are.
     8. Redirects. Default: every redirect the crawl finds. If you have an old .htaccess, a
        redirect plugin export or a list of old URLs, send the file.
     9. Pages that must not change, or must be left out. Default: none; every page converts.
+       Name a section to leave out by its path (`/president/`): nothing under it is read or
+       built. A multisite's sub-sites on the same host are left out this way.
     10. Components. Default: off. Say "components" if you want repeated blocks (cards, calls
         to action) turned into Astro components after everything matches.
 
@@ -93,7 +95,7 @@ lives in `$SITE/.conversion/` from the start; `init-site.mjs` scaffolds around i
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set site '"<LIVE>"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set hosting '"vercel"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set repo '"<owner>/<slug>"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":"<team slug>","publicStaging":true,"consent":[],"keepPages":[],"components":false}'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":"<team slug>","publicStaging":true,"consent":[],"keepPages":[],"excludePaths":[],"components":false}'
 
 `intake.vercelScope` is preflight's `vercel.scope` (the default team's slug) unless the person
 named another team slug; never the username, which the CLI refuses ("You cannot set your
@@ -102,6 +104,11 @@ either, it is `null` and the link goes on the needs-you list. `publicStaging` is
 answer: `true` (public and noindexed, the default) unless the person asked for protection, then
 `false`. Record it as a decision too (topic "staging protection"), so `docs/plan.md` and the PR
 show it.
+
+`intake.keepPages` holds the pages that must not change; `intake.excludePaths` the path
+prefixes to leave out (each starting and, for a folder, ending with `/`, e.g. `["/president/"]`),
+which the capture reads as `--exclude`. Record a non-empty `excludePaths` as a decision too (topic
+"excluded paths").
 
 Every default you applied is also a decision (`state.mjs decision`), so the PR shows it. Add each
 missing item to `needsYou` as `{ "item": "...", "command": "...", "before": "<phase or DNS>" }`:

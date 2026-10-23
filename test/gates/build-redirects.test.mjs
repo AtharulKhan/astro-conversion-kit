@@ -248,3 +248,99 @@ test('usage errors exit 2; --help exits 0 and notes static-file precedence', asy
   assert.match(help.stdout, /dist\/ when it exists, else public\//);
   assert.match(help.stdout, /static file/i);
 });
+
+// A live href like "trackshttps://www.example.com/x/" resolved against a page becomes this source.
+const COLON_SOURCE = '/trackshttps://www.example.com/exhibitor-contact/';
+
+test('vercel: a source with a bare ":" (not a parameter) is escaped as "\\:", and the resolver answers it in one hop', async () => {
+  const out = join(root, 'colon-vercel.json');
+  const rows = [`${COLON_SOURCE},/contact/,301,crawl,`, '/o/:slug,/about/,301,decision,'];
+  const result = await compile(['--csv', csv('colon.csv', rows), '--host', 'vercel', '--out', out, '--trailing-slash', 'always']);
+  assert.equal(result.code, 0, result.stderr);
+  const config = JSON.parse(readFileSync(out, 'utf8'));
+  const sources = config.redirects.map((r) => r.source);
+  assert.ok(sources.includes('/trackshttps\\://www.example.com/exhibitor-contact/'), sources.join('\n'));
+  assert.ok(sources.includes('/o/:slug'), 'a real parameter is kept');
+  const dist = join(root, 'colon-dist');
+  mkdirSync(join(dist, 'contact'), { recursive: true });
+  writeFileSync(join(dist, 'contact', 'index.html'), '<h1>Contact</h1>');
+  assert.deepEqual(resolveVercel(COLON_SOURCE, { config, dist }).hops, [{ from: COLON_SOURCE, to: '/contact/', status: 301 }]);
+  assert.doesNotMatch(result.stderr, /skipped/);
+  assert.ok(!existsSync(join(root, 'redirects-skipped.json')));
+});
+
+test('vercel: a captured row escapes every ":" and "*" (live sources hold no parameters); a decision row keeps its :name parameters but never a ":" before a digit', async () => {
+  const out = join(root, 'colons-vercel.json');
+  const rows = [
+    '/foo:bar/,/contact/,301,crawl,',
+    '/x/http://host:8080/y,/contact/,301,sitemap,',
+    '/star*/,/contact/,301,crawl,',
+    '/o/:slug,/about/,301,decision,',
+    '/d/a:8080/,/about/,301,decision,',
+  ];
+  const result = await compile(['--csv', csv('colons.csv', rows), '--host', 'vercel', '--out', out, '--trailing-slash', 'always']);
+  assert.equal(result.code, 0, result.stderr);
+  const config = JSON.parse(readFileSync(out, 'utf8'));
+  const sources = config.redirects.map((r) => r.source);
+  for (const want of ['/foo\\:bar/', '/x/http\\://host\\:8080/y', '/star\\*/', '/o/:slug', '/d/a\\:8080/']) {
+    assert.ok(sources.includes(want), `${want} in:\n${sources.join('\n')}`);
+  }
+  const dist = join(root, 'colons-dist');
+  for (const page of ['contact', 'about']) {
+    mkdirSync(join(dist, page), { recursive: true });
+    writeFileSync(join(dist, page, 'index.html'), `<h1>${page}</h1>`);
+  }
+  const hops = (url) => resolveVercel(url, { config, dist }).hops.map((h) => h.to);
+  assert.deepEqual(hops('/foo:bar/'), ['/contact/']);
+  assert.deepEqual(hops('/foo:baz/'), [], 'a literal colon matches only itself');
+  assert.deepEqual(hops('/x/http://host:8080/y'), ['/contact/']);
+  assert.deepEqual(hops('/star*/'), ['/contact/']);
+  assert.deepEqual(hops('/starry/'), [], 'a literal "*" is no wildcard');
+  assert.deepEqual(hops('/o/anything'), ['/about/']);
+});
+
+test('cloudflare: a captured source with ":<name>" or "*" is dropped (_redirects reads them as a placeholder or splat); a decision row keeps them', async () => {
+  const dir = join(root, 'colons-cloudflare');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'redirects.csv');
+  writeFileSync(file, `${[HEADER, '/foo:bar/,/contact/,301,crawl,', '/star*/,/contact/,301,crawl,', '/o/:slug,/about/,301,decision,'].join('\n')}\n`);
+  const out = join(dir, '_redirects');
+  const result = await compile(['--csv', file, '--host', 'cloudflare', '--out', out]);
+  assert.equal(result.code, 0, result.stderr);
+  const skipped = JSON.parse(readFileSync(join(dir, 'redirects-skipped.json'), 'utf8'));
+  assert.deepEqual(skipped.map((s) => s.source), ['/foo:bar/', '/star*/']);
+  assert.match(skipped[0].reason, /placeholder/);
+  const text = readFileSync(out, 'utf8');
+  assert.ok(!text.includes('/foo:bar/') && !text.includes('/star*/'));
+  assert.match(text, /^\/o\/:slug \/about\/ 301$/m);
+});
+
+// Sources no host rule can hold: no leading "/", whitespace, a control character.
+const UNESCAPABLE = ['trackshttps-no-slash/', '/two words/', '/tab\there/', '/ctl\u0001char/'];
+
+for (const host of ['vercel', 'cloudflare']) {
+  test(`${host}: a source with no valid form is dropped, named on stderr and listed in redirects-skipped.json beside the csv`, async () => {
+    const dir = join(root, `unescapable-${host}`);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'redirects.csv');
+    writeFileSync(file, `${[HEADER, '/old-services,/services/,301,seed,', ...UNESCAPABLE.map((s) => `${s},/contact/,301,crawl,`)].join('\n')}\n`);
+    const out = join(dir, host === 'vercel' ? 'vercel.json' : '_redirects');
+    const result = await compile(['--csv', file, '--host', host, '--out', out]);
+    assert.equal(result.code, 0, result.stderr);
+    for (const source of UNESCAPABLE) assert.ok(result.stderr.includes(JSON.stringify(source)), `${source} named on stderr:\n${result.stderr}`);
+    assert.match(result.stderr, /4 row\(s\) skipped/);
+    const skipped = JSON.parse(readFileSync(join(dir, 'redirects-skipped.json'), 'utf8'));
+    assert.deepEqual(skipped.map((s) => s.source), UNESCAPABLE);
+    for (const s of skipped) assert.ok(typeof s.reason === 'string' && s.reason.length > 0);
+    assert.match(skipped[0].reason, /does not start with \//);
+    assert.match(skipped[1].reason, /whitespace/);
+    assert.match(skipped[3].reason, /control character/);
+    const text = readFileSync(out, 'utf8');
+    assert.ok(text.includes('/old-services'), 'the valid row is compiled');
+    for (const source of UNESCAPABLE) assert.ok(!text.includes(JSON.stringify(source).slice(1, -1)) && !text.includes(source), `${source} is not compiled`);
+    // A clean recompile removes the stale listing.
+    writeFileSync(file, `${HEADER}\n/old-services,/services/,301,seed,\n`);
+    assert.equal((await compile(['--csv', file, '--host', host, '--out', out])).code, 0);
+    assert.ok(!existsSync(join(dir, 'redirects-skipped.json')));
+  });
+}

@@ -33,6 +33,7 @@ const CONTENT_TYPES = {
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
   '.pdf': 'application/pdf',
   '.woff2': 'font/woff2',
 };

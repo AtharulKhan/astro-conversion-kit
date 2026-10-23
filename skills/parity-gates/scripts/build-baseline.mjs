@@ -34,7 +34,8 @@ Freeze a capture (capture.mjs, media.mjs and templates.mjs output) into a baseli
                   which the routes gate lets the build serve at the root
   text/           the visible text of each page, copied from the capture
   counts.json     routes, byStatus, byTemplate, redirects (by source), media, forms, scripts
-  meta.json       { origin, canonicalOrigin, capturedAt, builtAt, platform } of the capture
+  meta.json       { origin, canonicalOrigin, capturedAt, builtAt, platform, excluded } of the
+                  capture; excluded: the capture's --exclude path prefixes ([] when none)
 and redirects.csv (from,to,status,source,note) for the host. A redirect with no target (an
 unverified shortlink the site did not resolve) is left out and named on stderr.
 
@@ -298,6 +299,7 @@ export function buildMeta(meta, state, builtAt = new Date().toISOString()) {
     capturedAt: meta.finishedAt ?? meta.startedAt ?? null,
     builtAt,
     platform: state.fingerprint?.platform ?? null,
+    excluded: meta.excluded ?? [],
   };
 }
 

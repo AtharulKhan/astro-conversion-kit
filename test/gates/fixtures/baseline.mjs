@@ -2,7 +2,8 @@
 // run once per directory and cached for the test file. buildFixtureBaseline(dir) resolves to the
 // baseline folder (<dir>/baseline); the capture is in <dir>/capture and redirects.csv in <dir>.
 // The capture seeds /old-services and /about so the baseline has a redirect chain and a slash
-// redirect besides the shortlinks.
+// redirect besides the shortlinks. buildFixtureBaseline(dir, { exclude }) captures with
+// --exclude <exclude> (a comma-separated prefix list) instead.
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,7 +22,7 @@ async function run(path, args) {
   }
 }
 
-async function build(dir) {
+async function build(dir, { exclude = null } = {}) {
   const capture = join(dir, 'capture');
   const baseline = join(dir, 'baseline');
   // Async child processes: the fixture server runs in this process and must keep answering.
@@ -29,6 +30,7 @@ async function build(dir) {
   try {
     await run('capture-site/scripts/capture.mjs', [
       fixture.origin, '--out', capture, '--delay', '0', '--no-wayback', '--seed', '/old-services', '--seed', '/about',
+      ...(exclude ? ['--exclude', exclude] : []),
     ]);
     await run('capture-site/scripts/media.mjs', ['--capture', capture, '--delay', '0']);
     await run('capture-site/scripts/templates.mjs', ['--capture', capture]);
@@ -39,7 +41,7 @@ async function build(dir) {
   return baseline;
 }
 
-export function buildFixtureBaseline(dir) {
-  if (!cache.has(dir)) cache.set(dir, build(dir));
+export function buildFixtureBaseline(dir, options = {}) {
+  if (!cache.has(dir)) cache.set(dir, build(dir, options));
   return cache.get(dir);
 }

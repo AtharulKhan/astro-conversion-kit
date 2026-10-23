@@ -282,10 +282,11 @@ test('--check passes on the built baseline and exits 1 after a route is deleted'
   assert.match(drifted.stdout, /routes: expected 16, got 15/);
 });
 
-test('meta.json records the capture origin, times and platform', () => {
+test('meta.json records the capture origin, times, platform and excluded prefixes', () => {
   const meta = readJson(baseline, 'meta.json');
   const captured = readJson(capture, 'meta.json');
-  assert.deepEqual(Object.keys(meta), ['origin', 'canonicalOrigin', 'capturedAt', 'builtAt', 'platform']);
+  assert.deepEqual(Object.keys(meta), ['origin', 'canonicalOrigin', 'capturedAt', 'builtAt', 'platform', 'excluded']);
+  assert.deepEqual(meta.excluded, [], 'a capture without --exclude excludes nothing');
   assert.equal(meta.origin, captured.origin);
   assert.equal(meta.canonicalOrigin, captured.canonicalOrigin);
   assert.equal(meta.capturedAt, captured.finishedAt);

@@ -151,14 +151,35 @@ test('live-temporary mode: the prefix is skipped (served from live), files outsi
   assert.match(failed.stdout, new RegExp(`^ {2}${outside[0].path} media: expected ${outside[0].bytes}, got null$`, 'm'));
 });
 
-test('live-temporary mode fails every file on a release build (PUBLIC_INDEXABLE=true)', async () => {
-  for (const [name, prefix] of [['site-live-release', UPLOADS], ['site-live-release-all', undefined]]) {
-    const site = siteWithPlan(name, 'live-temporary', prefix);
-    const result = await gate(good, [], site, 'true');
-    assert.equal(result.code, 1, result.stdout);
-    assert.match(result.stdout, new RegExp(`^ {2}${media[0].path} media: expected "served by the build", got "release build may not serve media from the live site"$`, 'm'));
-    assert.match(result.stdout, new RegExp(`^media: ${media.length} checked, ${media.length} failed$`, 'm'));
+test('live-temporary mode on a release build (PUBLIC_INDEXABLE=true) fails every file when the plan has no prefix', async () => {
+  const site = siteWithPlan('site-live-release-all', 'live-temporary');
+  const result = await gate(good, [], site, 'true');
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stdout, new RegExp(`^ {2}${media[0].path} media: expected "served by the build", got "release build may not serve media from the live site"$`, 'm'));
+  assert.match(result.stdout, new RegExp(`^media: ${media.length} checked, ${media.length} failed$`, 'm'));
+});
+
+test('live-temporary mode on a release build fails only the prefix; files outside it are checked in dist and pass', async () => {
+  const site = siteWithPlan('site-live-release', 'live-temporary', UPLOADS);
+  const inside = media.filter((m) => m.path.startsWith(UPLOADS));
+  const outside = media.filter((m) => !m.path.startsWith(UPLOADS));
+  assert.ok(inside.length > 0 && outside.length > 0, 'the fixture has media on both sides of the prefix');
+  const result = await gate(good, [], site, 'true');
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stdout, new RegExp(`^media: ${media.length} checked, ${inside.length} failed$`, 'm'));
+  for (const m of inside) {
+    assert.match(result.stdout, new RegExp(`^ {2}${m.path} media: expected "served by the build", got "release build may not serve media from the live site"$`, 'm'));
   }
+  for (const m of outside) assert.doesNotMatch(result.stdout, new RegExp(`^ {2}${m.path} `, 'm'));
+  const json = JSON.parse((await gate(good, ['--json'], site, 'true')).stdout);
+  assert.equal(json.checked, media.length);
+  assert.equal(json.failed, inside.length);
+  // An outside file missing from dist fails as in staging mode, with its sizes.
+  const noFont = makeDist(join(root, 'dist-live-release-no-font'));
+  rmSync(join(noFont, outside[0].path.slice(1)));
+  const failed = await gate(noFont, [], site, 'true');
+  assert.match(failed.stdout, new RegExp(`^ {2}${outside[0].path} media: expected ${outside[0].bytes}, got null$`, 'm'));
+  assert.match(failed.stdout, new RegExp(`^media: ${media.length} checked, ${inside.length + 1} failed$`, 'm'));
 });
 
 test('--paths limits the check', async () => {

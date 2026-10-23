@@ -3,7 +3,8 @@
 // the same field names in the same order and the same method. A POST form (a contact form) has
 // its action set to the endpoint the build submits to (--endpoint); --honeypot names a spam-trap
 // field every POST form must carry; --thank-you names the page every POST form leads to. A GET
-// form (a search box) keeps its live action path and needs none of those.
+// form (a search box), and a POST form that already posts to another origin, keep their live
+// action and need none of those.
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,13 @@ A GET form (method get, or no method: a search box) is compared with live as it 
 action path (an action on the site's own origin compares by path and query, any other by its
 full URL), method and fields, in order. It needs no --endpoint, honeypot or thank-you page; the
 summary notes "N search/GET forms compared". Only a POST form is a submission form.
+A POST form whose live action is on another site (a newsletter list host, a form service: a
+registrable domain other than the site's, so www., http:, a subdomain and //host/ of the site
+are the site, and a WordPress handler such as admin-ajax.php, wp-comments-post.php, ?wpcf7 or
+wp-json/contact-form-7 is the site on any host) already works on a static host: it is kept as captured and compared like a GET form (the same
+full action URL, method and fields), with no --endpoint, honeypot or thank-you; the summary
+notes "N forms kept as is (posts to <host>)". Only a POST form posting to the site itself
+(its own origin, a relative or empty action) is rewired and needs --endpoint.
 Fields are named input, select and textarea elements, without submit, button, reset and image
 inputs, read the way the capture reads them. A _next or redirect field the live form did not
 have is the endpoint's thank-you setting and is not compared with the live fields.
@@ -91,6 +99,59 @@ export function actionTarget(action, page, origins = []) {
   return url.href;
 }
 
+// Public suffixes of two labels, under which a registrable domain has three (example.co.uk).
+const TWO_LEVEL_SUFFIXES = new Set([
+  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
+  'co.nz', 'org.nz', 'co.jp', 'ne.jp', 'or.jp', 'com.br', 'com.mx', 'co.za', 'co.in', 'com.sg',
+  'com.hk', 'co.kr', 'com.tr', 'com.cn', 'com.ar', 'co.il',
+]);
+
+// The registrable domain of a hostname: its last two labels, or three under a two-level public
+// suffix; an IP address or a single label as it is.
+export function registrableDomain(hostname) {
+  const labels = hostname.toLowerCase().replace(/\.$/, '').split('.');
+  if (labels.length <= 2 || /^\d+$/.test(labels.at(-1)) || hostname.includes(':')) return labels.join('.');
+  const lastTwo = labels.slice(-2).join('.');
+  return TWO_LEVEL_SUFFIXES.has(lastTwo) ? labels.slice(-3).join('.') : lastTwo;
+}
+
+// Managed-WordPress staging hosts: a form posting to one of these posts to the old site, not to a
+// form service, even when its action is a page URL rather than a handler.
+const MANAGED_WP_SUFFIXES = [
+  'wpengine.com', 'wpenginepowered.com', 'kinsta.cloud', 'pantheonsite.io', 'flywheelsites.com',
+  'wpcomstaging.com', 'cloudwaysapps.com', 'mystagingwebsite.com', 'dreamhosters.com', 'instawp.xyz',
+];
+const managedWordPress = (hostname) => MANAGED_WP_SUFFIXES.some((s) => hostname === s || hostname.endsWith(`.${s}`));
+
+// WordPress's own form handlers: whatever host they are on, the form posts to the old site.
+const OLD_SITE_PATH = /\/(?:wp-admin\/admin-ajax\.php|wp-comments-post\.php|wp-admin\/admin-post\.php)$/i;
+const OLD_SITE_URL = /[?&]wpcf7|wp-json\/contact-form-7/i;
+
+// The host a POST form already posts to when that is another site (a newsletter list host, a form
+// service: a different registrable domain), else null: such a form works on a static host
+// unchanged and is kept as captured. Null for a form posting to the old site: an empty or relative
+// action, one on any host of the site's registrable domains (www, http, a subdomain, a
+// protocol-relative //host), a WordPress form handler on any host, and any managed-WordPress
+// staging host (wpengine.com, kinsta.cloud, pantheonsite.io, ...).
+export function externalHost(form, page, origins = []) {
+  if (!isPost(form)) return null;
+  const action = (form.action ?? '').trim();
+  if (!action) return null;
+  const base = origins[0] ?? 'http://forms.invalid';
+  let url;
+  try {
+    url = new URL(action, new URL(page, base));
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(url.protocol) || url.hostname === 'forms.invalid') return null;
+  if (OLD_SITE_PATH.test(url.pathname) || OLD_SITE_URL.test(action)) return null;
+  if (managedWordPress(url.hostname.toLowerCase().replace(/\.$/, ''))) return null;
+  const siteDomains = new Set(origins.map((o) => registrableDomain(new URL(o).hostname)));
+  if (siteDomains.has(registrableDomain(url.hostname))) return null;
+  return url.host;
+}
+
 // A GET form against its live form: the same action target, method and fields.
 export function compareGetForm(path, label, expected, actual, origins = []) {
   const failures = [];
@@ -129,6 +190,7 @@ export function checkForms({ dist, forms, endpoint, honeypot = '', thankYou = ''
   const siteHost = siteHostOf(meta);
   const origins = [meta.origin, meta.canonicalOrigin].map((o) => originOf(o ?? '')).filter(Boolean);
   let getCount = 0;
+  const keptHosts = [];
   const files = distFiles(dist);
   const format = pageFormat(files);
   const failures = [];
@@ -150,6 +212,12 @@ export function checkForms({ dist, forms, endpoint, honeypot = '', thankYou = ''
     }
     expected.forEach((form, i) => {
       const label = expected.length > 1 ? `form ${i + 1}` : '';
+      const host = externalHost(form, path, origins);
+      if (host) {
+        keptHosts.push(host);
+        failures.push(...compareGetForm(path, label, form, actual[i], origins));
+        return;
+      }
       if (!isPost(form)) {
         getCount += 1;
         failures.push(...compareGetForm(path, label, form, actual[i], origins));
@@ -160,6 +228,10 @@ export function checkForms({ dist, forms, endpoint, honeypot = '', thankYou = ''
     });
   }
   const notes = getCount ? [`${getCount} search/GET forms compared`] : [];
+  if (keptHosts.length) {
+    const n = keptHosts.length;
+    notes.push(`${n} ${n === 1 ? 'form' : 'forms'} kept as is (posts to ${[...new Set(keptHosts)].join(', ')})`);
+  }
   if (thankYou && formCount > 0) {
     const candidates = pageFiles(thankYou, format);
     if (!candidates.some((c) => files.includes(c))) failures.push({ path: thankYou, field: 'thank-you', expected: candidates[0], actual: null });
@@ -173,13 +245,15 @@ function main() {
   const args = gateArgs(process.argv.slice(2), NAME, { options: OPTIONS, notes: NOTES });
   requireInputs(NAME, args.dist, args.baseline, ['forms.json']);
   const forms = readJson(join(args.baseline, 'forms.json'));
-  const withForms = Object.entries(forms).filter(([path, list]) => args.paths(path) && list.some(isPost));
+  const metaFile = join(args.baseline, 'meta.json');
+  const meta = existsSync(metaFile) ? readJson(metaFile) : {};
+  const origins = [meta.origin, meta.canonicalOrigin].map((o) => originOf(o ?? '')).filter(Boolean);
+  const postsToSite = (form, path) => isPost(form) && !externalHost(form, path, origins);
+  const withForms = Object.entries(forms).filter(([path, list]) => args.paths(path) && list.some((form) => postsToSite(form, path)));
   if (withForms.length > 0 && !args.endpoint) {
     process.stderr.write(`${NAME}: --endpoint <url> is required: the baseline has POST forms on ${withForms.map(([p]) => p).join(', ')}\n`);
     process.exit(2);
   }
-  const metaFile = join(args.baseline, 'meta.json');
-  const meta = existsSync(metaFile) ? readJson(metaFile) : {};
   const results = checkForms({
     dist: args.dist,
     forms,

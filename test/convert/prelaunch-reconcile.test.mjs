@@ -336,6 +336,23 @@ test('favicon rows read meta.json icons: a root icon live answered 404 for is re
   assert.match(parsed(served).blocking[0].rows[0].reason, /live served \/apple-touch-icon\.png/);
 });
 
+test('favicon rows read the meta.json icons objects a capture writes ({ status, file, ... })', async () => {
+  // The fixture captured with --exclude: its meta.json icons say /favicon.ico was served (and saved)
+  // and /apple-touch-icon.png answered 404.
+  const excluded = join(root, 'excluded');
+  await buildFixtureBaseline(excluded, { exclude: '/services/' });
+  const { icons } = JSON.parse(readFileSync(join(excluded, 'capture', 'meta.json'), 'utf8'));
+  assert.equal(icons['/favicon.ico'].status, 200);
+  assert.equal(icons['/apple-touch-icon.png'].status, 404);
+  const captureDir = notFoundCapture('capture-icons-objects', { icons });
+  const planFile = planWith('plan-icons-objects', ['d2', 'output.favicon-set: icons as live had them']);
+  const apple = await reconcile([failing('output.favicon-set', 'apple-touch-icon.png is missing', ['apple-touch-icon.png is missing'], 'file')], { planFile, captureDir });
+  assert.equal(apple.code, 0, apple.stdout);
+  const favicon = await reconcile([failing('output.favicon-set', 'favicon.ico is missing', ['favicon.ico is missing'], 'file')], { planFile, captureDir });
+  assert.equal(favicon.code, 1, favicon.stdout);
+  assert.match(parsed(favicon).blocking[0].rows[0].reason, /live served \/favicon\.ico/);
+});
+
 // A baseline whose live site published no sitemap, and a site whose dist builds the given routes.
 function noSitemapSite(name, { drop = [] } = {}) {
   const base = join(root, `${name}-baseline`);

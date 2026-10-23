@@ -12,13 +12,27 @@ and needs no endpoint, honeypot or thank-you page. The endpoint question (and th
 test submission and `placeholders.form-id`) applies to POST forms only; a site whose only form
 is a GET search box has none of them.
 
+Only a POST form that posts **to the old site** is rewired: an empty action, a relative one, an
+action on any host of the site's own domain (`www.` or not, `http:` or `https:`, a subdomain
+such as a staging copy, a protocol-relative `//host/`), and a WordPress form handler on any host
+(`/wp-admin/admin-ajax.php`, `/wp-admin/admin-post.php`, `/wp-comments-post.php`, a `?wpcf7`
+or `wp-json/contact-form-7` URL). A POST form whose `action` is on another site, a different
+registrable domain (a Mailchimp signup posting to `*.list-manage.com`, HubSpot's
+`hsforms.com`, `formspree.io`, a Netlify-style endpoint), already works on a static host: keep it exactly as captured, action included. It gets
+no placeholder, no honeypot or thank-you field and no needs-you item, and it is not the test
+submission. List each one in the plan's "Forms plan" under **Forms kept as is**, with its page
+and its action host (`/about/: example.us1.list-manage.com`). The forms gate compares it with
+live like a GET form (the same full action URL, method and fields) and notes "N forms kept as
+is (posts to <host>)"; rewiring one to the endpoint fails the gate. A site whose POST forms
+all post elsewhere needs no `--endpoint` and no form id.
+
 ## What stays the same
 
 The forms gate compares each built form with `baseline/forms.json`: the same field names in
 order (every named `input`, `select` and `textarea`, without buttons) and the same method. Keep
 the captured form markup, labels, classes, order and every captured field exactly, the
 platform's hidden ones (nonces, `_wpcf7*`, `form_id`) included: they are harmless, and forms is
-not an exception field. Change only:
+not an exception field. On a form that posts to the old site, change only:
 
 - `action` to the endpoint (`https://formspree.io/f/<form id>`), `method="POST"`;
 - add the honeypot and thank-you fields below.

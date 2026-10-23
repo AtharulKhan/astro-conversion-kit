@@ -190,7 +190,8 @@ export function loadBaseline(dir, captureDir = null) {
       if (route) return route.status;
       if (requestedMedia.has(path)) return 200;
       if (mediaPaths.has(path)) return null;
-      return assetAt(path)?.status ?? icons[path] ?? null;
+      // meta.json icons: { status, file, contentType, bytes } per path (a bare status in older captures).
+      return assetAt(path)?.status ?? icons[path]?.status ?? icons[path] ?? null;
     },
     // The size of live's PNG at path, from the capture's saved asset.
     livePngSize(path) {
