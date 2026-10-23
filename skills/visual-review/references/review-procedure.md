@@ -50,7 +50,7 @@ Options (all from `--help`):
 | `--routes` | required | Templates file or comma list of paths |
 | `--out` | required | Output folder |
 | `--widths` | `390,768,1440` | Viewport widths in CSS pixels |
-| `--delay` | `2500` | Milliseconds between page loads; `0` is fine against your own local server only |
+| `--delay` | `500` | Milliseconds between page loads, doubled on 429 or 503; `0` is fine against your own local server only |
 | `--wait` | `1500` | Milliseconds to settle before each capture |
 | `--full` | off | With a templates file, shoot every path of every template |
 | `--scale` | `1` | Device scale factor 0.1 to 1; `0.5` for half-size previews (diff only like with like) |

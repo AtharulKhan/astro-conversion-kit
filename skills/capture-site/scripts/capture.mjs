@@ -982,7 +982,10 @@ class Crawler {
       const fetched = await inFlight.get(item);
       inFlight.delete(item);
       const result = await visit(item, fetched);
-      // visit() may drop queued URLs it recorded through a redirect: forget their fetches.
+      // visit() may drop queued URLs it recorded through a redirect: forget their fetches. Such a
+      // URL (a redirect target already queued and fetched ahead) has then been requested twice;
+      // only the answer at the end of the chain is recorded. Likewise, when the run stops below,
+      // fetches still in flight are dropped unrecorded and their items stay queued for --resume.
       if (inFlight.size > 0) {
         const queued = new Set(queue);
         for (const ahead of inFlight.keys()) if (!queued.has(ahead)) inFlight.delete(ahead);

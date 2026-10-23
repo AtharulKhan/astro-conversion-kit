@@ -23,8 +23,8 @@ opening explaining what a repository, a staging deploy and a pull request are.
 
     I'm about to convert <LIVE> (<platform>, found <n sitemap URLs / REST pages>) into a static
     Astro site that matches it: same URLs, content, titles, media and look, proven by checks
-    against a saved copy of the live site. The live site is only read, slowly (one request every
-    2.5 seconds); nothing on it changes. I'll ask everything now and then work through to a pull
+    against a saved copy of the live site. The live site is only read, at a pace it can take (it
+    slows down by itself if the host pushes back); nothing on it changes. I'll ask everything now and then work through to a pull
     request without stopping. Answer only what you want to change; every line has a default.
 
     1. Repository. Default: a new private GitHub repo <gh user>/<slug>, in <folder>/<slug>.

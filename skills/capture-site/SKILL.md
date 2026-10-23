@@ -20,9 +20,11 @@ Step 2 of a conversion (`convert-site` runs it), or any time a live site has to 
 
 ## Pacing
 
-Every script sends a desktop Chrome user agent and paces each host on its own: by default request
-starts are **400 ms apart with up to 4 in flight** (`media`: 6), so a host that answers quickly is
-read in minutes. The pace adapts by itself:
+Every script sends a desktop Chrome user agent. The capture scripts (`capture`, `media`,
+`assets`, `fingerprint`) share a per-host limiter: by default request starts are **400 ms apart
+with up to 4 in flight** (`media`: 6), so a host that answers quickly is read in minutes. The
+Chromium steps load one page at a time (`shoot` and `css-coverage` 500 ms apart, `styles` 2500
+ms), and `launch-audit` and `pre-launch` keep their own pacing. The limiter adapts by itself:
 
 - a 429 or 503 doubles that host's delay (up to 32 times) and drops it to **one request at a
   time**; after every 30 s of clean answers it recovers one step (half the delay, one more in
@@ -166,6 +168,8 @@ The site is blocking requests or cannot be reached. Wait (minutes, not seconds),
   with their status, so URLs that are down for good stop the capture once, not on every resume.
   After two stops on the same URLs, tell the person which ones (paths and status) and carry on.
 - `media`, `assets`: run the same command again; work already done is kept.
+- After a stop, up to concurrency − 1 URLs may have been requested but not recorded;
+  `--resume` asks them again.
 - If it stopped at the default pace, add `--polite` to the resumed command (and to the later
   steps on that site): the host wants one request at a time.
 - `shoot`: rerun with a longer `--delay`.
