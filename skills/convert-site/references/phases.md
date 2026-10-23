@@ -48,7 +48,8 @@ build-baseline carries them into the baseline's redirects. Then:
 Then the optional Lighthouse step, exactly as `capture-site` step 7 says: only when
 `npx --no-install lighthouse --version` answers (never install it unasked), one run per
 template representative into `capture/lighthouse-live/<template>`; if it is missing, write that
-in the Notes. `suggest-improvements` reads `capture/lighthouse-live` and lists its performance
+in the Notes. Lighthouse is optional: when it is not installed the step is reported as skipped,
+never as a failure, and nothing waits on it. `suggest-improvements` reads `capture/lighthouse-live` and lists its performance
 checks as "Not covered" without it. Last:
 
     node $KIT/skills/capture-site/scripts/readme.mjs --capture capture
@@ -212,7 +213,8 @@ Read `build-rules.md`, `forms.md`, `third-party.md` and your host file first. In
 
 1. Media (`build-rules.md`, "Media") and fonts; for `store`, upload now (host file).
 2. CSS: `node $KIT/skills/convert-site/scripts/css-prune.mjs --css capture/css --coverage capture/css-coverage.json --out src/styles/site.css --report .conversion/css-prune-report.json`. When it prints `wrote N per-page sheet(s)`, give each page its `pageSheet`
-   from the report's `pageSheets`.
+   from the report's `pageSheets`. css-prune clears the old `inline-*.css` in
+   `src/styles/pages/` on each run, so commit the folder as it leaves it.
    Exit 1 means a stylesheet had no coverage and was kept whole: record a decision.
 3. One layout per template, with the header, navigation and footer as components.
 4. The representative page of each template, its content moved from the captured markup.
@@ -236,7 +238,13 @@ representatives:
     node scripts/verify/text.mjs --paths "$P"
 
 The media gate with `--paths` checks the media those pages reference (`referencedBy` in
-`baseline/media.json`), so "media: 0 checked" means those pages reference no media file. Add `--allow-extra /thank-you/` to the routes gate when that page is new (`forms.md`). Each of
+`baseline/media.json`), so "media: 0 checked" means those pages reference no media file. Add `--allow-extra /thank-you/` to the routes gate when that page is new (`forms.md`).
+Query-concatenated script URLs (WordPress VIP's `/_static/??a.js,b.js`) cannot be served by a
+static host and `assets.mjs` does not rewrite them: you save each concatenation as one file at
+`/_static/concat/<hash>.js`, point the markup at it (a decision row), and pass
+`--allow-extra '/_static/concat/*'` on every routes gate run. Only `routes.mjs` (and
+`npm run verify`, which hands it on) accepts `--allow-extra`; the other single gate scripts
+exit 2 on it with "Unknown option '--allow-extra'" and their usage text. Each of
 the seven must exit 0 before the commit (`feat: <template> template`). `links`,
 `redirects` and `sitemaps` are not run yet; they run in phase 7.
 
