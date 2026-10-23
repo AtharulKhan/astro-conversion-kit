@@ -271,7 +271,7 @@ test('a sitemap robots.txt names that answers 404 is recorded in sitemaps/index.
   }
 });
 
-test('the capture asks for /favicon.ico and /apple-touch-icon.png once and records their status in meta.json icons', async () => {
+test('the capture asks for /favicon.ico and /apple-touch-icon.png once, saves what answered 200 and records each in meta.json icons', async () => {
   const stub = await startStub({
     '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
     '/favicon.ico': { status: 200, headers: { 'Content-Type': 'image/x-icon' }, body: 'ico' },
@@ -280,7 +280,12 @@ test('the capture asks for /favicon.ico and /apple-touch-icon.png once and recor
     const out = tempDir();
     const run = await capture([stub.origin, '--out', out, '--delay', '0']);
     assert.equal(run.code, 0, run.stderr);
-    assert.deepEqual(readJson(out, 'meta.json').icons, { '/favicon.ico': 200, '/apple-touch-icon.png': 404 });
+    assert.deepEqual(readJson(out, 'meta.json').icons, {
+      '/favicon.ico': { status: 200, file: 'assets/root-favicon.ico', contentType: 'image/x-icon', bytes: 3 },
+      '/apple-touch-icon.png': { status: 404, file: null, contentType: 'text/html; charset=UTF-8', bytes: null },
+    });
+    assert.equal(readFileSync(join(out, 'assets/root-favicon.ico'), 'utf8'), 'ico');
+    assert.ok(!existsSync(join(out, 'assets/root-apple-touch-icon.png')));
     const asked = stub.requests.filter((u) => u === '/favicon.ico' || u === '/apple-touch-icon.png');
     assert.deepEqual(asked.sort(), ['/apple-touch-icon.png', '/favicon.ico']);
     const again = await capture([stub.origin, '--out', out, '--delay', '0', '--resume']);
@@ -288,6 +293,39 @@ test('the capture asks for /favicon.ico and /apple-touch-icon.png once and recor
     assert.equal(stub.requests.filter((u) => u === '/favicon.ico').length, 1, 'asked once per capture');
   } finally {
     await stub.close();
+  }
+});
+
+test('a root icon is saved where its redirects end; an HTML answer or one over 5 MB is recorded, not saved', async () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const stub = await startStub({
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
+    '/apple-touch-icon.png': { status: 301, headers: { Location: '/wp-content/uploads/site-icon-180.png' } },
+    '/wp-content/uploads/site-icon-180.png': { headers: { 'Content-Type': 'image/png' }, body: png },
+    '/favicon.ico': { body: '<html><head><title>Home</title></head><body>a page, not an icon</body></html>' },
+  });
+  const big = await startStub({
+    '/': { body: '<html><head><title>Page</title></head><body>home</body></html>' },
+    '/favicon.ico': { headers: { 'Content-Type': 'image/x-icon' }, body: Buffer.alloc(5 * 1024 * 1024 + 1) },
+  });
+  try {
+    const out = tempDir();
+    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
+    assert.equal(run.code, 0, run.stderr);
+    const icons = readJson(out, 'meta.json').icons;
+    assert.deepEqual(icons['/apple-touch-icon.png'], { status: 200, file: 'assets/root-apple-touch-icon.png', contentType: 'image/png', bytes: png.length });
+    assert.ok(readFileSync(join(out, 'assets/root-apple-touch-icon.png')).equals(png));
+    assert.deepEqual(icons['/favicon.ico'], { status: 200, file: null, contentType: 'text/html; charset=UTF-8', bytes: null, note: 'answered HTML, not an icon' });
+    assert.ok(!existsSync(join(out, 'assets/root-favicon.ico')));
+
+    const large = tempDir();
+    const second = await capture([big.origin, '--out', large, '--delay', '0']);
+    assert.equal(second.code, 0, second.stderr);
+    assert.deepEqual(readJson(large, 'meta.json').icons['/favicon.ico'], { status: 'too-large', file: null, contentType: 'image/x-icon', bytes: null });
+    assert.ok(!existsSync(join(large, 'assets/root-favicon.ico')));
+  } finally {
+    await stub.close();
+    await big.close();
   }
 });
 
@@ -409,7 +447,10 @@ test('snapshots, text, robots, sitemaps, feeds, links and scripts are written', 
   }
   const index = readJson(full, 'sitemaps/index.json');
   assert.deepEqual(index.find((e) => e.url.endsWith('/page-sitemap.xml')), { url: `${fixture.origin}/page-sitemap.xml`, status: 200, file: 'sitemaps/page-sitemap.xml' });
-  assert.deepEqual(readJson(full, 'meta.json').icons, { '/favicon.ico': 404, '/apple-touch-icon.png': 404 });
+  const icons = readJson(full, 'meta.json').icons;
+  assert.deepEqual(icons['/favicon.ico'], { status: 200, file: 'assets/root-favicon.ico', contentType: 'image/x-icon', bytes: 70 });
+  assert.ok(readFileSync(join(full, 'assets/root-favicon.ico')).equals(readFileSync(join(SITE, 'favicon.ico'))), 'saved byte for byte');
+  assert.deepEqual(icons['/apple-touch-icon.png'], { status: 404, file: null, contentType: 'text/html; charset=UTF-8', bytes: null });
   assert.match(readFileSync(join(full, 'feeds/feed.xml'), 'utf8'), /<rss/);
   assert.deepEqual(readJson(full, 'feeds/index.json').map((f) => f.path), ['/feed/']);
 

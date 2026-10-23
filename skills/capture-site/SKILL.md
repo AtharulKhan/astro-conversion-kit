@@ -74,8 +74,12 @@ source. Run each step as its own command, in this order:
    pass `--verify-shortlinks`. After the crawl it requests one path that cannot exist
    (`/<32 hex>/`) once, so the site's own 404 page is saved as `pages/404.html` (`meta.json`
    `notFound`; a site that answers 200 or redirects there is recorded with no page), and asks
-   for `/favicon.ico` and `/apple-touch-icon.png` once each (`meta.json` `icons`: path to
-   status). URLs are keyed with upper-case percent escapes (`%c3%a9` and `%C3%A9` are one URL),
+   for `/favicon.ico` and `/apple-touch-icon.png` once each, redirects followed (`meta.json`
+   `icons`: path to `{ status, file, contentType, bytes }`); one that answers 200 is saved byte
+   for byte as `assets/root-favicon.ico` or `assets/root-apple-touch-icon.png` (an HTML answer
+   is not saved and has a `note`; one over 5 MB is status `"too-large"`), and `assets.mjs` lists
+   it in `assets/index.json` as kind `"root-icon"` with its `path`, so the build ships it there.
+   URLs are keyed with upper-case percent escapes (`%c3%a9` and `%C3%A9` are one URL),
    so a page linked with both spellings is captured once. A sitemap robots.txt names that answers 404 (or any non-200) is listed in
    `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`. A sitemap on
    another host (robots.txt naming a sister site's, or an index listing one; www and apex count
@@ -248,7 +252,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
                           not saved (an HTTP status, "off-site" for a redirect off the host,
                           "too-large" over 5 MB); [] when the site has none
     templates.json        template clusters with a representative page each
-    assets/               logo, icons, fonts, index.json
+    assets/               logo, icons, fonts, index.json; root-favicon.ico and
+                          root-apple-touch-icon.png when live served them at the root
     screens/live/         live screenshots and manifest.json (gitignored)
     lighthouse-live/      Lighthouse reports, when run (gitignored)
     pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)

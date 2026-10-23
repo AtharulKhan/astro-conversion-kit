@@ -42,8 +42,9 @@ Crawl a live site, read-only and paced, into a capture folder: one record per pa
 inventory.json, the raw HTML in pages/<slug>.html, the visible text in text/<slug>.txt,
 redirects.json (chains collapsed, hops kept), links.json, scripts.json (third-party vendors),
 meta.json (notFound: the site's 404 page, from one request for a path that cannot exist, saved
-as pages/404.html and text/404.txt; icons: the status /favicon.ico and /apple-touch-icon.png
-answered, one request each), sitemaps/ (every sitemap robots.txt names, and their children;
+as pages/404.html and text/404.txt; icons: { status, file, contentType, bytes } for
+/favicon.ico and /apple-touch-icon.png, one request each, redirects followed, a 200 saved as
+assets/root-favicon.ico and assets/root-apple-touch-icon.png), sitemaps/ (every sitemap robots.txt names, and their children;
 index.json lists every sitemap URL asked for with its status and file, and one robots.txt
 names that did not answer 200 is also in meta.json discoveryErrors; one on another host is
 listed with skipped: "other host" and never fetched), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
@@ -115,8 +116,11 @@ const SITEMAP_PATH = /sitemap|\.xml(\.gz)?$/i;
 const OTHER_HOST = 'other host';
 // Why a sitemap under an --exclude prefix is listed in sitemaps/index.json but never fetched.
 const EXCLUDED = 'excluded';
-// The root icons a launch needs, asked for once so a missing one is evidence live lacked it.
+// The root icons a launch needs, asked for once so a missing one is evidence live lacked it;
+// one that answers 200 is saved as assets/root-<name> for the build to ship at the same path.
 const ROOT_ICONS = ['/favicon.ico', '/apple-touch-icon.png'];
+// A root icon larger than this is recorded "too-large", not saved.
+const ICON_MAX_BYTES = 5 * 1024 * 1024;
 // HTML responses in a row matching only the tiny-page heuristic that stop the run.
 const SUSPECT_LIMIT = 3;
 const MAX_ATTEMPTS = 3;
@@ -573,21 +577,33 @@ class Crawler {
   }
 
   // /favicon.ico and /apple-touch-icon.png, one request each per capture (redirects followed),
-  // their status in meta.json `icons`: proof of what live served at the root, whatever the pages
-  // link. A blocked answer is left unset, so the next run asks again.
+  // each in meta.json `icons` as { status, file, contentType, bytes }: proof of what live served
+  // at the root, whatever the pages link. A 200 is saved byte for byte as assets/root-<name>
+  // (file); a 200 that is an HTML page (a soft 404) is not saved and says so in `note`; one
+  // over ICON_MAX_BYTES is status "too-large". A blocked answer is left unset, so the next run
+  // asks again.
   async probeIcons() {
     this.state.icons ??= {};
     for (const path of ROOT_ICONS) {
       if (this.state.icons[path] !== undefined) continue;
       const url = new URL(path, this.state.canonicalOrigin).href;
-      const res = await this.fetch(url, { redirect: 'follow' });
+      const res = await this.fetch(url, { redirect: 'follow', raw: true, maxBytes: ICON_MAX_BYTES });
       const verdict = this.judge(res, url);
       if (verdict?.stop) {
         this.noteChallenge(url, verdict.stop, { row: false });
         return 'challenge';
       }
       if (BLOCK_STATUSES.has(res.status)) continue;
-      this.state.icons[path] = res.status;
+      const contentType = res.headers?.['content-type'] ?? null;
+      const entry = { status: res.status, file: null, contentType, bytes: null };
+      if (res.status === 200 && HTML_TYPE.test(contentType ?? '')) entry.note = 'answered HTML, not an icon';
+      else if (res.status === 200) {
+        const body = Buffer.isBuffer(res.body) ? res.body : Buffer.from(String(res.body ?? ''));
+        entry.file = `assets/root-${basename(path)}`;
+        entry.bytes = body.length;
+        writeText(join(this.out, entry.file), body);
+      }
+      this.state.icons[path] = entry;
     }
     return 'done';
   }

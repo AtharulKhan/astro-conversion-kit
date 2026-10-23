@@ -101,6 +101,16 @@ test('assets.mjs saves the logo, the favicon and both fonts byte for byte', () =
   assert.match(assets.stdout, /apple-touch-icon: none/);
 });
 
+test('assets.mjs lists the root icons the capture saved, for the build to ship at the same paths', () => {
+  const index = JSON.parse(readFileSync(join(dir, 'assets', 'index.json'), 'utf8'));
+  const roots = index.filter((e) => e.kind === 'root-icon');
+  assert.deepEqual(roots, [
+    { kind: 'root-icon', url: `${fixture.origin}/favicon.ico`, path: '/favicon.ico', file: 'assets/root-favicon.ico', status: 200, note: null },
+    { kind: 'root-icon', url: `${fixture.origin}/apple-touch-icon.png`, path: '/apple-touch-icon.png', file: null, status: 404, note: 'live answered 404' },
+  ]);
+  sameBytes(join(dir, 'assets', 'root-favicon.ico'), join(SITE, 'favicon.ico'));
+});
+
 test('assets.mjs without captured CSS still saves the logo and says fonts were not captured', () => {
   assert.equal(bareAssets.code, 0, bareAssets.stderr);
   assert.ok(existsSync(join(bare, 'assets', 'logo.svg')));

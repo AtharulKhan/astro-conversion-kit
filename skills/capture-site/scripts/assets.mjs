@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Brand assets: the logo, the favicon, the apple-touch-icon and every web font, saved byte for
-// byte into <capture>/assets/ so the build can use the originals.
+// byte into <capture>/assets/ so the build can use the originals; the root icons capture.mjs
+// saved (assets/root-favicon.ico, assets/root-apple-touch-icon.png) are listed with them.
 // Sources: <link rel=icon|apple-touch-icon> and the logo (findLogo: in <header> first, then in
 // other logo elements, an image or inline <svg> named logo, the home link's image, else the
 // first <img>) on the home page snapshot, and every @font-face src in the stylesheets under <capture>/css/.
@@ -40,7 +41,10 @@ capture.mjs; without it, fonts are reported as not captured).
                     listed with status "too-large"
   --help            show this help
 
-Writes <dir>/assets/index.json listing each asset looked for. An asset that does not answer
+Writes <dir>/assets/index.json listing each asset looked for, and the root icons capture.mjs
+asked for (kind "root-icon", with path: /favicon.ico or /apple-touch-icon.png, and file:
+assets/root-favicon.ico or assets/root-apple-touch-icon.png when live served it), which the
+build copies to public/ at that path. An asset that does not answer
 200 is a warning on stderr and is listed there as missing. Files stream to disk; a host that
 resolves to a loopback, private or link-local address (other than the site's own) is not
 requested and is listed with status "blocked-address".
@@ -337,6 +341,14 @@ async function main() {
       for (const [path, stem] of [['/favicon.ico', 'root-favicon'], ['/apple-touch-icon.png', 'root-apple-touch-icon']]) {
         if (origin && meta.icons?.[path] === 200) await save(stem, new URL(path, origin).href, stem);
       }
+    }
+
+    // The root icons capture.mjs saved (meta.json icons), listed so the build ships each at its
+    // live path: { kind: "root-icon", url, path, file, status, note }. Never requested here.
+    for (const [path, icon] of Object.entries(meta.icons ?? {})) {
+      if (!icon || typeof icon !== 'object' || !origin) continue; // a capture older than the saved bytes
+      const note = icon.file ? null : icon.note ?? `live answered ${icon.status}`;
+      entries.push({ kind: 'root-icon', url: new URL(path, origin).href, path, file: icon.file, status: icon.status, note });
     }
 
     const fonts = origin ? fontUrls(dir, origin) : null;
