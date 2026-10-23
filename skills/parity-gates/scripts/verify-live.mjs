@@ -349,10 +349,12 @@ async function main() {
   const redirects = readJson(join(args.baseline, 'redirects.json'), 'baseline');
   const meta = existsSync(join(args.baseline, 'meta.json')) ? readJson(join(args.baseline, 'meta.json'), 'baseline') : {};
   const seo = existsSync(join(args.baseline, 'seo.json')) ? readJson(join(args.baseline, 'seo.json'), 'baseline') : {};
-  const mediaList = args['media-manifest']
+  const listed = args['media-manifest']
     ? readJson(args['media-manifest'], 'media manifest')
     : readJson(join(args.baseline, 'media.json'), 'baseline');
-  if (!Array.isArray(mediaList)) usageError('the media list is not a JSON array');
+  if (!Array.isArray(listed)) usageError('the media list is not a JSON array');
+  // A size the capture listed but never downloaded (downloaded: false) is not served by the build.
+  const mediaList = listed.filter((m) => m.downloaded !== false);
   const oldOrigins = new Set([meta.origin, meta.canonicalOrigin].filter(Boolean).map((o) => new URL(o).origin));
 
   const lines = [];

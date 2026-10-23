@@ -129,7 +129,12 @@ The plan phase decides; the scaffold writes. Every decision goes into state with
    (`BLOB_READ_WRITE_TOKEN`, or `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
    `R2_BUCKET`): rerun with `--mode live-temporary`, record the decision, and add the needs-you
    item "create the store, upload, regenerate rewrites; live-temporary must be gone before DNS
-   moves".
+   moves". When `media-plan` prints "N unreferenced sizes listed, not downloaded; pass --sizes all
+   to the capture if old links may use them", put that line in the plan's media decision and
+   the status message as printed: those WordPress sizes are in `baseline/media.json` with
+   `downloaded: false`, never built, and the media gate counts them as skipped. Rerun
+   `media.mjs --sizes all` (then the plan and the baseline) only if the owner says old emails
+   or other sites may link to them.
 4. **Templates**, from `capture/templates.json`: a split or merge that looks wrong is a decision.
 5. **Oddities**, one decision each, default "reproduce live": a missing or second H1, a dead
    tag, a broken internal link, a redirect chain, a sitemap URL that 404s, a slug claimed twice

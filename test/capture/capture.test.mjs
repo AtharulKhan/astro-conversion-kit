@@ -1089,14 +1089,19 @@ test('three tiny untitled pages in a row stop the capture; all three are queued 
     '/d/': titledPage('D'),
   });
   try {
-    const out = tempDir();
-    const run = await capture([stub.origin, '--out', out, '--delay', '0']);
-    assert.equal(run.code, 3, run.stderr);
-    assert.match(run.stderr, /^blocked: 127\.0\.0\.1 anti-bot challenge \(/m);
-    assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/a/:challenge', '/b/:challenge', '/c/:challenge']);
-    const state = readJson(out, 'state.json');
-    assert.deepEqual(state.queue.slice(0, 3).map((q) => new URL(q.url).pathname), ['/a/', '/b/', '/c/']);
-    assert.ok(!stub.requests.includes('/d/'), 'the crawl stopped');
+    // One at a time nothing after /c/ is asked for; with 4 in flight /d/ may already have been
+    // fetched ahead, but it is not recorded and stays queued.
+    for (const concurrency of ['1', '4']) {
+      stub.requests.length = 0;
+      const out = tempDir();
+      const run = await capture([stub.origin, '--out', out, '--delay', '0', '--concurrency', concurrency]);
+      assert.equal(run.code, 3, run.stderr);
+      assert.match(run.stderr, /^blocked: 127\.0\.0\.1 anti-bot challenge \(/m);
+      assert.deepEqual(readJson(out, 'inventory.json').map((r) => `${r.path}:${r.status}`), ['/:200', '/a/:challenge', '/b/:challenge', '/c/:challenge']);
+      const state = readJson(out, 'state.json');
+      assert.deepEqual(state.queue.map((q) => new URL(q.url).pathname), ['/a/', '/b/', '/c/', '/d/']);
+      if (concurrency === '1') assert.ok(!stub.requests.includes('/d/'), 'the crawl stopped');
+    }
   } finally {
     await stub.close();
   }

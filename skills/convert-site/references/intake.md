@@ -2,14 +2,15 @@
 
 Send this once, after preflight and the fingerprint, and never send a second question message.
 If your environment cannot wait for a reply (a non-interactive run), apply every default and
-go. Estimate, roughly, the time the live site is read at 2.5 s per request: per page, 1 for the capture
-and 2 for the full-set live shots (390 and 1440); per coverage page (up to 10 per template), 3
-coverage loads (one per width); per template, 3 live shots and 3 style loads per review round;
-plus 1 per media file. 200 pages in 4 templates with 1,000 media files:
-(200 × 3 + 40 × 3 + 4 × 6 + 1,000) × 2.5 s, about 73 minutes. Say "about": the estimate leaves
-out the Wayback second pass, retries and back-off after 429 or 503, assets and fonts, Lighthouse
-runs, each extra review round, and the reads of phase 10 (`launch-audit --old-url`, `pre-launch
---predecessor-url`).
+go. Estimate, roughly, the time the live site is read: the capture and media steps at 0.4 s per
+request (1 per page, 1 per referenced media file), and the browser steps at about 2 s per page
+load (per page, 2 full-set live shots at 390 and 1440; per coverage page, up to 10 per template,
+3 coverage loads; per template, 3 live shots and 3 style loads per review round). 200 pages in 4
+templates with 1,000 media files: (200 + 1,000) × 0.4 s + (200 × 2 + 40 × 3 + 4 × 6) × 2 s,
+about 26 minutes. With `--polite` (a host with a bot wall) the capture and media part is 2.5 s
+per request: about 68 minutes. Say "about": the estimate leaves out the Wayback second pass,
+retries and back-off after 429 or 503, assets and fonts, Lighthouse runs, each extra review
+round, and the reads of phase 10 (`launch-audit --old-url`, `pre-launch --predecessor-url`).
 Fill every `<...>` from what preflight and the fingerprint found; delete a question only when
 you already know the answer, and say what you found instead. Ask only what the owner knows:
 form counts, analytics ids, media size and server-side features (search, comments, store,
@@ -22,8 +23,8 @@ opening explaining what a repository, a staging deploy and a pull request are.
 
     I'm about to convert <LIVE> (<platform>, found <n sitemap URLs / REST pages>) into a static
     Astro site that matches it: same URLs, content, titles, media and look, proven by checks
-    against a saved copy of the live site. The live site is only read, slowly (one request every
-    2.5 seconds); nothing on it changes. I'll ask everything now and then work through to a pull
+    against a saved copy of the live site. The live site is only read, at a pace it can take (it
+    slows down by itself if the host pushes back); nothing on it changes. I'll ask everything now and then work through to a pull
     request without stopping. Answer only what you want to change; every line has a default.
 
     1. Repository. Default: a new private GitHub repo <gh user>/<slug>, in <folder>/<slug>.

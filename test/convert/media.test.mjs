@@ -126,6 +126,26 @@ test('file-size and count limits each give their own reason; non-200 entries do 
   assert.match(plan.reasons.join('\n'), /a\.jpg/);
 });
 
+test('unreferenced sizes are counted apart and named in the output; without them the plan has no such field', async () => {
+  const entries = [
+    { path: '/wp-content/uploads/a.jpg', status: 200, bytes: 2048 },
+    { path: '/wp-content/uploads/a-150x150.jpg', status: null, bytes: null, downloaded: false, reason: 'unreferenced size' },
+    { path: '/wp-content/uploads/a-768x512.jpg', status: null, bytes: null, downloaded: false, reason: 'unreferenced size' },
+  ];
+  const plan = planMedia(entries, { host: 'vercel' });
+  assert.equal(plan.totals.count, 1);
+  assert.equal(plan.unreferencedSizes, 2);
+  assert.equal(planMedia(entries.slice(0, 1), { host: 'vercel' }).unreferencedSizes, undefined);
+
+  const file = join(work, 'media-unreferenced.json');
+  writeFileSync(file, JSON.stringify(entries));
+  const res = await run(PLAN, ['--media', file, '--host', 'vercel', '--out', join(work, 'plan-unreferenced.json')]);
+  assert.equal(res.code, 0, res.stderr);
+  assert.match(res.stdout, /^ {2}2 unreferenced sizes listed, not downloaded; pass --sizes all to the capture if old links may use them$/m);
+  const plain = await run(PLAN, ['--media', fixtureMediaJson, '--host', 'vercel', '--out', join(work, 'plan-plain.json')]);
+  assert.doesNotMatch(plain.stdout, /unreferenced/);
+});
+
 test('--mode live-temporary is written with the no-credentials reason', async () => {
   const out = join(work, 'plan-live.json');
   const res = await run(PLAN, [

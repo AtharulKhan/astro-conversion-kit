@@ -50,7 +50,7 @@ Options (all from `--help`):
 | `--routes` | required | Templates file or comma list of paths |
 | `--out` | required | Output folder |
 | `--widths` | `390,768,1440` | Viewport widths in CSS pixels |
-| `--delay` | `2500` | Milliseconds between page loads; `0` is fine against your own local server only |
+| `--delay` | `500` | Milliseconds between page loads, doubled on 429 or 503; `0` is fine against your own local server only |
 | `--wait` | `1500` | Milliseconds to settle before each capture |
 | `--full` | off | With a templates file, shoot every path of every template |
 | `--scale` | `1` | Device scale factor 0.1 to 1; `0.5` for half-size previews (diff only like with like) |
@@ -135,7 +135,7 @@ Exit 0 every pair passes, 1 any pair fails (each listed on stdout with its reaso
 | `--routes` | required | Templates file (its representatives) or comma list of paths |
 | `--widths` | `390,1440` | Viewport widths; the default skips 768, so pass `390,768,1440` for the template set |
 | `--out` | `styles.json` | Output file; always pass `review/styles.json` |
-| `--delay` | `2500` | Milliseconds between page loads, both origins |
+| `--delay` | `500` | Milliseconds between page loads, both origins |
 | `--allow-analytics` | off | Let analytics, tag, pixel and chat hosts load on both origins (blocked by default, as in shoot) |
 
 This step loads the live site, once per route per width. Keep the default delay; never pass

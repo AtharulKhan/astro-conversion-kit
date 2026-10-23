@@ -233,6 +233,29 @@ test("sitemaps.json lists the live site's sitemap file names the capture saved",
   assert.deepEqual(readJson(baseline, 'sitemaps.json'), ['category-sitemap.xml', 'page-sitemap.xml', 'post-sitemap.xml', 'sitemap_index.xml']);
 });
 
+test('an unreferenced size (downloaded: false) is kept in baseline/media.json with its reason, and counted apart', async (t) => {
+  const listed = join(root, 'capture-listed');
+  const out = join(root, 'baseline-listed');
+  cpSync(capture, listed, { recursive: true });
+  t.after(() => rmSync(listed, { recursive: true, force: true }));
+  const media = readJson(capture, 'media.json');
+  const extra = { url: 'x', path: '/wp-content/uploads/2026/01/hero-150x150.jpg', source: ['rest'], referencedBy: [], status: null, contentType: null, bytes: null, downloaded: false, reason: 'unreferenced size' };
+  writeFileSync(join(listed, 'media.json'), JSON.stringify([...media, extra]));
+  const result = await build(['--capture', listed, '--out', out]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /20 media \(1 unreferenced size listed, not downloaded\)/);
+  const baselineMedia = readJson(out, 'media.json');
+  assert.equal(baselineMedia.length, 21);
+  assert.deepEqual(baselineMedia.at(-1), { path: extra.path, bytes: null, contentType: null, referencedBy: [], downloaded: false, reason: 'unreferenced size' });
+  const counts = readJson(out, 'counts.json');
+  assert.equal(counts.media, 20);
+  assert.equal(counts.unreferencedSizes, 1);
+  assert.equal((await build(['--out', out, '--check'])).code, 0, 'the counts check holds');
+  // Without such entries nothing changes: no unreferencedSizes key, no extra fields.
+  assert.equal(readJson(baseline, 'counts.json').unreferencedSizes, undefined);
+  assert.equal(readFileSync(join(baseline, 'media.json'), 'utf8').includes('downloaded'), false);
+});
+
 test('counts.json sums the baseline', () => {
   assert.deepEqual(readJson(baseline, 'counts.json'), {
     routes: 16,

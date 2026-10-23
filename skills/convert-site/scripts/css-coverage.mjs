@@ -14,7 +14,7 @@ import { stateRules } from './lib/state-selectors.mjs';
 
 const MAX_TOGGLES = 20;
 const HELP = `Usage: node css-coverage.mjs --base <origin> --routes <list|inventory.json> --out coverage.json
-                           [--widths 390,768,1440] [--delay 2500]
+                           [--widths 390,768,1440] [--delay 500]
 
 Loads every route at every width in Chromium with CSS coverage on, waits for the
 load event and a short settle, hovers and focuses the first a, button and input
@@ -43,7 +43,7 @@ injected styles are not recorded and the loads do not count as visits.
              records with a status other than 200 are skipped)
   --widths   comma list of viewport widths (default 390,768,1440)
   --out      coverage file to write
-  --delay    milliseconds between page loads (default 2500); doubled on 429/503
+  --delay    milliseconds between page loads (default 500); doubled on 429/503
 
 Exit codes: 0 written, 1 a route failed to load (the rest are still written),
 2 usage or environment error, 3 stopped after 3 consecutive blocked responses
@@ -97,7 +97,7 @@ function parse(argv) {
         routes: { type: 'string' },
         widths: { type: 'string', default: '390,768,1440' },
         out: { type: 'string' },
-        delay: { type: 'string', default: '2500' },
+        delay: { type: 'string', default: '500' },
         help: { type: 'boolean', default: false },
       },
     }));

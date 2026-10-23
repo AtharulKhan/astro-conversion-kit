@@ -20,18 +20,35 @@ Step 2 of a conversion (`convert-site` runs it), or any time a live site has to 
 
 ## Pacing
 
-Every script waits **2500 ms between requests** by default and sends a desktop Chrome user agent.
-Keep the default `--delay` against a live site (`--delay 0` is for local fixtures only), and never
-change `--ua` to get past a block.
+Every script sends a desktop Chrome user agent. The capture scripts (`capture`, `media`,
+`assets`, `fingerprint`) share a per-host limiter: by default request starts are **400 ms apart
+with up to 4 in flight** (`media`: 6), so a host that answers quickly is read in minutes. The
+Chromium steps (`shoot`, `css-coverage`, `styles`) load one page at a time, 500 ms apart, and `launch-audit` and `pre-launch` keep their own pacing. The limiter adapts by itself:
 
-- `capture` doubles its wait after a 429 or 503 (up to 32 times) and tries each URL 3 times. A
+- a 429 or 503 doubles that host's delay (up to 32 times) and drops it to **one request at a
+  time**; after every 30 s of clean answers it recovers one step (half the delay, one more in
+  flight) until it is back to the defaults;
+- an answer that takes more than 5 s halves the requests in flight on that host (not again while
+  halved), and it recovers the same way, one more in flight per 30 s of clean answers;
+- a 403 or a network error counts towards the 3-in-a-row stop below, as before.
+
+`--polite` is the old pace: one request at a time, 2500 ms apart (`capture`, `media`, `assets`).
+Use it from the start on shared hosting with a bot wall (SiteGround's `/.well-known/sgcaptcha/`,
+hosts that answer 429 or 503 to a few quick requests), or when a run stopped on blocks: resume
+with `--polite`. `--delay <ms>` and `--concurrency <n>` override the defaults or `--polite`. Keep
+the defaults or `--polite` against a live site (`--delay 0` is for local fixtures only), and
+never change `--ua` to get past a block.
+
+- `capture` fetches up to `--concurrency` queued URLs ahead and records them in queue order, so
+  the capture is the same as a one-at-a-time crawl. It tries each URL 3 times. A
   URL still blocked after that (403, 429, 503 or a network error) is recorded with its status and
   `attempts` in `inventory.json` (a sitemap or REST list in `meta.json` `discoveryErrors`) and
   the crawl moves on. It stops only after **3 different URLs in a row used up their tries**
   with no success between them, state saved, those three queued again with fresh tries.
   It never requests `wp-admin`, `wp-login`, `xmlrpc.php` or `?s=` searches.
 - `media` tries each file 3 times: a persistent 429 or 503 stops it at once; a 403 or network
-  error is recorded as that file's status, and 3 such files in a row stop it.
+  error is recorded as that file's status, and 3 such files in a row (in the order the answers
+  arrive) stop it. Files already downloading when it stops are let finish.
 - `fingerprint` does not retry: a blocked home page, or one that is a bot challenge, is exit 3. `assets` and `shoot` back off and
   stop after 3 blocked responses in a row.
 
@@ -78,6 +95,15 @@ source. Run each step as its own command, in this order:
    `.conversion/media-cache/`, the conversion's working directory, which stays out of git:
 
        node <skill-dir>/scripts/media.mjs --capture capture --download .conversion/media-cache
+
+   It downloads six files at a time. By default (`--sizes referenced`) it fetches the originals
+   and every size the site uses: one a page, stylesheet, srcset, og tag or sitemap points at, or
+   whose file name appears anywhere in the captured pages, stylesheets or scripts (data-thumb,
+   data-bg, JSON settings, slider scripts). A WordPress size only the REST media list names is
+   listed with `downloaded: false, reason: "unreferenced size"` and not requested. It prints the
+   split, e.g. `920 originals + referenced sizes (downloaded), 4,520 unreferenced sizes (listed
+   only)`: repeat that line to the person. Use `--sizes all` when the owner says old
+   emails or other sites may link to those sizes.
 
 4. **Templates.** Clusters the pages that answered 200 into `capture/templates.json`. On
    WordPress, pages group by template body class first (`home`, `page`, `single-post`,
@@ -141,6 +167,10 @@ The site is blocking requests or cannot be reached. Wait (minutes, not seconds),
   with their status, so URLs that are down for good stop the capture once, not on every resume.
   After two stops on the same URLs, tell the person which ones (paths and status) and carry on.
 - `media`, `assets`: run the same command again; work already done is kept.
+- After a stop, up to concurrency − 1 URLs may have been requested but not recorded;
+  `--resume` asks them again.
+- If it stopped at the default pace, add `--polite` to the resumed command (and to the later
+  steps on that site): the host wants one request at a time.
 - `shoot`: rerun with a longer `--delay`.
 
 Never retry in a tight loop. After two stops in a row, tell the person and carry on with the rest.
@@ -187,7 +217,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     redirects.json        every redirect, chains collapsed, hops kept; shortlinks marked verified or not
     links.json            internal and external links, with the pages that carry them
     scripts.json          third-party vendors with their ids and pages
-    media.json            every media file with sources, pages, status, type and bytes
+    media.json            every media file with sources, pages, status, type and bytes; a size
+                          only the REST list names: downloaded: false, "unreferenced size"
     css/                  every stylesheet, inline <style> blocks, manifest.json; the sheets a
                           stylesheet @imports (any host, 5 levels deep) too, their manifest
                           entries with importedBy: [importer hrefs] and the importer's pages;

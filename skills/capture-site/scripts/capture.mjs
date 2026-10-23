@@ -23,7 +23,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { fingerprint } from './fingerprint.mjs';
-import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http } from './lib/http.mjs';
+import { BLOCK_LIMIT, DEFAULT_CONCURRENCY, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, pacing, POLITE_DELAY_MS } from './lib/http.mjs';
 import { expandSitemaps } from './lib/sitemaps.mjs';
 import { extractPage } from './lib/extract.mjs';
 import { slugFor } from './lib/slug.mjs';
@@ -54,7 +54,10 @@ to list and download the media.
 
   <origin>              the site, e.g. https://www.example.com
   --out <dir>           the capture folder to write (e.g. capture)
-  --delay <ms>          wait between requests (default ${DEFAULT_DELAY_MS})
+  --delay <ms>          time between request starts on the site (default ${DEFAULT_DELAY_MS})
+  --concurrency <n>     requests in flight on the site at once (default ${DEFAULT_CONCURRENCY})
+  --polite              one request at a time, ${POLITE_DELAY_MS} ms apart (for shared hosts with
+                        bot walls); --delay and --concurrency override it
   --max <n>             stop after n page records (resume later with --resume)
   --resume              continue the crawl saved in <dir>/state.json
   --ua "<string>"       user agent (default: a desktop Chrome)
@@ -143,7 +146,7 @@ function readSeedFile(file) {
 
 function parseArgs(argv) {
   const args = {
-    origin: null, out: null, delayMs: DEFAULT_DELAY_MS, max: null, resume: false, ua: DEFAULT_UA,
+    origin: null, out: null, delayMs: null, concurrency: null, polite: false, max: null, resume: false, ua: DEFAULT_UA,
     seeds: [], verifyShortlinks: false, includeQuery: false, noRest: false, noWayback: false, help: false,
   };
   const value = (i, flag) => {
@@ -154,12 +157,13 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--out') args.out = value((i += 1), arg);
-    else if (arg === '--delay' || arg === '--max') {
+    else if (arg === '--delay' || arg === '--max' || arg === '--concurrency') {
       const n = Number(value((i += 1), arg));
-      if (!Number.isInteger(n) || n < (arg === '--max' ? 1 : 0)) throw new UsageError(`${arg} needs a whole number`);
+      if (!Number.isInteger(n) || n < (arg === '--delay' ? 0 : 1)) throw new UsageError(`${arg} needs a whole number`);
       if (arg === '--delay') args.delayMs = n;
+      else if (arg === '--concurrency') args.concurrency = n;
       else args.max = n;
-    } else if (arg === '--ua') args.ua = value((i += 1), arg);
+    } else if (arg === '--polite') args.polite = true; else if (arg === '--ua') args.ua = value((i += 1), arg);
     else if (arg === '--seed') args.seeds.push(value((i += 1), arg));
     else if (arg === '--seed-file') args.seeds.push(...readSeedFile(value((i += 1), arg)));
     else if (arg === '--resume') args.resume = true;
@@ -181,7 +185,7 @@ function parseArgs(argv) {
     throw new UsageError(`${args.origin} is not an http(s) origin`);
   }
   if (!args.out) throw new UsageError('--out <dir> is required');
-  return args;
+  return { ...args, ...pacing(args) };
 }
 
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
@@ -270,7 +274,7 @@ function styleBlocks(html) {
 }
 
 class Crawler {
-  constructor(state, { out, fetch, delayMs }) {
+  constructor(state, { out, fetch, delayMs, concurrency = 1 }) {
     // A challenge row only marks where the last run stopped: that URL is asked again.
     state.records = state.records.filter((r) => r.status !== CHALLENGE);
     delete state.challenge;
@@ -280,11 +284,12 @@ class Crawler {
     this.out = out;
     this.fetch = fetch;
     this.delayMs = delayMs;
+    this.concurrency = concurrency; // queue items fetched ahead of the one being recorded
     this.seen = new Set(state.seen);
     this.recorded = new Set(state.records.map((r) => r.url));
     this.full = new Map(); // url -> full record of this run (state.records keeps a slim copy)
     this.streak = new Set(); // distinct URLs blocked in a row
-    this.lastVisited = null;
+    this.lastStarted = null;
   }
 
   get scope() {
@@ -553,29 +558,55 @@ class Crawler {
     return 'done';
   }
 
-  // Follow one URL's redirects by hand. Returns { blocked, status }, { challenge, requeue[] } or
-  // { res, finalUrl, chain[] } (res.suspect set when the page is a suspected challenge).
+  // Where an answer leads: { next } to follow, or { end } (fetchChain's result) to stop there.
   // A hop to another site, a forbidden path, a file or a loop ends the chain without a request.
-  async fetchChain(start, item = null) {
+  redirectStep(res, current, chain, hop) {
+    const location = res.headers?.location;
+    if (res.status < 300 || res.status >= 400 || !location) return { end: { res, finalUrl: current, chain } };
+    chain.push({ url: current, status: res.status });
+    const next = new URL(location, current);
+    next.hash = '';
+    const offSite = bareHost(next) !== bareHost(new URL(this.state.canonicalOrigin));
+    const looped = chain.some((c) => c.url === next.href);
+    if (offSite || looped || forbidden(next) || notAPage(next) || hop === MAX_HOPS) {
+      return { end: { res: null, finalUrl: next.href, chain, offSite, looped } };
+    }
+    return { next: next.href };
+  }
+
+  // The network half of fetchChain, safe to run ahead of the queue: every hop's answer, up to
+  // where fetchChain stops whatever judge() decides (a signature challenge, a block, the end).
+  async fetchHops(start) {
+    const hops = [];
     const chain = [];
     let current = start;
     for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
       const res = await this.fetch(current, { redirect: 'manual' });
+      hops.push({ url: current, res });
+      if (detectChallenge(res)?.kind === 'signature' || BLOCK_STATUSES.has(res.status)) break;
+      const step = this.redirectStep(res, current, chain, hop);
+      if (step.end) break;
+      current = step.next;
+    }
+    return hops;
+  }
+
+  // Follow one URL's redirects by hand, judging each answer in queue order. `hops` are the
+  // answers fetchHops already has; any hop it lacks is asked for here. Returns { blocked, status },
+  // { challenge, requeue[] } or { res, finalUrl, chain[] } (res.suspect set when the page is a
+  // suspected challenge).
+  async fetchChain(start, item = null, hops = []) {
+    const chain = [];
+    let current = start;
+    for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
+      const res = hops[hop]?.url === current ? hops[hop].res : await this.fetch(current, { redirect: 'manual' });
       const verdict = this.judge(res, current, item);
       if (verdict?.stop) return { challenge: verdict.stop, requeue: verdict.requeue };
       if (verdict?.suspect) res.suspect = verdict.suspect;
       if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
-      const location = res.headers?.location;
-      if (res.status < 300 || res.status >= 400 || !location) return { res, finalUrl: current, chain };
-      chain.push({ url: current, status: res.status });
-      const next = new URL(location, current);
-      next.hash = '';
-      const offSite = bareHost(next) !== bareHost(new URL(this.state.canonicalOrigin));
-      const looped = chain.some((c) => c.url === next.href);
-      if (offSite || looped || forbidden(next) || notAPage(next) || hop === MAX_HOPS) {
-        return { res: null, finalUrl: next.href, chain, offSite, looped };
-      }
-      current = next.href;
+      const step = this.redirectStep(res, current, chain, hop);
+      if (step.end) return step.end;
+      current = step.next;
     }
     return { res: null, finalUrl: current, chain };
   }
@@ -665,8 +696,7 @@ class Crawler {
     }
   }
 
-  async visitCss(item) {
-    const res = await this.fetch(item.url, { redirect: 'follow' });
+  async visitCss(item, res) {
     if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
     const entry = this.state.css.entries.find((e) => e.href === item.url);
     entry.status = res.status;
@@ -714,7 +744,8 @@ class Crawler {
     if (!this.state.css) return 'done';
     return this.drain(
       this.state.css.queue,
-      (item) => this.visitCss(item),
+      (item) => this.fetch(item.url, { redirect: 'follow' }),
+      (item, res) => this.visitCss(item, res),
       (item, status) => {
         this.state.css.entries.find((e) => e.href === item.url).status = status;
       },
@@ -749,22 +780,27 @@ class Crawler {
     }
   }
 
-  async visitJs(item) {
-    const entry = this.state.js.entries.find((e) => e.src === item.url);
+  // The network half of visitJs: the last answer, and offSite when a redirect leaves the host.
+  async fetchJsFile(item) {
     const site = bareHost(new URL(this.state.canonicalOrigin));
     let url = item.url;
-    let res;
     for (let hop = 0; ; hop += 1) {
-      res = await this.fetch(url, { raw: true, maxBytes: JS_MAX_BYTES });
-      if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
+      const res = await this.fetch(url, { raw: true, maxBytes: JS_MAX_BYTES });
+      if (BLOCK_STATUSES.has(res.status)) return { res };
       const location = res.headers?.location;
-      if (res.status < 300 || res.status >= 400 || !location || hop >= JS_MAX_HOPS) break;
+      if (res.status < 300 || res.status >= 400 || !location || hop >= JS_MAX_HOPS) return { res };
       const next = new URL(location, url);
-      if (bareHost(next) !== site) {
-        entry.status = 'off-site';
-        return {};
-      }
+      if (bareHost(next) !== site) return { res, offSite: true };
       url = next.href;
+    }
+  }
+
+  async visitJs(item, { res, offSite }) {
+    const entry = this.state.js.entries.find((e) => e.src === item.url);
+    if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
+    if (offSite) {
+      entry.status = 'off-site';
+      return {};
     }
     entry.status = res.status;
     if (res.status !== 200) return {};
@@ -778,7 +814,8 @@ class Crawler {
     if (!this.state.js) return 'done';
     return this.drain(
       this.state.js.queue,
-      (item) => this.visitJs(item),
+      (item) => this.fetchJsFile(item),
+      (item, fetched) => this.visitJs(item, fetched),
       (item, status) => {
         this.state.js.entries.find((e) => e.src === item.url).status = status;
       },
@@ -835,8 +872,8 @@ class Crawler {
     }
   }
 
-  async visit(item) {
-    const result = await this.fetchChain(item.url, item);
+  async visit(item, hops) {
+    const result = await this.fetchChain(item.url, item, hops);
     if (result.challenge) this.noteChallenge(item.url, result.challenge, { requeue: result.requeue });
     if (result.blocked || result.challenge) return result;
     const { res, chain } = result;
@@ -887,8 +924,12 @@ class Crawler {
     return found;
   }
 
-  async visitShortlink(item) {
-    const result = await this.fetchChain(new URL(item.url, this.state.canonicalOrigin).href);
+  shortlinkUrl(item) {
+    return new URL(item.url, this.state.canonicalOrigin).href;
+  }
+
+  async visitShortlink(item, hops) {
+    const result = await this.fetchChain(this.shortlinkUrl(item), null, hops);
     if (result.challenge) this.noteChallenge(item.url, result.challenge, { row: false });
     if (result.blocked || result.challenge) return result;
     const { res, chain } = result;
@@ -902,30 +943,53 @@ class Crawler {
   }
 
   // Work through a queue with per-URL retries and the block streak.
+  // Up to `concurrency` items at the front of the queue are fetched at once (fetchAhead: network
+  // only, no state), and each is recorded (visit) in queue order, so the capture is the same
+  // whatever the concurrency; blocks and challenges are judged in that order too.
   // A URL still blocked (403, 429, 503 or a network error) after its retries is given up:
   // recorded with that status and its attempts, and the run moves on. A URL counts towards the
   // streak only once its retries are used up: three different URLs used up in a row, with no
   // success between them, stop the run with those three back at the front of the queue (fresh
   // tries, `stops` counted). One that was already put back once is given up for good when it
   // fails again and no longer counts, so URLs that are down for good cannot stop every resume.
-  // A challenge stops at once, that URL back at the front of the queue.
+  // A challenge stops at once, that URL back at the front of the queue. Fetches still in flight
+  // when the run stops are dropped: their items are still in the queue for --resume.
   // Returns 'done', 'max', 'blocked' or 'challenge'.
-  async drain(queue, visit, giveUp, max = null) {
+  async drain(queue, fetchAhead, visit, giveUp, max = null) {
     let sinceSave = 0;
     let pending = []; // used up, given up once a success shows the site is still answering
+    const inFlight = new Map(); // queue item -> its fetchAhead promise
     const settle = () => {
       for (const { item, status } of pending) giveUp(item, status);
       pending = [];
+    };
+    const start = (item) => {
+      const retry = item.attempts > 0 && this.lastStarted === item.url;
+      this.lastStarted = item.url;
+      const wait = retry ? sleep(this.retryWait(item.attempts)) : Promise.resolve();
+      const fetched = wait.then(() => fetchAhead(item));
+      fetched.catch(() => {}); // a dropped fetch never fails the run; the awaited one still throws
+      inFlight.set(item, fetched);
     };
     while (queue.length > 0) {
       if (max && this.state.records.length >= max) {
         settle();
         return 'max';
       }
+      const room = max ? Math.max(1, Math.min(this.concurrency, max - this.state.records.length)) : this.concurrency;
+      for (const ahead of queue.slice(0, room)) if (!inFlight.has(ahead)) start(ahead);
       const item = queue.shift();
-      if (item.attempts > 0 && this.lastVisited === item.url) await sleep(this.retryWait(item.attempts));
-      this.lastVisited = item.url;
-      const result = await visit(item);
+      const fetched = await inFlight.get(item);
+      inFlight.delete(item);
+      const result = await visit(item, fetched);
+      // visit() may drop queued URLs it recorded through a redirect: forget their fetches. Such a
+      // URL (a redirect target already queued and fetched ahead) has then been requested twice;
+      // only the answer at the end of the chain is recorded. Likewise, when the run stops below,
+      // fetches still in flight are dropped unrecorded and their items stay queued for --resume.
+      if (inFlight.size > 0) {
+        const queued = new Set(queue);
+        for (const ahead of inFlight.keys()) if (!queued.has(ahead)) inFlight.delete(ahead);
+      }
       if (result.challenge) {
         queue.unshift(...(result.requeue ?? []), item);
         settle();
@@ -960,7 +1024,8 @@ class Crawler {
   async crawl(max) {
     const outcome = await this.drain(
       this.state.queue,
-      (item) => this.visit(item),
+      (item) => this.fetchHops(item.url),
+      (item, hops) => this.visit(item, hops),
       (item, status) => this.record(item.url, { status, headers: {}, body: '' }, item.kind, { attempts: item.attempts }),
       max,
     );
@@ -977,7 +1042,8 @@ class Crawler {
     }
     return this.drain(
       this.state.verifyQueue,
-      (item) => this.visitShortlink(item),
+      (item) => this.fetchHops(this.shortlinkUrl(item)),
+      (item, hops) => this.visitShortlink(item, hops),
       (item, status) => {
         this.state.shortlinkChecks[item.url] = { to: null, status, hops: [] };
       },
@@ -1118,8 +1184,8 @@ async function main() {
   mkdirSync(out, { recursive: true });
 
   http.resetBlocked();
-  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
-  const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs });
+  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
+  const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs, concurrency: args.concurrency });
   // Seeds given on --resume: once the home page is known they join the queue here (before that,
   // discovery queues every seed in the options), and a finished capture crawls again for them.
   if (state.fingerprint && newSeeds.length > 0) {
