@@ -76,7 +76,13 @@ the default `exceptions.json` and `proposals.json` may be missing.
 | `link` | links | the page | the live href (recorded, not compared) / the built href the gate reports as broken |
 | `redirect` | redirects | the redirect source | the baseline target with the site's origin stripped (`/services/`, not `https://www.example.com/services/`) / the new target |
 | `media` | media | the media path | the baseline bytes (a number) / the built bytes, or `""` for a file the build drops |
+| `markup` | none | the page | a description of the markup before / after (`<a href="https://www.example.com/contact/">` / `<a href="/contact/">`) |
 | `routes` | routes | a route the capture could not read (status other than 200, 3xx, 404 or 410) | its captured status as a string (`"503"`, `"0"` for a network error) / `"skip"` to leave it out (counted as skipped, never passed), or the path of the built page that replaces it (it must be built) |
+
+A `markup` record is a reviewed change no gate measures, such as body `<a href>` links rewritten
+from the live origin to root-relative (they still resolve, so the links gate sees no
+difference). Every gate accepts it as a record and never compares it, so it is never stale or
+"path not checked"; `from` and `to` describe the change for the person who reviews it.
 
 A `routes` exception only covers a route that was not captured; recapture it when you can, since
 a skipped route is a URL the new site may not answer. `sitemaps`, `forms`, `scripts` and
