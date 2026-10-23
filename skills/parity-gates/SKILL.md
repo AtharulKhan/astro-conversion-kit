@@ -93,6 +93,11 @@ rebuild, rerun. One gate alone: `node <skill-dir>/scripts/verify/<gate>.mjs`.
 | `sitemaps` | Every top sitemap in `dist/` (Astro's `sitemap-index.xml`, or a live name in `baseline/sitemaps.json` such as `wp-sitemap.xml` or `sitemap_index.xml`) lists exactly the indexable 200 pages on the origin (percent escapes compare case-blind: `%c3` is `%C3`); every robots.txt `Sitemap:` line is on the origin and names a file in `dist/`, or is a line the live robots.txt (`capture/robots.txt`) carried verbatim; every feed is built with as many items | |
 | `text` | Each page's visible text equals `baseline/text/` (word diff, 5 words of context) | |
 
+A capture made with `--exclude` records its path prefixes in `baseline/meta.json` `excluded`: the
+`links` gate does not check a link under one (like a link to another host, noted "N links under
+excluded paths ... not checked"), and the `sitemaps` gate accepts a robots.txt `Sitemap:` line under
+one when the live robots.txt carried it verbatim (a multisite sub-site's sitemap on the same host).
+
 ## 4. Differences and decisions
 
 When the build cannot or should not match live, read `references/exceptions.md`. In short: an

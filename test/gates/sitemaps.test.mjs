@@ -144,6 +144,38 @@ test('a carried Sitemap: line on the site\'s own host is never skipped: with --o
   assert.match(result.stdout, /\/robots\.txt sitemap line: expected "https:\/\/staging\.example\.com\//);
 });
 
+test('a carried Sitemap: line under a path the capture excluded passes (a multisite sub-site); not without the exclusion', async () => {
+  const dir = join(root, 'excluded');
+  const excludedBaseline = await buildFixtureBaseline(dir, { exclude: '/services/' });
+  const excludedCapture = join(dir, 'capture');
+  const liveOrigin = JSON.parse(readFileSync(join(excludedCapture, 'meta.json'), 'utf8')).origin;
+  // The live robots.txt also names the excluded sub-site's sitemap index, on the same host.
+  const subSite = `${liveOrigin}/services/sitemap_index.xml`;
+  writeFileSync(join(excludedCapture, 'robots.txt'), `${readFileSync(join(excludedCapture, 'robots.txt'), 'utf8')}Sitemap: ${subSite}\n`);
+  const dist = makeDist(join(root, 'dist-robots-excluded'));
+  rmSync(join(dist, 'services'), { recursive: true });
+  for (const path of ['/services/', '/services/roofing/', '/services/siding/']) edit(dist, 'sitemap-0.xml', `<url><loc>${DIST_ORIGIN}${path}</loc></url>`, '');
+  const own = `User-agent: *\nSitemap: ${DIST_ORIGIN}/sitemap-index.xml\n`;
+  writeFileSync(join(dist, 'robots.txt'), `${own}Sitemap: ${subSite}\n`);
+  const gate = (base, capt) => runGate('sitemaps', ['--dist', dist, '--baseline', base, '--capture', capt, '--origin', DIST_ORIGIN], { cwd: root });
+
+  const carried = await gate(excludedBaseline, excludedCapture);
+  assert.equal(carried.code, 0, carried.stdout + carried.stderr);
+  assert.match(carried.stdout, /^sitemaps: 12 checked, 0 failed$/m);
+
+  writeFileSync(join(dist, 'robots.txt'), `${own}Sitemap: ${liveOrigin}/services/other-sitemap.xml\n`);
+  const notLive = await gate(excludedBaseline, excludedCapture);
+  assert.equal(notLive.code, 1, 'a line live did not carry still fails');
+
+  writeFileSync(join(dist, 'robots.txt'), `${own}Sitemap: ${subSite}\n`);
+  const copied = join(root, 'capture-with-subsite');
+  cpSync(capture, copied, { recursive: true });
+  writeFileSync(join(copied, 'robots.txt'), `${readFileSync(join(copied, 'robots.txt'), 'utf8')}Sitemap: ${subSite}\n`);
+  const unexcluded = await gate(baseline, copied);
+  assert.equal(unexcluded.code, 1, 'without the exclusion the same line fails');
+  assert.match(unexcluded.stdout, /\/robots\.txt sitemap line: .*services\/sitemap_index\.xml/);
+});
+
 test('a robots.txt Sitemap: line must point at a file in dist', async () => {
   const dist = makeDist(join(root, 'dist-robots'));
   writeFileSync(join(dist, 'robots.txt'), `User-agent: *\nSitemap: ${DIST_ORIGIN}/sitemap-index.xml\nSitemap: ${DIST_ORIGIN}/sitemap_index.xml\n`);

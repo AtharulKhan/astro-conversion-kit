@@ -124,6 +124,11 @@ parity and this file is wrong: say so and fix this file.
   with the same families, weights and styles. Replacing a font service link with local
   `@font-face` rules is a decision row; the visual review proves it.
 - Logo, favicon, apple-touch-icon and the web manifest from `capture/assets/`, same paths.
+- Every `root-icon` entry in `capture/assets/index.json` that has a `file` is copied byte for
+  byte to `public/<path>` (`assets/root-favicon.ico` → `public/favicon.ico`,
+  `assets/root-apple-touch-icon.png` → `public/apple-touch-icon.png`). One with `file: null` is
+  an icon live did not serve at the root (its status and note say why); copy-assets copies each
+  `root-icon` entry with a `file` to `public/` plus its `path`.
 
 ## Scripts
 

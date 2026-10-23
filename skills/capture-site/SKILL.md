@@ -233,8 +233,9 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     inventory.json        one record per page: status, head tags, JSON-LD, headings, forms, links
     pages/  text/         raw HTML and visible text per page
     redirects.json        every redirect, chains collapsed, hops kept; shortlinks marked verified or not
-    links.json            internal and external links, with the pages that carry them; with
-                          --exclude, links under an excluded prefix in "excluded"
+    links.json            { internal, external } maps of link -> [pages that carry it]; with
+                          --exclude also "excluded": { "<path>": [pages] }, the links under an
+                          excluded prefix (kept in the HTML, never in internal, never requested)
     scripts.json          third-party vendors with their ids and pages
     media.json            every media file with sources, pages, status, type and bytes; a size
                           only the REST list names: downloaded: false, "unreferenced size"

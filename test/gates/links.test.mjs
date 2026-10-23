@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
@@ -145,6 +145,28 @@ test('cloudflare: Pages slash handling resolves an unslashed link in one hop', a
   const result = await linksIn(dir, dist);
   assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /^ {2}1 links resolved through redirects$/m);
+});
+
+test('a link under a path the capture excluded (--exclude) is not checked; without the exclusion it fails', async () => {
+  // The fixture captured with --exclude /services/: the build serves no services page, but the
+  // other pages keep their links to them, as live had them.
+  const excludedBaseline = await buildFixtureBaseline(join(root, 'excluded'), { exclude: '/services/' });
+  assert.deepEqual(JSON.parse(readFileSync(join(excludedBaseline, 'meta.json'), 'utf8')).excluded, ['/services/']);
+  const dist = makeDist(join(root, 'dist-excluded'));
+  rmSync(join(dist, 'services'), { recursive: true });
+  const passed = await runGate('links', ['--dist', dist, '--baseline', excludedBaseline, '--origin', DIST_ORIGIN], { cwd: root });
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /links under excluded paths \(\/services\/\) not checked/);
+  assert.match(passed.stdout, /^links: 11 checked, 0 failed$/m);
+
+  const failed = await links(dist);
+  assert.equal(failed.code, 1, 'the full baseline has no exclusion');
+  assert.match(failed.stdout, /^ {2}\/ link: expected "a built page, file, redirect source or media path", got "\/services\/roofing\/"$/m);
+
+  edit(dist, 'about/index.html', '<a href="/contact/">', '<a href="/contact-us/">');
+  const broken = await runGate('links', ['--dist', dist, '--baseline', excludedBaseline, '--origin', DIST_ORIGIN], { cwd: root });
+  assert.equal(broken.code, 1, 'a link outside the excluded prefix is still checked');
+  assert.match(broken.stdout, /\/about\/ link: .*got "\/contact-us\/"/);
 });
 
 test('usage and missing inputs exit 2; --help exits 0', async () => {
