@@ -76,7 +76,7 @@ function imageSrc(img) {
   return LAZY_SRC.map((name) => attr(img, name)).find(Boolean) ?? null;
 }
 
-// "logo" or "logos" as a word of a name: sxsw-logo.svg, custom-logo, "Brand logo", headerLogo
+// "logo" or "logos" as a word of a name: site-logo.svg, custom-logo, "Brand logo", headerLogo
 // (a camelCase word start counts), not "logout" or "catalogue".
 const LOGO = /(^|[^A-Za-z]|[a-z](?=L))[Ll][Oo][Gg][Oo][Ss]?([^A-Za-z]|$)/;
 const SVG_NS = 'http://www.w3.org/2000/svg';
