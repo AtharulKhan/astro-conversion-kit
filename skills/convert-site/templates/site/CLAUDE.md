@@ -42,6 +42,9 @@ npm run verify
   `proposalOn(id)`. When a person approves it, the entry moves to `exceptions.json` with their
   name in `approvedBy`.
 - Both files hold the gates' record shape: `{ path, field, from, to, reason, approvedBy, date }`.
+  One record means "no redirect for this path, on purpose" (a broken live href nothing should
+  redirect): `{ kind: "redirect", path, reason, action: "none", approvedBy, date }`, every key
+  required.
 - Never edit `baseline/` to make a gate pass.
 
 ## Indexing switch

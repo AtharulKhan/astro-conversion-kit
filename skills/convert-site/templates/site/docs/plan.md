@@ -32,6 +32,11 @@ Where the redirect list comes from (plugin export, server config, sitemap diff) 
 | Form | Page | Fields | New endpoint | Tested |
 | --- | --- | --- | --- | --- |
 
+Forms kept as is (POST forms that already post to another site, left exactly as captured):
+
+| Page | Action host |
+| --- | --- |
+
 ## Analytics carry-over
 
 IDs found in capture and how each one is carried over unchanged.
