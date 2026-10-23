@@ -336,11 +336,6 @@ async function main() {
         if (url) await save(kind, url, kind);
         else absent(kind, missing);
       }
-      // The root icons browsers and launch checks ask for whatever the head links; saved when the
-      // capture's probe (meta.json icons) saw live answer 200.
-      for (const [path, stem] of [['/favicon.ico', 'root-favicon'], ['/apple-touch-icon.png', 'root-apple-touch-icon']]) {
-        if (origin && meta.icons?.[path] === 200) await save(stem, new URL(path, origin).href, stem);
-      }
     }
 
     // The root icons capture.mjs saved (meta.json icons), listed so the build ships each at its

@@ -190,7 +190,7 @@ test('assets.mjs ranks the header before other logo elements, does not read "log
   }
 });
 
-test('assets.mjs saves the web manifest, and the root icons meta.json icons saw answer 200', async () => {
+test('assets.mjs saves the web manifest and lists the root icons the capture saved, asking live for neither', async () => {
   const site = await startStub({
     '/site.webmanifest': { headers: { 'Content-Type': 'application/manifest+json' }, body: '{"name":"x"}' },
     '/favicon.ico': { headers: { 'Content-Type': 'image/x-icon' }, body: 'ico' },
@@ -198,7 +198,15 @@ test('assets.mjs saves the web manifest, and the root icons meta.json icons saw 
   });
   const dir = tinyCapture(site.origin, '<html><head><link rel="manifest" href="/site.webmanifest"></head><body></body></html>', '');
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
-  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ ...meta, icons: { '/favicon.ico': 200, '/apple-touch-icon.png': 404 } }));
+  mkdirSync(join(dir, 'assets'), { recursive: true });
+  writeFileSync(join(dir, 'assets/root-favicon.ico'), 'ico');
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({
+    ...meta,
+    icons: {
+      '/favicon.ico': { status: 200, file: 'assets/root-favicon.ico', contentType: 'image/x-icon', bytes: 3 },
+      '/apple-touch-icon.png': { status: 404, file: null, contentType: null, bytes: null },
+    },
+  }));
   try {
     const result = await run(['--capture', dir, '--delay', '0']);
     assert.equal(result.code, 0, result.stderr);
@@ -206,10 +214,9 @@ test('assets.mjs saves the web manifest, and the root icons meta.json icons saw 
     const manifest = index.find((e) => e.kind === 'manifest');
     assert.equal(manifest.url, `${site.origin}/site.webmanifest`);
     assert.equal(readFileSync(join(dir, manifest.file), 'utf8'), '{"name":"x"}');
-    const root = index.find((e) => e.kind === 'root-favicon');
-    assert.equal(readFileSync(join(dir, root.file), 'utf8'), 'ico');
-    assert.ok(!index.some((e) => e.kind === 'root-apple-touch-icon'));
-    assert.ok(!site.requests.includes('/apple-touch-icon.png'), 'a root icon live answered 404 for is not asked');
+    const roots = index.filter((e) => e.kind === 'root-icon');
+    assert.deepEqual(roots.map((e) => [e.path, e.file, e.status]), [['/favicon.ico', 'assets/root-favicon.ico', 200], ['/apple-touch-icon.png', null, 404]]);
+    assert.ok(!site.requests.includes('/favicon.ico') && !site.requests.includes('/apple-touch-icon.png'), 'root icons come from the capture, never requested here');
   } finally {
     rmSync(dir, { recursive: true, force: true });
     await site.close();
