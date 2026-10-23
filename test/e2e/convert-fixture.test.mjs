@@ -134,12 +134,14 @@ test('9 components: skipped, off by default', () => {
 // pre-launch with --predecessor-url fails two checks that read the kit's trailing-slash
 // normalisation wrongly (upstream, in the launch skills): the slash rules count as wildcards, and
 // the live /about -> /about/ redirect looks like a loop once trailing slashes are ignored.
-// prelaunch-reconcile accepts exactly those two under its narrow rule and exits 0.
-test('10 prelaunch: prelaunch-reconcile exits 0, accepting only the two slash-rule checks; verify-live passes staging and release', () => {
+// prelaunch-reconcile accepts exactly those two under its narrow rule, and the robots.txt check
+// that flags the sister site's Sitemap: line live carried (kept as captured), and exits 0.
+test('10 prelaunch: prelaunch-reconcile exits 0, accepting only the two slash-rule checks and the live robots line; verify-live passes staging and release', () => {
   ok(results.prelaunch.reconcile);
   const { accepted, blocking } = JSON.parse(results.prelaunch.reconcile.stdout);
   assert.deepEqual(blocking, []);
-  assert.deepEqual(accepted.map((a) => `${a.id} ${a.rule}`).sort(), ['predecessor.redirect-chains slash', 'predecessor.wildcard-redirects slash'], shown(results.prelaunch.preLaunch));
+  assert.deepEqual(accepted.map((a) => `${a.id} ${a.rule}`).sort(), ['output.robots-txt live-robots', 'predecessor.redirect-chains slash', 'predecessor.wildcard-redirects slash'], shown(results.prelaunch.preLaunch));
+  assert.deepEqual(accepted.find((a) => a.id === 'output.robots-txt').rows.map((r) => r.text), ['the Sitemap: line points at other.example.com, not 127.0.0.1']);
   const failing = results.prelaunch.gate.checks.filter((c) => c.status === 'fail');
   const chains = failing.find((c) => c.id === 'predecessor.redirect-chains');
   assert.deepEqual(chains.evidence.map((e) => e.value), ['/about -> /about is a loop and serves nothing']);

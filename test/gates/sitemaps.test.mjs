@@ -108,6 +108,30 @@ test('every top sitemap in dist must list every page: one that misses a page fai
   assert.doesNotMatch(result.stdout, /sitemap sitemap-index\.xml/);
 });
 
+test('a Sitemap: line on another host passes only when the live robots.txt carried it verbatim', async () => {
+  const dist = makeDist(join(root, 'dist-robots-other-host'));
+  const own = `User-agent: *\nSitemap: ${DIST_ORIGIN}/sitemap-index.xml\n`;
+  // The fixture's live robots.txt names its sister site's sitemap (capture/robots.txt).
+  assert.match(readFileSync(join(capture, 'robots.txt'), 'utf8'), /^Sitemap: http:\/\/other\.example\.com\/sitemap_index\.xml$/m);
+  writeFileSync(join(dist, 'robots.txt'), `${own}Sitemap: http://other.example.com/sitemap_index.xml\n`);
+  const carried = await sitemaps(dist);
+  assert.equal(carried.code, 0, carried.stdout);
+  assert.match(carried.stdout, /^sitemaps: 15 checked, 0 failed$/m);
+
+  writeFileSync(join(dist, 'robots.txt'), `${own}Sitemap: http://other.example.com/staging-sitemap.xml\n`);
+  const notLive = await sitemaps(dist);
+  assert.equal(notLive.code, 1);
+  assert.match(notLive.stdout, /^ {2}\/robots\.txt sitemap line: expected "https:\/\/www\.example\.com\/staging-sitemap\.xml", got "http:\/\/other\.example\.com\/staging-sitemap\.xml"$/m);
+  assert.match(notLive.stdout, /^sitemaps: 15 checked, 1 failed$/m);
+
+  const noRobots = join(root, 'capture-no-robots');
+  cpSync(capture, noRobots, { recursive: true });
+  rmSync(join(noRobots, 'robots.txt'));
+  writeFileSync(join(dist, 'robots.txt'), `${own}Sitemap: http://other.example.com/sitemap_index.xml\n`);
+  const unknown = await runGate('sitemaps', ['--dist', dist, '--baseline', baseline, '--capture', noRobots, '--origin', DIST_ORIGIN], { cwd: root });
+  assert.equal(unknown.code, 1, 'without the captured robots.txt the line is not known to be live');
+});
+
 test('a robots.txt Sitemap: line must point at a file in dist', async () => {
   const dist = makeDist(join(root, 'dist-robots'));
   writeFileSync(join(dist, 'robots.txt'), `User-agent: *\nSitemap: ${DIST_ORIGIN}/sitemap-index.xml\nSitemap: ${DIST_ORIGIN}/sitemap_index.xml\n`);

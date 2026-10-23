@@ -41,16 +41,20 @@ Narrow rules that need no decision:
                                   built in --dist or named on a decision row
   hygiene.pushed                  --dir has no git remote and a needs-you item in --state says
                                   to push (no PR can be opened until the person pushes)
+  output.robots-txt               every row is "the Sitemap: line points at <host>, ..." and each
+                                  Sitemap: line on that host in <dist>/robots.txt is one the live
+                                  robots.txt (capture/robots.txt) carried verbatim (a sister
+                                  site's sitemap the default build keeps, as live had it)
 Any other failing check blocks, a crashed one included, and so does a check whose evidence was
 cut at pre-launch's listing cap (the unlisted rows cannot be compared).
 
   --findings <file>  gate.json or findings.json from pre-launch's --out bundle (required)
   --baseline <dir>   the baseline folder (required)
   --plan <file>      docs/plan.md with its Decisions table (required)
-  --capture <dir>    the capture folder: assets/index.json, meta.json, sitemaps/index.json and
-                     the 404 page (default: capture)
+  --capture <dir>    the capture folder: assets/index.json, meta.json, sitemaps/index.json,
+                     robots.txt and the 404 page (default: capture)
   --dir <dir>        the site repository, for hygiene.pushed (default: .)
-  --dist <dir>       the build, for predecessor.coverage (default: <dir>/dist)
+  --dist <dir>       the build, for predecessor.coverage and output.robots-txt (default: <dir>/dist)
   --state <file>     the run state with needsYou (default: .conversion/state.json)
   --json             print { failing, accepted[], blocking[] } instead of lines
   --help             show this help
@@ -123,6 +127,8 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // ------------------------------------------------------------------------------- the inputs
 
 // The size a PNG's IHDR records, or null.
+const sitemapLines = (text) => [...text.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
+
 function pngSize(file) {
   try {
     const b = readFileSync(file);
@@ -193,6 +199,11 @@ export function loadBaseline(dir, captureDir = null) {
     pagesWithOgImage: (image) => Object.keys(allSeo).filter((p) => sameUrl(allSeo[p].og?.image, image)),
     // Whether live published a sitemap: one the capture saved (baseline/sitemaps.json) or one
     // capture/sitemaps/index.json records answering 200.
+    // The Sitemap: URLs of the live robots.txt the capture saved, [] without it.
+    liveSitemapLines: () => {
+      const file = captureDir ? join(captureDir, 'robots.txt') : null;
+      return file && existsSync(file) ? sitemapLines(readFileSync(file, 'utf8')) : [];
+    },
     hadSitemap: () => read('sitemaps.json', []).length > 0 || captured(join('sitemaps', 'index.json'), []).some((s) => s.status === 200),
     // The pages the crawl found answering 200 (not media).
     crawled: () => routes.filter((r) => r.status === 200 && r.kind !== 'media').map((r) => r.path),
@@ -421,6 +432,22 @@ function narrow(check, env, base, decisions) {
     });
     return { ok: rows.every((r) => r.ok), rule: 'slash', decision: null, rows };
   }
+  if (check.id === 'output.robots-txt') {
+    const live = new Set(base.liveSitemapLines());
+    const robotsFile = join(env.dist, 'robots.txt');
+    const built = existsSync(robotsFile) ? sitemapLines(readFileSync(robotsFile, 'utf8')) : [];
+    const rows = values.map((text) => {
+      const host = /^the Sitemap: line points at (\S+), not /.exec(text)?.[1];
+      if (!host) return { text, ok: false, reason: 'not an off-host Sitemap: line' };
+      // pre-launch names the hostname (no port).
+      const lines = built.filter((url) => URL.canParse(url) && new URL(url).hostname === host);
+      const missing = lines.filter((url) => !live.has(url));
+      if (lines.length === 0) return { text, ok: false, reason: `no Sitemap: line on ${host} in ${robotsFile}` };
+      if (missing.length) return { text, ok: false, reason: `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not in the live robots.txt (capture/robots.txt)` };
+      return { text, ok: true, reason: null };
+    });
+    return { ok: rows.every((r) => r.ok), rule: 'live-robots', decision: null, rows };
+  }
   if (check.id === 'predecessor.coverage') {
     const rows = values.map((text) => noSitemapRow(text, base, decisions, env));
     const ids = [...new Set(rows.flatMap((r) => r.decisions ?? []))];
@@ -505,6 +532,7 @@ function lines(result) {
       if (a.rule === 'slash') out.push(`accepted  ${a.id}: ${r.text} — trailing-slash rule (known launch-skills limitation)`);
       else if (a.rule === 'form-id') out.push(`accepted  ${a.id}: ${r.text} — form id pending (needs you)`);
       else if (a.rule === 'no-remote') out.push(`accepted  ${a.id}: ${r.text} — no remote yet; the push is on the needs-you list`);
+      else if (a.rule === 'live-robots') out.push(`accepted  ${a.id}: ${r.text} — the live robots.txt carried this Sitemap: line`);
       else if (a.rule === 'no-sitemap') out.push(`accepted  ${a.id}: ${r.text} — live publishes no sitemap; every page the crawl found is built${a.decision ? ` or decided (${a.decision})` : ''}`);
       else out.push(`accepted  ${a.id}: ${r.paths.join(', ') || r.text} ${r.field} — reproduced from live (${r.decision})`);
     }

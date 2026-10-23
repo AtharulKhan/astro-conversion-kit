@@ -2,7 +2,8 @@
 // Sitemaps gate: every top sitemap in dist (Astro's sitemap-index.xml, sitemap_index.xml or
 // sitemap.xml, or a live sitemap name recorded in baseline/sitemaps.json such as WordPress's
 // wp-sitemap.xml) lists exactly the indexable pages, posts and archives the baseline recorded at
-// 200, on the build's origin; every robots.txt Sitemap: line points at a file in dist; and every
+// 200, on the build's origin; every robots.txt Sitemap: line points at a file in dist (or is a
+// line on another host that the captured live robots.txt carried verbatim); and every
 // feed the live site served is built with as many items as the captured feed.
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ import { feedFiles, firstExisting, originOf, PAGE_KINDS, readJson, requireInputs
 
 const NAME = 'sitemaps';
 const OPTIONS = {
-  capture: { type: 'string', default: 'capture', description: 'the capture folder, for the captured feeds' },
+  capture: { type: 'string', default: 'capture', description: 'the capture folder, for the captured feeds and robots.txt' },
   origin: { type: 'string', default: '', description: 'the origin the sitemap URLs must be on (default: canonicalOrigin in baseline/meta.json)' },
 };
 const NOTES = `
@@ -24,7 +25,10 @@ exists in dist. A sitemap index is followed to its child sitemaps in dist. Each 
 other index lists as a child is a top sitemap, and each top sitemap (with its children) must list
 exactly the expected pages; with more than one, a failure names it ("sitemap wp-sitemap.xml").
 Every "Sitemap:" line of dist/robots.txt must be a URL on the origin (--origin, else
-canonicalOrigin) naming a file in dist.
+canonicalOrigin) naming a file in dist, or a line the live robots.txt carried verbatim: a URL
+on another host (a sister site's sitemap) passes when <capture>/robots.txt, the live file the
+capture saved, has a Sitemap: line with exactly that URL. No live request is made; without
+<capture>/robots.txt every other-host line fails.
 Feed items are <item> (RSS) or <entry> (Atom).
 `;
 const TOP = ['sitemap-index.xml', 'sitemap_index.xml', 'sitemap.xml'];
@@ -80,16 +84,27 @@ export function readSitemaps(dist, names = []) {
   return { roots, failures };
 }
 
-// Every "Sitemap:" line of dist/robots.txt is a URL on compareOrigin naming a file in dist.
-export function robotsSitemapFailures(dist, compareOrigin) {
+const sitemapLines = (text) => [...text.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
+
+// The Sitemap: URLs of the live robots.txt the capture saved (<capture>/robots.txt), [] without it.
+export function liveSitemapLines(capture) {
+  const file = capture ? join(capture, 'robots.txt') : null;
+  return file && existsSync(file) ? sitemapLines(readFileSync(file, 'utf8')) : [];
+}
+
+// Every "Sitemap:" line of dist/robots.txt is a URL on compareOrigin naming a file in dist, or a
+// URL on another origin that the live robots.txt carried verbatim (`live`, its Sitemap: URLs).
+export function robotsSitemapFailures(dist, compareOrigin, live = []) {
   const file = join(dist, 'robots.txt');
   if (!existsSync(file)) return { checked: 0, failures: [] };
-  const lines = [...readFileSync(file, 'utf8').matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
+  const lines = sitemapLines(readFileSync(file, 'utf8'));
+  const carried = new Set(live);
   const failures = [];
   for (const url of lines) {
     const origin = originOf(url);
     const path = pathOf(url);
     const rel = path.replace(/^\/+/, '');
+    if (origin !== compareOrigin && carried.has(url)) continue;
     if (origin !== compareOrigin) failures.push({ path: '/robots.txt', field: 'sitemap line', expected: `${compareOrigin}${origin ? new URL(url).pathname : ''}`, actual: url });
     else if (!rel || !existsSync(join(dist, rel)) || !statSync(join(dist, rel)).isFile()) {
       failures.push({ path: '/robots.txt', field: 'sitemap line', expected: 'a file in dist', actual: url });
@@ -116,7 +131,7 @@ export function checkSitemaps({ dist, capture, routes, compareOrigin, sitemaps =
       if (!expected.has(path) && paths(path)) failures.push({ path, field, expected: null, actual: url });
     }
   }
-  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist, compareOrigin) : { checked: 0, failures: [] };
+  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist, compareOrigin, liveSitemapLines(capture)) : { checked: 0, failures: [] };
   failures.push(...robots.failures);
   for (const feed of feeds) {
     const candidates = feedFiles(feed.path);
