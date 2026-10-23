@@ -51,9 +51,10 @@ parity and this file is wrong: say so and fix this file.
   (canonical, alternate, og) alone and keeps any href that a `link` exception records exactly
   as recorded. Record it in `proposals.json` with `field: "markup"`, one record per page it
   changes (`from` the live href form, `to` the root-relative one); no gate compares it, since the
-  links gate already counts both forms as internal. A reference implementation is
-  `src/lib/links.mjs` in the angrybirds.com demo
-  ([ethanplusai/angrybirds-com#2](https://github.com/ethanplusai/angrybirds-com/pull/2)).
+  links gate already counts both forms as internal. The helper is a dozen lines: match
+  `href="https://www.example.com/..."` (and the `http://`, `//` and apex forms) in the body
+  markup, replace the origin with nothing when `proposalOn(id)` is true, and return the markup
+  unchanged otherwise.
 - **WordPress API head links are kept as captured.** `wp-json/` (`rel="https://api.w.org/"`),
   `xmlrpc.php?rsd` (`EditURI`) and `wp-json/wp/v2/pages/N` (`alternate`) stay in the head
   although nothing answers them on a static host. The build generates their links exceptions,
