@@ -22,7 +22,7 @@ Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
 <header> first, then inside other elements whose class or id names a logo: an <img> whose src,
 alt, class or id says "logo", else an inline <svg> that does (saved as logo.svg), else the
 <img> in the link to the home page, else the first <img>; the icons come from its <link rel=icon> and
-<link rel=apple-touch-icon>; the fonts are every @font-face src in <dir>/css/ (written by
+<link rel=apple-touch-icon>, the web manifest from its <link rel=manifest>; the fonts are every @font-face src in <dir>/css/ (written by
 capture.mjs; without it, fonts are reported as not captured).
 
   --capture <dir>   the capture folder written by capture.mjs
@@ -289,7 +289,7 @@ async function main() {
 
   try {
     if (!home) {
-      for (const kind of ['logo', 'favicon', 'apple-touch-icon']) absent(kind, 'not captured (no page snapshot answered 200)');
+      for (const kind of ['logo', 'favicon', 'apple-touch-icon', 'manifest']) absent(kind, 'not captured (no page snapshot answered 200)');
     } else {
       const document = parseHtml(readFileSync(join(dir, home.snapshot), 'utf8'));
       const logo = findLogo(document, home.url);
@@ -303,10 +303,16 @@ async function main() {
         ...(logo?.svg ? [] : [['logo', logo?.img ? resolveUrl(imageSrc(logo.img), home.url) : null, 'none (no <img> or logo <svg> inside <header> or a logo element)']]),
         ['favicon', resolveUrl(iconHref(document, ['icon']), home.url), 'none on the site'],
         ['apple-touch-icon', resolveUrl(iconHref(document, ['apple-touch-icon', 'apple-touch-icon-precomposed']), home.url), 'none on the site'],
+        ['manifest', resolveUrl(iconHref(document, ['manifest']), home.url), 'none on the site'],
       ];
       for (const [kind, url, missing] of targets) {
         if (url) await save(kind, url, kind);
         else absent(kind, missing);
+      }
+      // The root icons browsers and launch checks ask for whatever the head links; saved when the
+      // capture's probe (meta.json icons) saw live answer 200.
+      for (const [path, stem] of [['/favicon.ico', 'root-favicon'], ['/apple-touch-icon.png', 'root-apple-touch-icon']]) {
+        if (origin && meta.icons?.[path] === 200) await save(stem, new URL(path, origin).href, stem);
       }
     }
 

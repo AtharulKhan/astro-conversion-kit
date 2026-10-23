@@ -123,6 +123,9 @@ export function robotsSitemapFailures(dist, compareOrigin, live = [], ownOrigins
   return { checked: lines.length, failures };
 }
 
+// %e2 and %E2 are the same octet (RFC 3986 6.2.2.1), so URLs compare with upper-case escapes.
+const upperEscapes = (url) => url?.replace(/%[0-9a-f]{2}/gi, (m) => m.toUpperCase()) ?? null;
+
 export function checkSitemaps({ dist, capture, routes, compareOrigin, ownOrigins = [], sitemaps = [], paths = () => true }) {
   const pages = routes.filter((r) => r.status === 200 && PAGE_KINDS.has(r.kind) && !r.noindex && paths(r.path));
   const feeds = routes.filter((r) => r.status === 200 && r.kind === 'feed' && paths(r.path));
@@ -135,7 +138,7 @@ export function checkSitemaps({ dist, capture, routes, compareOrigin, ownOrigins
     for (const path of expected) {
       const want = `${compareOrigin}${new URL(path, compareOrigin).pathname}`;
       const got = listed.get(path) ?? null;
-      if (got !== want) failures.push({ path, field, expected: want, actual: got });
+      if (upperEscapes(got) !== want) failures.push({ path, field, expected: want, actual: got });
     }
     for (const [path, url] of listed) {
       if (!expected.has(path) && paths(path)) failures.push({ path, field, expected: null, actual: url });

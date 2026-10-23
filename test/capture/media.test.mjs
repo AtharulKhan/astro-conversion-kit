@@ -437,6 +437,29 @@ test('a file that keeps answering 429 stops with exit 3, and a re-run only asks 
   }
 });
 
+test('progress is saved to media.json every 100 files, so a stopped run resumes from there', async () => {
+  let dir;
+  let savedWhenAsked = null;
+  const server = await serve((req, res) => {
+    // When the 101st file is asked for, the first 100 are already on disk.
+    if (req.url === '/f100.png' && savedWhenAsked === null) {
+      const file = join(dir, 'media.json');
+      savedWhenAsked = existsSync(file) ? readJson(file).filter((m) => m.status === 200).length : 0;
+    }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': 3 });
+    res.end(req.method === 'HEAD' ? undefined : 'png');
+  });
+  try {
+    const names = Array.from({ length: 101 }, (_, i) => `/f${String(i).padStart(3, '0')}.png`);
+    dir = tinyCapture(server.origin, `<html><body>${names.map((n) => `<img src="${n}">`).join('')}</body></html>`);
+    const result = await run(MEDIA, ['--capture', dir, '--delay', '0', '--concurrency', '1']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(savedWhenAsked, 100);
+  } finally {
+    await server.close();
+  }
+});
+
 test('srcset is parsed per the HTML rules: a URL is a run of non-spaces', () => {
   assert.deepEqual(srcsetUrls('a.jpg 300w,b.jpg 1024w'), ['a.jpg', 'b.jpg']);
   assert.deepEqual(srcsetUrls(' a.jpg,  b.jpg 2x , c.jpg'), ['a.jpg', 'b.jpg', 'c.jpg']);

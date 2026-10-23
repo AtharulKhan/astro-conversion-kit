@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { buildFixtureBaseline } from './fixtures/baseline.mjs';
 import { DIST_ORIGIN, edit, makeDist } from './fixtures/make-dist.mjs';
 import { runGate } from './fixtures/run-gate.mjs';
+import { checkSitemaps } from '../../skills/parity-gates/scripts/verify/sitemaps.mjs';
 
 let root;
 let baseline;
@@ -193,4 +194,14 @@ test('usage and missing inputs exit 2; --help exits 0', async () => {
   const help = await runGate('sitemaps', ['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /--capture/);
+});
+
+test('a sitemap URL with lower-case percent escapes matches the page (RFC 3986: %c3 is %C3)', () => {
+  const dist = mkdtempSync(join(root, 'dist-escapes-'));
+  const origin = 'https://www.example.com';
+  writeFileSync(join(dist, 'sitemap.xml'), `<urlset><url><loc>${origin}/caf%c3%a9/</loc></url></urlset>`);
+  const routes = [{ path: '/caf%C3%A9/', status: 200, kind: 'page' }];
+  assert.deepEqual(checkSitemaps({ dist, capture, routes, compareOrigin: origin }).failures, []);
+  writeFileSync(join(dist, 'sitemap.xml'), `<urlset><url><loc>${origin}/cafe/</loc></url></urlset>`);
+  assert.equal(checkSitemaps({ dist, capture, routes, compareOrigin: origin }).failures.length, 2, 'another URL still fails');
 });

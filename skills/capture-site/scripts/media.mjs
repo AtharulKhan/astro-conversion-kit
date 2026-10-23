@@ -422,6 +422,7 @@ async function main() {
 
   // Up to --concurrency files at once (the limiter paces the host). "In a row" is the order the
   // answers come back in.
+  let done = 0;
   const worker = async () => {
     while (!stop && todo.length > 0) {
       const { entry, target } = todo.shift();
@@ -445,6 +446,9 @@ async function main() {
         entry.location = new URL(res.headers.location, entry.url).href;
       }
       if (streak.size >= BLOCK_LIMIT) stop ??= entry;
+      done += 1;
+      // Save progress now and then, so a run that is killed resumes without asking again.
+      if (done % 100 === 0) write();
     }
   };
   await Promise.all(Array.from({ length: Math.min(args.concurrency, Math.max(1, todo.length)) }, worker));
