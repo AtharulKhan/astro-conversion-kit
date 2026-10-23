@@ -23,8 +23,7 @@ Step 2 of a conversion (`convert-site` runs it), or any time a live site has to 
 Every script sends a desktop Chrome user agent. The capture scripts (`capture`, `media`,
 `assets`, `fingerprint`) share a per-host limiter: by default request starts are **400 ms apart
 with up to 4 in flight** (`media`: 6), so a host that answers quickly is read in minutes. The
-Chromium steps load one page at a time (`shoot` and `css-coverage` 500 ms apart, `styles` 2500
-ms), and `launch-audit` and `pre-launch` keep their own pacing. The limiter adapts by itself:
+Chromium steps (`shoot`, `css-coverage`, `styles`) load one page at a time, 500 ms apart, and `launch-audit` and `pre-launch` keep their own pacing. The limiter adapts by itself:
 
 - a 429 or 503 doubles that host's delay (up to 32 times) and drops it to **one request at a
   time**; after every 30 s of clean answers it recovers one step (half the delay, one more in

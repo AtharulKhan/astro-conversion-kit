@@ -150,6 +150,8 @@ export function loadBaseline(dir, captureDir = null) {
   const snapshots = new Map(routes.filter((r) => r.snapshot).map((r) => [r.path, r.snapshot]));
   const files = new Set([...routes.map((r) => r.path), ...media.map((m) => m.path)]);
   const mediaPaths = new Set(media.map((m) => m.path));
+  // Sizes listed but never requested (downloaded: false) have no live status.
+  const requestedMedia = new Set(media.filter((m) => m.downloaded !== false).map((m) => m.path));
   const assetsFile = captureDir ? join(captureDir, 'assets', 'index.json') : null;
   const assets = assetsFile && existsSync(assetsFile) ? JSON.parse(readFileSync(assetsFile, 'utf8')) : [];
   const assetAt = (path) => assets.find((a) => a.url && pathnameOf(a.url) === path) ?? null;
@@ -186,7 +188,8 @@ export function loadBaseline(dir, captureDir = null) {
     liveStatus(path) {
       const route = routes.find((r) => r.path === path);
       if (route) return route.status;
-      if (mediaPaths.has(path)) return 200;
+      if (requestedMedia.has(path)) return 200;
+      if (mediaPaths.has(path)) return null;
       return assetAt(path)?.status ?? icons[path] ?? null;
     },
     // The size of live's PNG at path, from the capture's saved asset.

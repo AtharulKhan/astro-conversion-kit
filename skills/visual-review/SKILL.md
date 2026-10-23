@@ -101,7 +101,7 @@ Read `references/review-procedure.md` before the first run. In short:
 
        npm run review:diff -- --a capture/screens/live --b review/new --out review/diff
 
-4. **Styles.** It loads the live site, so keep the default 2500 ms pacing. It defaults to 390
+4. **Styles.** It loads the live site one page at a time, 500 ms apart by default. It defaults to 390
    and 1440, so pass the widths to cover 768 too:
 
        npm run review:styles -- --live https://www.example.com --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json

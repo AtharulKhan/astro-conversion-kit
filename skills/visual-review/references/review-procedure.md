@@ -135,7 +135,7 @@ Exit 0 every pair passes, 1 any pair fails (each listed on stdout with its reaso
 | `--routes` | required | Templates file (its representatives) or comma list of paths |
 | `--widths` | `390,1440` | Viewport widths; the default skips 768, so pass `390,768,1440` for the template set |
 | `--out` | `styles.json` | Output file; always pass `review/styles.json` |
-| `--delay` | `2500` | Milliseconds between page loads, both origins |
+| `--delay` | `500` | Milliseconds between page loads, both origins |
 | `--allow-analytics` | off | Let analytics, tag, pixel and chat hosts load on both origins (blocked by default, as in shoot) |
 
 This step loads the live site, once per route per width. Keep the default delay; never pass
