@@ -31,7 +31,7 @@ parity and this file is wrong: say so and fix this file.
 ## URLs in the captured markup
 
 - **Forms that already post elsewhere stay as captured.** A POST form whose `action` is on
-  another origin (a newsletter list host, a form service) is kept exactly as captured and listed
+  another registrable domain (a newsletter list host, a form service) is kept exactly as captured and listed
   in the plan under "Forms kept as is" with its action host; only a POST form posting to the
   old site (an empty or relative action, the live origin, `/wp-admin/admin-ajax.php`,
   `/wp-comments-post.php`) is rewired to the form endpoint (`forms.md`).

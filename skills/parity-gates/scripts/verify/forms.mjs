@@ -25,8 +25,10 @@ A GET form (method get, or no method: a search box) is compared with live as it 
 action path (an action on the site's own origin compares by path and query, any other by its
 full URL), method and fields, in order. It needs no --endpoint, honeypot or thank-you page; the
 summary notes "N search/GET forms compared". Only a POST form is a submission form.
-A POST form whose live action is on another origin (a newsletter list host, a form service)
-already works on a static host: it is kept as captured and compared like a GET form (the same
+A POST form whose live action is on another site (a newsletter list host, a form service: a
+registrable domain other than the site's, so www., http:, a subdomain and //host/ of the site
+are the site, and a WordPress handler such as admin-ajax.php, wp-comments-post.php, ?wpcf7 or
+wp-json/contact-form-7 is the site on any host) already works on a static host: it is kept as captured and compared like a GET form (the same
 full action URL, method and fields), with no --endpoint, honeypot or thank-you; the summary
 notes "N forms kept as is (posts to <host>)". Only a POST form posting to the site itself
 (its own origin, a relative or empty action) is rewired and needs --endpoint.
@@ -97,17 +99,47 @@ export function actionTarget(action, page, origins = []) {
   return url.href;
 }
 
-// The host a POST form already posts to when that is another origin (a newsletter list host, a
-// form service), else null: such a form works on a static host unchanged and is kept as captured.
-// A form posting to the site itself (relative, empty, or on one of origins) returns null.
+// Public suffixes of two labels, under which a registrable domain has three (example.co.uk).
+const TWO_LEVEL_SUFFIXES = new Set([
+  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
+  'co.nz', 'org.nz', 'co.jp', 'ne.jp', 'or.jp', 'com.br', 'com.mx', 'co.za', 'co.in', 'com.sg',
+  'com.hk', 'co.kr', 'com.tr', 'com.cn', 'com.ar', 'co.il',
+]);
+
+// The registrable domain of a hostname: its last two labels, or three under a two-level public
+// suffix; an IP address or a single label as it is.
+export function registrableDomain(hostname) {
+  const labels = hostname.toLowerCase().replace(/\.$/, '').split('.');
+  if (labels.length <= 2 || /^\d+$/.test(labels.at(-1)) || hostname.includes(':')) return labels.join('.');
+  const lastTwo = labels.slice(-2).join('.');
+  return TWO_LEVEL_SUFFIXES.has(lastTwo) ? labels.slice(-3).join('.') : lastTwo;
+}
+
+// WordPress's own form handlers: whatever host they are on, the form posts to the old site.
+const OLD_SITE_PATH = /\/(?:wp-admin\/admin-ajax\.php|wp-comments-post\.php|wp-admin\/admin-post\.php)$/i;
+const OLD_SITE_URL = /[?&]wpcf7|wp-json\/contact-form-7/i;
+
+// The host a POST form already posts to when that is another site (a newsletter list host, a form
+// service: a different registrable domain), else null: such a form works on a static host
+// unchanged and is kept as captured. Null for a form posting to the old site: an empty or relative
+// action, one on any host of the site's registrable domains (www, http, a subdomain, a
+// protocol-relative //host), and a WordPress form handler on any host.
 export function externalHost(form, page, origins = []) {
   if (!isPost(form)) return null;
-  const target = actionTarget(form.action, page, origins);
+  const action = (form.action ?? '').trim();
+  if (!action) return null;
+  const base = origins[0] ?? 'http://forms.invalid';
+  let url;
   try {
-    return new URL(target).host || null;
+    url = new URL(action, new URL(page, base));
   } catch {
     return null;
   }
+  if (!/^https?:$/.test(url.protocol) || url.hostname === 'forms.invalid') return null;
+  if (OLD_SITE_PATH.test(url.pathname) || OLD_SITE_URL.test(action)) return null;
+  const siteDomains = new Set(origins.map((o) => registrableDomain(new URL(o).hostname)));
+  if (siteDomains.has(registrableDomain(url.hostname))) return null;
+  return url.host;
 }
 
 // A GET form against its live form: the same action target, method and fields.
