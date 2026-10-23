@@ -89,7 +89,9 @@ page is noindexed whatever the target.
 paths (and `node_modules`, `.git`, `.vercel`, `.env.local`). The scaffold's `.vercelignore` lists
 `/dist/`, `/.conversion/` (run state and the media download), `/review/` and the ignored
 `/capture/screens/` and `/capture/lighthouse-live/`; `capture/` itself is uploaded, because the
-remote build reads it.
+remote build reads it. A Git build of `main` gets only what git tracks, so the scaffold's
+`.gitignore` anchors `/dist` (Astro's output) and keeps theme and plugin `public/**/dist/` scripts
+tracked; a bare `dist` line there would make them 404 in production while CLI previews work.
 
 **Node.** The deploy warns that `engines` `>=22.23.4 <23 || >=24.22.1` lets Vercel move the build
 to the next Node major on its own; that is expected, and a build that breaks on a new major is
