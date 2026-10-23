@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as csstree from 'css-tree';
 import { startFixture } from '../fixture/serve.mjs';
@@ -280,6 +280,10 @@ test('per-page inline rules that collide (same selector, other declarations) go 
   const css = join(TMP, 'collide', 'site.css');
   const pagesOut = join(TMP, 'collide', 'pages');
   const report = join(TMP, 'collide', 'report.json');
+  // A previous run's sheet for a page set that no longer exists goes; other files stay.
+  mkdirSync(pagesOut, { recursive: true });
+  writeFileSync(join(pagesOut, 'inline-stale.css'), '.old { color: red; }\n');
+  writeFileSync(join(pagesOut, 'notes.css'), '/* not ours */\n');
   const result = await pruneCli(['--css', join(out, 'css'), '--coverage', COVERAGE, '--out', css, '--report', report, '--pages-out', pagesOut]);
   assert.equal(result.code, 0, result.stderr);
   const homeRule = '.wp-elements-1 { scroll-margin-top: 16px; }';
@@ -292,6 +296,7 @@ test('per-page inline rules that collide (same selector, other declarations) go 
   assert.ok(homeSheet.includes(homeRule) && !homeSheet.includes(contactRule), homeSheet);
   assert.ok(contactSheet.includes(contactRule) && !contactSheet.includes(homeRule), contactSheet);
   assert.ok(!homeSheet.includes(':root{'), 'shared rules are not repeated per page');
+  assert.deepEqual(readdirSync(pagesOut).sort(), [contact.file, home.file, 'notes.css'].sort(), 'stale inline-*.css removed');
   assert.deepEqual(readJson(report).pageSheets, [
     { file: home.file, pages: ['/'], rules: 1 },
     { file: contact.file, pages: ['/contact/'], rules: 1 },
@@ -311,6 +316,27 @@ test('scopeInlineRules splits colliding rules inside @media, takes their counter
   assert.equal(split.get('b').own, '@media (min-width: 600px) {\n  .wp-container-2 { gap: 9px; }\n}');
   assert.equal(split.get('b').shared, '.x { color: red; }');
   assert.deepEqual(split.get('c'), { shared: c, own: '', rules: 0 }, 'whitespace alone is no collision');
+});
+
+test('scopeInlineRules spreads only the classes outside :not/:where/:is/:has, so a shared button rule stays shared', () => {
+  // WordPress's shapes: global-styles' button rule on every page, block-supports' counter rule per page.
+  const button = ':root :where(.wp-element-button, .wp-block-button__link){background-color: #32373c;}';
+  const elements = (color) => `.wp-elements-1 a:where(:not(.wp-element-button)){color: ${color};}`;
+  const split = scopeInlineRules([
+    { name: 'a', css: `${button}\n${elements('#fff')}` },
+    { name: 'b', css: `${button}\n${elements('#000')}` },
+    { name: 'c', css: button },
+  ]);
+  for (const name of ['a', 'b', 'c']) assert.ok(split.get(name).shared.includes(button), `${name} keeps the button rule shared`);
+  assert.equal(split.get('a').own, elements('#fff'));
+  assert.equal(split.get('b').own, elements('#000'));
+  assert.deepEqual(split.get('c'), { shared: button, own: '', rules: 0 }, 'the file with no collision gets no page sheet');
+});
+
+test('scopeInlineRules: the same rule repeated in one file is no collision with that rule once in another', () => {
+  const split = scopeInlineRules([{ name: 'a', css: '.x { color: red; }\n.x { color: red; }' }, { name: 'b', css: '.x { color: red; }' }]);
+  assert.equal(split.get('a').rules, 0);
+  assert.equal(split.get('b').rules, 0);
 });
 
 test('an inline file no coverage saw is kept whole and listed, without failing the run', async () => {

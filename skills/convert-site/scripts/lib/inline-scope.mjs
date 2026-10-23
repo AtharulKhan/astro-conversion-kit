@@ -27,6 +27,19 @@ const ruleKey = (text, node, context) => `${context.join(' ')}|${squash(sourceOf
 const ruleBody = (text, node) => squash(sourceOf(text, node.block));
 const classesOf = (selector) => [...selector.matchAll(CLASS)].map((match) => match[1]);
 
+// The selector without what its functional pseudo-classes hold (:not(), :where(), :is(), :has(),
+// :nth-child(... of ...)): the classes left are the ones it styles, not the ones it filters on.
+function outsideParens(selector) {
+  let out = '';
+  let depth = 0;
+  for (const char of selector) {
+    if (char === '(') depth += 1;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0) out += char;
+  }
+  return out;
+}
+
 // The kept source of the nodes in list that belong to the side asked for (own: true for the
 // page's own rules); a container is kept with only its children of that side.
 function emit(list, text, context, ownRule, own) {
@@ -49,8 +62,9 @@ function emit(list, text, context, ownRule, own) {
 
 // sheets: [{ name, css }], each the kept rules of one inline file. A rule is the page's own when
 // another file has a rule with the same selector (inside the same containers) and other
-// declarations, or when its selector names a class such a colliding rule names (the counter class
-// a page reuses for its own elements). Everything else, identical blocks shared by pages among
+// declarations (a file repeating one rule is no difference), or when its selector names a class
+// a colliding selector names outside its :not(), :where(), :is() and :has() (the counter class a
+// page reuses for its own elements, not the .wp-element-button it filters on). Everything else, identical blocks shared by pages among
 // it, stays shared. Returns Map<name, { shared, own, rules }>: shared is css unchanged when the
 // file has no own rules, own the page's own rules ('' when none), rules how many there are.
 export function scopeInlineRules(sheets) {
@@ -60,13 +74,16 @@ export function scopeInlineRules(sheets) {
     eachRule(ast.children, css, [], (node, context) => {
       const key = ruleKey(css, node, context);
       const seen = bodies.get(key) ?? { selector: squash(sourceOf(css, node.prelude)), byFile: new Map() };
-      seen.byFile.set(name, [seen.byFile.get(name), ruleBody(css, node)].filter(Boolean).join(' '));
+      // The distinct declaration blocks a file gives the selector: a repeat is no difference.
+      const own = seen.byFile.get(name) ?? [];
+      const body = ruleBody(css, node);
+      seen.byFile.set(name, own.includes(body) ? own : [...own, body]);
       bodies.set(key, seen);
     });
   }
-  const collisions = [...bodies].filter(([, { byFile }]) => new Set(byFile.values()).size > 1);
+  const collisions = [...bodies].filter(([, { byFile }]) => new Set([...byFile.values()].map((list) => list.join('\n'))).size > 1);
   const colliding = new Set(collisions.map(([key]) => key));
-  const classes = new Set(collisions.flatMap(([, { selector }]) => classesOf(selector)));
+  const classes = new Set(collisions.flatMap(([, { selector }]) => classesOf(outsideParens(selector))));
   const result = new Map();
   for (const { name, css, ast } of parsed) {
     let rules = 0;

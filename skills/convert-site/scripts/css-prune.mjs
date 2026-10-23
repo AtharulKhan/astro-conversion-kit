@@ -2,7 +2,7 @@
 // Builds one stylesheet from the captured CSS, dropping the rules no page used
 // according to css-coverage.mjs, and keeping the ones coverage cannot see.
 // Exit codes: 0 written, 1 a stylesheet file had no matching coverage (kept whole), 2 usage or input error.
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -90,7 +90,8 @@ css-coverage.mjs again so interaction states are kept.
 
   --widths     the viewport widths the coverage run used (default 390,768,1440)
   --pages-out  folder for the per-page sheets (default: pages/ beside --out);
-               written only when some page has rules of its own
+               written only when some page has rules of its own; every
+               inline-*.css already in it is removed first (other files stay)
 
 Exit codes: 0 written, 1 a stylesheet file had no matching coverage (written, kept whole),
 2 usage or input error.`;
@@ -690,6 +691,12 @@ function main() {
   for (const file of [options.out, options.report]) mkdirSync(dirname(file), { recursive: true });
   writeFileSync(options.out, result.output);
   writeFileSync(options.report, `${JSON.stringify(result.report, null, 2)}\n`);
+  // A previous run's sheets go first, so none is left for a page set that no longer has one.
+  if (existsSync(options.pagesOut)) {
+    for (const name of readdirSync(options.pagesOut)) {
+      if (/^inline-.*\.css$/.test(name)) rmSync(join(options.pagesOut, name), { force: true });
+    }
+  }
   if (result.pageSheets.length) {
     mkdirSync(options.pagesOut, { recursive: true });
     for (const sheet of result.pageSheets) writeFileSync(join(options.pagesOut, sheet.file), sheet.css);
