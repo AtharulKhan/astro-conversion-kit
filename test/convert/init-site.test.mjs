@@ -175,7 +175,7 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.ok(perPage.every((at, i) => at > 0 && (i === 0 || at > perPage[i - 1])), `the css list, else site.css, then the head slot: ${perPage}`);
   assert.match(readFileSync(join(dir, 'src', 'styles', 'site.css'), 'utf8'), /css-prune\.mjs/);
   const ignore = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
-  for (const entry of ['/capture/screens/', '/capture/lighthouse-live/', '/review/', 'node_modules', 'dist',
+  for (const entry of ['/capture/screens/', '/capture/lighthouse-live/', '/review/', 'node_modules', '/dist',
     '.astro', '.env*', '!.env.example', '.conversion/*.tmp', '/media-cache/', '.vercel']) {
     assert.ok(ignore.includes(entry), `.gitignore lacks ${entry}`);
   }
@@ -220,6 +220,20 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.equal(again.status, 2);
   assert.match(again.stderr, /not empty/);
   assert.match(again.stderr, /astro\.config\.mjs/);
+});
+
+test('.gitignore ignores the root dist/ only: a theme or plugin dist/ under public/ is tracked', (t) => {
+  const dir = join(tempDir(t, 'site-'), 'site');
+  const result = run(baseArgs(dir, bareKit(t)));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const ignored = (path) => {
+    plant(join(dir, path));
+    return spawnSync('git', ['check-ignore', '-q', path], { cwd: dir, env: GIT_ENV }).status;
+  };
+  // WordPress keeps built scripts in dist/ folders: the theme's, wp-includes/js/dist/, plugins'.
+  assert.equal(ignored('public/wp-content/themes/x/dist/app.js'), 1);
+  assert.equal(ignored('public/wp-includes/js/dist/hooks.min.js'), 1);
+  assert.equal(ignored('dist/index.html'), 0, "Astro's build output stays ignored");
 });
 
 test('the real copied scripts answer --help from inside the scaffolded site', (t) => {

@@ -1,5 +1,6 @@
 node_modules
-dist
+# Astro's build output only: themes and plugins keep built scripts in public/**/dist/
+/dist
 .astro
 .env*
 !.env.example
