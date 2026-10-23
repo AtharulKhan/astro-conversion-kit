@@ -14,7 +14,8 @@
 //   metadata address is refused without a request: status "blocked-address";
 // - redirect: 'follow' follows up to 20 hops by hand, each one through the guard;
 // - a per-host limiter: request starts on one host are delayMs apart (default 400) and at most
-//   `concurrency` (default 4) are in flight at once;
+//   `concurrency` (default 4) are in flight at once; one at a time (concurrency 1, or a host cut
+//   to 1), the delay runs from the end of the previous request, as the old pacing did;
 // - a 429 or 503 doubles that host's delay and drops it to one request in flight; after each
 //   windowMs (default 30 s) with only clean answers it recovers one step (half the delay, one
 //   more in flight) until it is back to the caller's delayMs and concurrency;
@@ -62,7 +63,7 @@ const BLOCK_STATUSES = new Set([403, 429, 503]);
 const BACKOFF_STATUSES = new Set([429, 503]);
 const TEXT_TYPE = /^(text\/|application\/(.*\+)?(xml|json|javascript)|image\/svg\+xml)/i;
 
-// host -> { lastStart, inFlight, backoff, cap, slowCap, troubleAt, slowAt, waiting[], timer }
+// host -> { lastStart, lastEnd, inFlight, backoff, cap, slowCap, troubleAt, slowAt, waiting[], timer }
 const hosts = new Map();
 
 export let blocked = 0;
@@ -84,13 +85,16 @@ const allowed = (state, concurrency) =>
   Math.max(1, Math.min(concurrency, state.cap ?? Infinity, state.slowCap ?? Infinity));
 
 // Starts the waiting requests, first come first served, while the host has room and its delay
-// since the previous start has passed.
+// has passed: since the previous start, or, when the host takes one request at a time (--polite,
+// or after a 429), since the previous request ended, so a slow host gets the whole delay of quiet.
 function pump(state) {
   if (state.timer) return;
   while (state.waiting.length > 0) {
     const next = state.waiting[0];
     if (state.inFlight >= allowed(state, next.concurrency)) return;
-    const wait = state.lastStart + next.delayMs * state.backoff - Date.now();
+    const serial = allowed(state, next.concurrency) === 1;
+    const since = serial ? Math.max(state.lastStart, state.lastEnd) : state.lastStart;
+    const wait = since + next.delayMs * state.backoff - Date.now();
     if (wait > 0) {
       state.timer = setTimeout(() => {
         state.timer = null;
@@ -109,7 +113,7 @@ function pump(state) {
 function acquire(host, delayMs, concurrency) {
   let state = hosts.get(host);
   if (!state) {
-    state = { lastStart: 0, inFlight: 0, backoff: 1, cap: null, slowCap: null, troubleAt: 0, slowAt: 0, waiting: [], timer: null };
+    state = { lastStart: 0, lastEnd: 0, inFlight: 0, backoff: 1, cap: null, slowCap: null, troubleAt: 0, slowAt: 0, waiting: [], timer: null };
     hosts.set(host, state);
   }
   return new Promise((start) => {
@@ -120,6 +124,7 @@ function acquire(host, delayMs, concurrency) {
 
 function release(state) {
   state.inFlight -= 1;
+  state.lastEnd = Date.now();
   pump(state);
 }
 
@@ -304,12 +309,15 @@ export async function fetchPaced(url, options = {}) {
   const state = await acquire(host, delayMs, concurrency);
   const started = Date.now();
   let waitedMs = 0;
-  const res = await request(url, options, () => {
-    waitedMs = Date.now() - started;
-  });
-  if (typeof res.status === 'number') adapt(state, { status: res.status, waitedMs: waitedMs || Date.now() - started, concurrency, windowMs, slowMs });
-  release(state);
-  return res;
+  try {
+    const res = await request(url, options, () => {
+      waitedMs = Date.now() - started;
+    });
+    if (typeof res.status === 'number') adapt(state, { status: res.status, waitedMs: waitedMs || Date.now() - started, concurrency, windowMs, slowMs });
+    return res;
+  } finally {
+    release(state);
+  }
 }
 
 // One request inside a limiter slot. `answered` is called when the first response's headers arrive.

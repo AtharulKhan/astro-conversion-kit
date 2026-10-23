@@ -65,6 +65,25 @@ test('delayMs spaces the request starts on a host, however many may be in flight
   });
 });
 
+test('one at a time, the delay runs from the end of the previous request (the polite pace)', async () => {
+  await withFixture({ delayMs: 100 }, async (site) => {
+    const started = Date.now();
+    await burst(site, 3, { delayMs: 200, concurrency: 1 });
+    const took = Date.now() - started;
+    // 3 answers of 100 ms with 200 ms of quiet between them; start-to-start pacing would take ~500 ms.
+    assert.ok(took >= 680, `3 requests took ${took} ms`);
+  });
+});
+
+test('several in flight, the delay runs from start to start', async () => {
+  await withFixture({ delayMs: 100 }, async (site) => {
+    const started = Date.now();
+    await burst(site, 3, { delayMs: 200, concurrency: 4 });
+    const took = Date.now() - started;
+    assert.ok(took >= 480 && took < 680, `3 requests took ${took} ms`);
+  });
+});
+
 test('a 429 doubles the delay and drops the host to one request in flight', async () => {
   await withFixture({ delayMs: 40, alwaysStatus: { '/busy/': 429 } }, async (site) => {
     const opts = { trusted: [site.origin], delayMs: 60, concurrency: 4, windowMs: 10_000 };
@@ -190,6 +209,13 @@ test('--polite serialises capture, media and assets; every one prints the pacing
     await exec(process.execPath, [script('assets.mjs'), '--capture', cap, '--polite', '--delay', '0']);
     assert.ok(site.requests.length > 30);
     assert.equal(site.stats.maxInFlight, 1, 'one request at a time');
+    // --polite keeps its delay unless --delay is given: 20 media files at 150 ms of quiet each.
+    const before = site.requests.length;
+    const started = Date.now();
+    await exec(process.execPath, [script('media.mjs'), '--capture', cap, '--download', join(work, 'again'), '--polite', '--delay', '150']);
+    const files = site.requests.length - before;
+    assert.ok(files >= 20);
+    assert.ok(Date.now() - started >= (files - 1) * (150 + 15), `${files} files took ${Date.now() - started} ms`);
     for (const name of ['capture.mjs', 'media.mjs', 'assets.mjs']) {
       const { stdout } = await exec(process.execPath, [script(name), '--help']);
       assert.match(stdout, /--polite/, name);
