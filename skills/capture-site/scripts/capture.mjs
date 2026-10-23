@@ -6,7 +6,8 @@
 // hop. Shortlinks (`/?p=N`) are recorded as unverified redirects and only requested with
 // --verify-shortlinks. On WordPress the REST lists are dumped after the sitemaps (their pages and
 // posts join the queue); every stylesheet and <style> block goes to css/, every same-site
-// <script src> to js/ (stylesheets' @import rules are followed, 5 deep); after the crawl the
+// <script src> (classic or module), import map URL and modulepreload file to js/ (stylesheets'
+// @import rules are followed, 5 deep); after the crawl the
 // Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
 // CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
 // A bot challenge (lib/challenge.mjs) on any page or discovery request stops the run at once:
@@ -44,7 +45,8 @@ answered, one request each), sitemaps/ (every sitemap robots.txt names, and thei
 index.json lists every sitemap URL asked for with its status and file, and one robots.txt
 names that did not answer 200 is also in meta.json discoveryErrors; one on another host is
 listed with skipped: "other host" and never fetched), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
-on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
+on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src>,
+import map and modulepreload file, manifest.json with each one's kind),
 wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
 to list and download the media.
@@ -713,7 +715,8 @@ class Crawler {
     );
   }
 
-  // Same-site script files (the theme's own JavaScript) in first-seen order, each fetched once
+  // Same-site script files (the theme's own JavaScript, module scripts, import map URLs and
+  // modulepreload files, each with the kind it was first seen as) in first-seen order, each fetched once
   // after the crawl (js/<n>.js). Vendor tags and inline code stay in the page HTML. Redirects are
   // followed by hand while they stay on the site's host; one that leaves it is recorded
   // "off-site" and not requested. A file over JS_MAX_BYTES is recorded "too-large", not saved.
@@ -731,7 +734,8 @@ class Crawler {
       if (!/^https?:$/.test(url.protocol) || bareHost(url) !== site || forbidden(url)) continue;
       let entry = js.entries.find((e) => e.src === script.src);
       if (!entry) {
-        entry = { file: `${js.entries.length + 1}.js`, src: script.src, pages: [], status: null };
+        const kind = script.kind ?? 'script';
+        entry = { file: `${js.entries.length + 1}.js`, src: script.src, kind, pages: [], status: null };
         js.entries.push(entry);
         js.queue.push({ url: script.src, attempts: 0 });
       }
@@ -778,7 +782,8 @@ class Crawler {
   jsManifest() {
     return (this.state.js?.entries ?? []).map((e) => {
       const pages = [...e.pages].sort();
-      return e.status === 200 ? { file: e.file, src: e.src, pages } : { file: null, src: e.src, pages, status: e.status };
+      const kind = e.kind ?? 'script';
+      return e.status === 200 ? { file: e.file, src: e.src, kind, pages } : { file: null, src: e.src, kind, pages, status: e.status };
     });
   }
 

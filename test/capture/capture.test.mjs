@@ -619,6 +619,25 @@ test('@import is followed 5 levels deep; a deeper sheet is listed "too-deep" and
   }
 });
 
+test('module scripts, the import map and modulepreload files land in js/ with their kind', () => {
+  const manifest = readJson(full, 'js/manifest.json');
+  const theme = `${fixture.origin}/wp-content/themes/fixture/js`;
+  const modules = `${fixture.origin}/wp-includes/js/script-modules`;
+  assert.deepEqual(manifest.map(({ src, kind, pages }) => ({ src, kind, pages })), [
+    { src: `${modules}/interactivity/index.min.js?ver=6.6.2`, kind: 'importmap', pages: ['/'] },
+    { src: `${theme}/util.js`, kind: 'importmap', pages: ['/'] },
+    { src: `${theme}/view.js?ver=1.4.2`, kind: 'module', pages: ['/'] },
+    { src: `${theme}/reveal.js?ver=1.4.2`, kind: 'script', pages: manifest[3].pages },
+    { src: `${modules}/a11y/index.min.js?ver=6.6.2`, kind: 'modulepreload', pages: ['/'] },
+  ]);
+  for (const entry of manifest) {
+    assert.ok(entry.file, entry.src);
+    assert.ok(readFileSync(join(full, 'js', entry.file), 'utf8').length > 0, entry.src);
+  }
+  assert.match(readFileSync(join(full, 'js', manifest[0].file), 'utf8'), /export const store/);
+  assert.match(readFileSync(join(full, 'js', manifest[2].file), 'utf8'), /@wordpress\/interactivity/);
+});
+
 test('first-party <script src> files are saved under js/ with a manifest; vendors and inline code are not', async () => {
   const page = (extra) =>
     `<html><head><title>Page</title><script src="https://www.googletagmanager.com/gtag/js?id=G-X1"></script><script>var inline = 1;</script></head>`
@@ -633,8 +652,8 @@ test('first-party <script src> files are saved under js/ with a manifest; vendor
     const run = await capture([stub.origin, '--out', out, '--delay', '0']);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(readJson(out, 'js/manifest.json'), [
-      { file: '1.js', src: `${stub.origin}/js/site.js?ver=3`, pages: ['/', '/one/'] },
-      { file: null, src: `${stub.origin}/js/gone.js`, pages: ['/one/'], status: 404 },
+      { file: '1.js', src: `${stub.origin}/js/site.js?ver=3`, kind: 'script', pages: ['/', '/one/'] },
+      { file: null, src: `${stub.origin}/js/gone.js`, kind: 'script', pages: ['/one/'], status: 404 },
     ]);
     assert.equal(readFileSync(join(out, 'js/1.js'), 'utf8'), 'document.body.className += " js";');
     assert.deepEqual(readdirSync(join(out, 'js')).sort(), ['1.js', 'manifest.json']);
@@ -658,9 +677,9 @@ test('js/: an on-site redirect is followed, an off-site one is not, a file over 
     const run = await capture([stub.origin, '--out', out, '--delay', '0']);
     assert.equal(run.code, 0, run.stderr);
     assert.deepEqual(readJson(out, 'js/manifest.json'), [
-      { file: '1.js', src: `${stub.origin}/js/moved.js`, pages: ['/'] },
-      { file: null, src: `${stub.origin}/js/away.js`, pages: ['/'], status: 'off-site' },
-      { file: null, src: `${stub.origin}/js/huge.js`, pages: ['/'], status: 'too-large' },
+      { file: '1.js', src: `${stub.origin}/js/moved.js`, kind: 'script', pages: ['/'] },
+      { file: null, src: `${stub.origin}/js/away.js`, kind: 'script', pages: ['/'], status: 'off-site' },
+      { file: null, src: `${stub.origin}/js/huge.js`, kind: 'script', pages: ['/'], status: 'too-large' },
     ]);
     assert.equal(readFileSync(join(out, 'js/1.js'), 'utf8'), 'var moved = 1;');
     assert.deepEqual(readdirSync(join(out, 'js')).sort(), ['1.js', 'manifest.json']);

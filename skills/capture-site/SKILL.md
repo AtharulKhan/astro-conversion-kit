@@ -181,8 +181,11 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
                           one deeper still is listed with status "too-deep", not fetched;
                           a redirected sheet records finalUrl (its url()s and @imports
                           resolve against it)
-    js/                   the site's own <script src> files (theme JavaScript) and manifest.json:
-                          [{ file, src, pages }], or { file: null, src, pages, status } for a file
+    js/                   the site's own script files (theme JavaScript, <script type=module src>,
+                          every URL its <script type=importmap> imports or scopes name, and
+                          <link rel=modulepreload> files) and manifest.json: [{ file, src, kind,
+                          pages }] (kind "script", "module", "importmap" or "modulepreload"),
+                          or { file: null, src, kind, pages, status } for a file
                           not saved (an HTTP status, "off-site" for a redirect off the host,
                           "too-large" over 5 MB); [] when the site has none
     templates.json        template clusters with a representative page each

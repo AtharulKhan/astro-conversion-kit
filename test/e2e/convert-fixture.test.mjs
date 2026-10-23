@@ -70,9 +70,15 @@ test('4 scaffold: init-site around capture/ and .conversion/; main holds the one
   assert.match(readFileSync(file('.gitignore'), 'utf8'), /^\/\.conversion\/media-cache\/$/m);
 });
 
-test('5 baseline: written, js.json lists the theme script, --check passes', () => {
+test('5 baseline: written, js.json lists the theme scripts and modules, --check passes', () => {
   ok(results.baseline.check);
-  assert.deepEqual(R.readJson(file('baseline', 'js.json')).map((s) => new URL(s.src).pathname), ['/wp-content/themes/fixture/js/reveal.js']);
+  assert.deepEqual(R.readJson(file('baseline', 'js.json')).map((s) => new URL(s.src).pathname), [
+    '/wp-includes/js/script-modules/interactivity/index.min.js',
+    '/wp-content/themes/fixture/js/util.js',
+    '/wp-content/themes/fixture/js/view.js',
+    '/wp-content/themes/fixture/js/reveal.js',
+    '/wp-includes/js/script-modules/a11y/index.min.js',
+  ]);
 });
 
 test('6 build: the seven gates pass on the templates and then on every path; the design lock holds', () => {
