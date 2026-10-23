@@ -44,6 +44,8 @@ opening explaining what a repository, a staging deploy and a pull request are.
        on launch day (you move DNS, not me).
     4. Forms that send a message (contact, quote). Default: they post to Formspree, with the
        same fields; a search box stays as it is. If you prefer another form service, name it. (I'll ask for the form id when I wire the forms; nothing waits on it.)
+       The answer is applied only if the capture finds a form that posts (`method="post"`); if
+       it finds none, nothing is rewired and no form item goes on your list.
     5. Test address. One test submission goes to the address you give here, once, from the
        staging copy; never to an address found on the site. Default: none, and no test is sent.
     6. Search Console. Default: you export the current Search Console data before DNS moves (it
@@ -72,7 +74,7 @@ Include each line that applies, worded for this run. Each becomes a `state.needs
 |---|---|
 | `gh` not logged in | The repo stays local; "create the repo, push `main` and `astro-rebuild`, open the PR from `.conversion/pr-body.md`" goes on your list |
 | Hosting CLI not logged in | No staging deploy; `npm run review:serve` locally; the staging audit and `verify-live` are "Not covered"; "deploy staging" goes on your list |
-| No form id yet (asked at the forms step, never here) | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` until you give the id; the PR opens as a draft; "create the form, send me the id" goes on your list |
+| No form id yet (asked at the forms step, never here; only when the capture found a POST form) | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` until you give the id; the PR opens as a draft; "create the form, send me the id" goes on your list |
 | No test address | No test submission; the `forms` launch check waits on you |
 | No store credentials and media over the limits | Media is served from the live site on staging only (`live-temporary`); "create the store, upload, regenerate rewrites" goes on your list and must be done before DNS moves |
 | Vercel protection bypass secret (staging not public) | The project is protected before its first deploy, so `launch-audit` and `verify-live` cannot reach staging and are "Not covered" until you create the Protection Bypass for Automation secret and put it in the environment |

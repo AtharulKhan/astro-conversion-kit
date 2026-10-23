@@ -139,6 +139,12 @@ The plan phase decides; the scaffold writes. Every decision goes into state with
    options are a third-party embed, keeping it on the old platform under a subdomain, or a
    separate project. The forms, analytics ids and media size found go into the plan and the
    status message too; the intake never asked for them.
+7. **Forms.** The intake asked about forms before the capture could know whether one posts. The
+   intake's forms answer is applied only if `inventory.json` lists a POST form (`forms.md`: a
+   `GET` search form is not rewired, nor a form a third-party script draws at runtime, which
+   `third-party.md` covers). If it lists none, the status
+   message says "Forms: none to rewire" and no form needs-you item is created (no form id is
+   asked for and `placeholders.form-id` does not apply).
 
 For example:
 

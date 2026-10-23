@@ -211,3 +211,12 @@ test('SKILL.md: the post-plan status is required non-interactively, state.mjs ca
   assert.match(skill, /One commit per template/);
   assert.match(skill, /Stop any review server you started \(`npm run review:serve -- --stop`, and `npx astro preview stop` if you used the preview\)/);
 });
+
+test('intake and plan: the forms answer applies only when the capture finds a POST form', () => {
+  const intake = flat(read('references/intake.md'));
+  assert.match(intake, /The answer is applied only if the capture finds a form that posts \(`method="post"`\); if it finds none, nothing is rewired and no form item goes on your list/);
+  assert.match(intake, /\| No form id yet \(asked at the forms step, never here; only when the capture found a POST form\) \|/);
+  const phases = flat(read('references/phases.md'));
+  assert.match(phases, /The intake's forms answer is applied only if `inventory\.json` lists a POST form/);
+  assert.match(phases, /If it lists none, the status message says "Forms: none to rewire" and no form needs-you item is created/);
+});
