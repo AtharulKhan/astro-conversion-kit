@@ -433,9 +433,7 @@ export async function mediaAndCss({ site }) {
     cpSync(join(site, 'capture', 'js', entry.file), join(site, 'public', decodeURIComponent(new URL(entry.src).pathname).replace(/^\//, '')));
   }
   const prune = await node(site, kit('convert-site', 'css-prune.mjs'), ['--css', 'capture/css', '--coverage', 'capture/css-coverage.json', '--out', 'src/styles/site.css', '--report', '.conversion/css-prune-report.json']);
-  const layout = join(site, 'src', 'layouts', 'Base.astro');
-  const source = readFileSync(layout, 'utf8');
-  writeFileSync(layout, source.replace("import { INDEXABLE } from '../lib/site.mjs';", "import { INDEXABLE } from '../lib/site.mjs';\nimport '../styles/site.css';"));
+  // Base.astro links src/styles/site.css itself (before the head slot), so nothing is added here.
   return { prune };
 }
 

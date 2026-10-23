@@ -83,6 +83,17 @@ test('6 build: the seven gates pass on the templates and then on every path; the
   for (const f of ['Header.astro', 'Nav.astro', 'Footer.astro']) assert.ok(existsSync(file('src', 'components', f)), f);
   assert.ok(existsSync(file('src', 'pages', '[...path].astro')));
   assert.match(R.readJson(file('vercel.json')).rewrites.map((r) => `${r.source} ${r.destination}`).join(), /\/feed\/ \/feed\/index\.xml/);
+  // Base.astro links site.css itself, before the page's own head content (Astro would put an
+  // imported stylesheet at the end of <head>, after it).
+  for (const page of ['index.html', join('about', 'index.html')]) {
+    const head = readFileSync(file('dist', page), 'utf8').split('</head>')[0];
+    const sheets = [...head.matchAll(/<link\b[^>]*\brel="stylesheet"[^>]*>/g)];
+    assert.equal(sheets.length, 1, `${page}: exactly one stylesheet link\n${sheets.map((m) => m[0]).join('\n')}`);
+    assert.match(sheets[0][0], /href="\/_astro\/site\.[^"]+\.css"/, page);
+    const perPage = head.indexOf('property="og:');
+    assert.ok(perPage > 0, `${page}: the page's og tags are in the head`);
+    assert.ok(sheets[0].index < perPage, `${page}: the stylesheet link comes before the per-page head content`);
+  }
 });
 
 test('7 gates: npm run verify passes the staging build and verify:release the release build', () => {

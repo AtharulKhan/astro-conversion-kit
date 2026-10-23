@@ -212,6 +212,18 @@ test('SKILL.md: the post-plan status is required non-interactively, state.mjs ca
   assert.match(skill, /Stop any review server you started \(`npm run review:serve -- --stop`, and `npx astro preview stop` if you used the preview\)/);
 });
 
+test('build-rules and phases: site.css linked by URL before the head slot, page sheets from pageSheets, uncoveredInline', () => {
+  const rules = flat(read('references/build-rules.md'));
+  assert.match(rules, /linked once by `Base\.astro`: the template imports it by URL \(`import siteCss from '\.\.\/styles\/site\.css\?url'`\) and links it before the head slot/);
+  assert.match(rules, /Never switch to a plain `import '\.\.\/styles\/site\.css'`/);
+  assert.match(rules, /those go to `src\/styles\/pages\/<inline file>`, listed under `pageSheets` \(`file`, `pages`, `rules`\) in `\.conversion\/css-prune-report\.json`/);
+  assert.match(rules, /Link each page sheet only on the pages it lists, after `site\.css` \(Base\.astro's `pageSheet` prop\); never copy its rules into `site\.css`/);
+  assert.match(rules, /WordPress 6\.9\+'s `\/\*# sourceURL=\.\.\. \*\/` comments change nothing/);
+  assert.match(rules, /`uncoveredInline` lists the pages' `<style>` sets no coverage run saw/);
+  const phases = flat(read('references/phases.md'));
+  assert.match(phases, /When it prints `wrote N per-page sheet\(s\)`, give each page its `pageSheet` from the report's `pageSheets`/);
+});
+
 test('intake and plan: the forms answer applies only when the capture finds a POST form', () => {
   const intake = flat(read('references/intake.md'));
   assert.match(intake, /The answer is applied only if the capture finds a form that posts \(`method="post"`\); if it finds none, nothing is rewired and no form item goes on your list/);

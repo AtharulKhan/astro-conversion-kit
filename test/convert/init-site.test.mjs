@@ -27,7 +27,7 @@ const EXPECTED_FILES = [
   'package.json', 'astro.config.mjs', '.nvmrc', '.gitignore', 'AGENTS.md', 'CLAUDE.md', 'README.md',
   'exceptions.json', 'proposals.json', 'src/layouts/Base.astro', 'src/lib/exceptions.mjs',
   'src/lib/site.mjs', 'src/pages/404.astro', 'src/pages/robots.txt.js', 'docs/LAUNCH.md',
-  'docs/plan.md', 'docs/third-party.md',
+  'docs/plan.md', 'docs/third-party.md', 'src/styles/site.css',
 ];
 
 // Copied scripts are copied verbatim: placeholders inside them are not substituted.
@@ -158,7 +158,16 @@ test('init scaffolds templates, copies scripts, commits on main and switches to 
   assert.match(readFileSync(join(dir, 'docs', 'LAUNCH.md'), 'utf8'), /www\.fixture-roofing\.test/);
   assert.match(readFileSync(join(dir, 'src', 'lib', 'site.mjs'), 'utf8'),
     /export const INDEXABLE = process\.env\.PUBLIC_INDEXABLE === 'true'/);
-  assert.match(readFileSync(join(dir, 'src', 'layouts', 'Base.astro'), 'utf8'), /noindex, nofollow/);
+  const base = readFileSync(join(dir, 'src', 'layouts', 'Base.astro'), 'utf8');
+  assert.match(base, /noindex, nofollow/);
+  // site.css by URL and linked by hand before the head slot (an imported stylesheet would land at
+  // the end of <head>); a page sheet from src/styles/pages/ after it, on the pages that name one.
+  assert.match(base, /^import siteCss from '\.\.\/styles\/site\.css\?url';$/m);
+  assert.match(base, /import\.meta\.glob\('\.\.\/styles\/pages\/\*\.css', \{ query: '\?url', import: 'default', eager: true \}\)/);
+  assert.doesNotMatch(base, /^import '\.\.\/styles\/site\.css';$/m);
+  const order = ['<link rel="stylesheet" href={siteCss} />', '{pageCss && <link rel="stylesheet" href={pageCss} />}', '<slot name="head" />'].map((s) => base.indexOf(s));
+  assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `site.css, the page sheet, then the head slot: ${order}`);
+  assert.match(readFileSync(join(dir, 'src', 'styles', 'site.css'), 'utf8'), /css-prune\.mjs/);
   const ignore = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
   for (const entry of ['/capture/screens/', '/capture/lighthouse-live/', '/review/', 'node_modules', 'dist',
     '.astro', '.env*', '!.env.example', '.conversion/*.tmp', '/media-cache/', '.vercel']) {

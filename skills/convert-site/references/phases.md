@@ -211,7 +211,8 @@ flags in `baseline/scripts.json` (`third-party.md`).
 Read `build-rules.md`, `forms.md`, `third-party.md` and your host file first. In this order:
 
 1. Media (`build-rules.md`, "Media") and fonts; for `store`, upload now (host file).
-2. CSS: `node $KIT/skills/convert-site/scripts/css-prune.mjs --css capture/css --coverage capture/css-coverage.json --out src/styles/site.css --report .conversion/css-prune-report.json`.
+2. CSS: `node $KIT/skills/convert-site/scripts/css-prune.mjs --css capture/css --coverage capture/css-coverage.json --out src/styles/site.css --report .conversion/css-prune-report.json`. When it prints `wrote N per-page sheet(s)`, give each page its `pageSheet`
+   from the report's `pageSheets`.
    Exit 1 means a stylesheet had no coverage and was kept whole: record a decision.
 3. One layout per template, with the header, navigation and footer as components.
 4. The representative page of each template, its content moved from the captured markup.
