@@ -19,7 +19,7 @@ export { srcsetUrls };
 // Media files are many and small: more in flight than the crawl's default.
 const MEDIA_CONCURRENCY = 6;
 
-const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--delay <ms>] [--concurrency <n>] [--polite] [--max-file-bytes <n>]
+const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--sizes referenced|all] [--delay <ms>] [--concurrency <n>] [--polite] [--max-file-bytes <n>]
 
 List every media file of a captured site in <capture>/media.json:
   [{ url, path, source[], referencedBy[], status, contentType, bytes }]
@@ -28,7 +28,11 @@ css (stylesheets and style attributes), rest (the WordPress media list, every si
 (image sitemaps), og (og:image, twitter:image). referencedBy lists the pages that use it.
 Entries are keyed by path: references to the same path (another query string, http or https,
 www or not) are one entry, and the first URL found for it is the one listed and requested.
-Each file is checked with one paced HEAD request (GET when HEAD is refused). A file that times
+Each file is checked with one paced HEAD request (GET when HEAD is refused), several at once.
+By default (--sizes referenced) the files checked and downloaded are every original in the REST
+media list and every file a page, stylesheet, srcset, og tag or sitemap references; a size
+only the REST media list names (WordPress registers several per upload) is listed with
+downloaded: false and reason "unreferenced size", and never requested. A file that times
 out, resets the connection or answers 403 after 3 tries is listed with that status (0 for a
 network error, with \`error\`); three such files in a row stop the run. A file larger than
 --max-file-bytes is listed with status "too-large" and not saved; a file on a host that resolves
@@ -39,6 +43,9 @@ requested and is listed "blocked-address".
                     pages/, css/, wp-rest/media.json, sitemaps/)
   --download <dir>  also save every file that answers 200 under <dir>/<path>, byte for byte
                     (streamed to disk; a download with no data for 30 s is a network error)
+  --sizes referenced|all  which REST-only image sizes to fetch (default referenced: none;
+                    all: every registered size, for when old emails or other sites may
+                    link to them)
   --max-file-bytes <n>  largest file to download or measure (default ${MAX_FILE_BYTES}, 2 GB)
   --delay <ms>      time between request starts on the site (default ${DEFAULT_DELAY_MS})
   --concurrency <n> requests in flight on the site at once (default ${MEDIA_CONCURRENCY})
@@ -51,6 +58,8 @@ Run it again after a stop: files already checked (and downloaded) are kept.
 Exit codes: 0 done, 2 usage error, no capture or no page that answered 200, 3 stopped because the site is blocking
 requests (wait, then run the same command again).`;
 
+const SIZES = new Set(['referenced', 'all']);
+const UNREFERENCED = 'unreferenced size';
 const SOURCE_ORDER = ['html', 'srcset', 'css', 'rest', 'sitemap', 'og'];
 const MEDIA_EXTENSIONS = new Set([
   ...IMAGE_EXTENSIONS, ...FONT_EXTENSIONS,
@@ -82,7 +91,7 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
 
 function parseArgs(argv) {
-  const args = { capture: null, download: null, delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
+  const args = { capture: null, download: null, sizes: 'referenced', delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i, flag) => {
     if (i >= argv.length || argv[i].startsWith('--')) throw new UsageError(`${flag} needs a value`);
     return argv[i];
@@ -92,6 +101,10 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--capture') args.capture = value((i += 1), arg);
     else if (arg === '--download') args.download = value((i += 1), arg);
+    else if (arg === '--sizes') {
+      args.sizes = value((i += 1), arg);
+      if (!SIZES.has(args.sizes)) throw new UsageError(`--sizes is referenced or all, got "${args.sizes}"`);
+    }
     else if (arg === '--ua') args.ua = value((i += 1), arg);
     else if (arg === '--delay') {
       const n = Number(value((i += 1), arg));
@@ -234,6 +247,25 @@ export function collectMedia(captureDir) {
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
+// The paths of the originals in the REST media list (each item's source_url, not its sizes).
+function restOriginals(captureDir, origin) {
+  const file = join(captureDir, 'wp-rest', 'media.json');
+  const paths = new Set();
+  if (!existsSync(file)) return paths;
+  for (const item of readJson(file) ?? []) {
+    try {
+      paths.add(new URL(item?.source_url, origin).pathname);
+    } catch {
+      // no usable source_url
+    }
+  }
+  return paths;
+}
+
+// A size only the REST media list names: no page, stylesheet, srcset, og tag or sitemap uses it.
+const unreferencedSize = (entry, originals) =>
+  entry.source.length === 1 && entry.source[0] === 'rest' && !originals.has(entry.path);
+
 function downloadTarget(dir, path) {
   let decoded;
   try {
@@ -298,22 +330,11 @@ async function main() {
   const trusted = [meta.origin, meta.canonicalOrigin, media[0]?.url];
   const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted, maxBytes: args.maxFileBytes });
   const streak = new Set();
+  const originals = restOriginals(captureDir, meta.canonicalOrigin ?? meta.origin ?? media[0]?.url);
+  let stop = null; // the entry whose answer stops the run; files in flight are let finish
 
-  // Every entry carries the fields from the start, so a stopped run lists what is left as null.
-  for (const entry of media) Object.assign(entry, { status: null, contentType: null, bytes: null });
-  for (const entry of media) {
-    const before = earlier.get(entry.path);
-    const target = args.download ? downloadTarget(args.download, entry.path) : null;
-    // A file that was too large is asked again: the cap may have been raised.
-    if (before && before.status !== null && !BLOCK_STATUSES.has(before.status) && before.status !== TOO_LARGE) {
-      const downloaded = !args.download || before.status !== 200 || !target || fileHolds(target, before.bytes);
-      if (downloaded) {
-        Object.assign(entry, { status: before.status, contentType: before.contentType, bytes: before.bytes });
-        if (before.location) entry.location = before.location;
-        continue;
-      }
-    }
-
+  // Checks (and downloads) one file; returns its last answer.
+  const check = async (entry, target) => {
     let res;
     let viaGet = false;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -331,35 +352,74 @@ async function main() {
       if (!BLOCK_STATUSES.has(res.status)) break;
       if (attempt < MAX_ATTEMPTS) await sleep(Math.max(RETRY_MIN_MS, args.delayMs) * 2 ** (attempt - 1));
     }
+    return { res, viaGet };
+  };
 
-    const blocked = BLOCK_STATUSES.has(res.status);
-    const stop = () => {
-      write();
-      console.error(
-        `Stopped: ${new URL(entry.url).origin} is blocking requests or cannot be reached. Wait a while, then run the same command again; files already checked are kept.`,
-      );
-      process.exit(3);
-    };
-    if (blocked && !GIVE_UP.has(res.status)) stop();
-    if (blocked) streak.add(entry.path);
-    else streak.clear();
-
-    entry.status = res.status;
-    entry.contentType = res.headers?.['content-type'] ?? null;
-    const length = Number(res.headers?.['content-length']);
-    entry.bytes = typeof res.status !== 'number' || res.status === 0 ? null : viaGet ? res.bytes : Number.isFinite(length) ? length : null;
-    if (res.status === 0 || typeof res.status !== 'number') entry.error = res.error ?? 'network error';
-    if (res.status >= 300 && res.status < 400 && res.headers?.location) {
-      entry.location = new URL(res.headers.location, entry.url).href;
+  // Every entry carries the fields from the start, so a stopped run lists what is left as null.
+  for (const entry of media) Object.assign(entry, { status: null, contentType: null, bytes: null });
+  const todo = [];
+  for (const entry of media) {
+    const before = earlier.get(entry.path);
+    const target = args.download ? downloadTarget(args.download, entry.path) : null;
+    // A file that was too large is asked again: the cap may have been raised.
+    if (before && before.status !== null && !BLOCK_STATUSES.has(before.status) && before.status !== TOO_LARGE) {
+      const downloaded = !args.download || before.status !== 200 || !target || fileHolds(target, before.bytes);
+      if (downloaded) {
+        Object.assign(entry, { status: before.status, contentType: before.contentType, bytes: before.bytes });
+        if (before.location) entry.location = before.location;
+        continue;
+      }
     }
-    if (streak.size >= BLOCK_LIMIT) stop();
+    if (args.sizes === 'referenced' && unreferencedSize(entry, originals)) {
+      Object.assign(entry, { downloaded: false, reason: UNREFERENCED });
+      continue;
+    }
+    todo.push({ entry, target });
+  }
+
+  // Up to --concurrency files at once (the limiter paces the host). "In a row" is the order the
+  // answers come back in.
+  const worker = async () => {
+    while (!stop && todo.length > 0) {
+      const { entry, target } = todo.shift();
+      const { res, viaGet } = await check(entry, target);
+      const blocked = BLOCK_STATUSES.has(res.status);
+      if (blocked && !GIVE_UP.has(res.status)) {
+        stop ??= entry;
+        return;
+      }
+      if (blocked) streak.add(entry.path);
+      else streak.clear();
+
+      entry.status = res.status;
+      entry.contentType = res.headers?.['content-type'] ?? null;
+      const length = Number(res.headers?.['content-length']);
+      entry.bytes = typeof res.status !== 'number' || res.status === 0 ? null : viaGet ? res.bytes : Number.isFinite(length) ? length : null;
+      if (res.status === 0 || typeof res.status !== 'number') entry.error = res.error ?? 'network error';
+      if (res.status >= 300 && res.status < 400 && res.headers?.location) {
+        entry.location = new URL(res.headers.location, entry.url).href;
+      }
+      if (streak.size >= BLOCK_LIMIT) stop ??= entry;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(args.concurrency, Math.max(1, todo.length)) }, worker));
+  if (stop) {
+    write();
+    console.error(
+      `Stopped: ${new URL(stop.url).origin} is blocking requests or cannot be reached. Wait a while, then run the same command again; files already checked are kept.`,
+    );
+    process.exit(3);
   }
 
   write();
   const ok = media.filter((m) => m.status === 200);
   const bytes = ok.reduce((sum, m) => sum + (m.bytes ?? 0), 0);
   const saved = args.download ? `, saved under ${resolve(args.download)}` : '';
-  console.log(`Listed ${media.length} media files (${media.length - ok.length} not 200, ${bytes} bytes) in ${outFile}${saved}.`);
+  const listedOnly = media.filter((m) => m.downloaded === false).length;
+  const checked = media.length - listedOnly;
+  const count = (n) => n.toLocaleString('en-US');
+  console.log(`${count(checked)} referenced (${args.download ? 'downloaded' : 'checked'}), ${count(listedOnly)} unreferenced ${listedOnly === 1 ? 'size' : 'sizes'} (listed only)`);
+  console.log(`Listed ${media.length} media files (${checked - ok.length} not 200, ${bytes} bytes) in ${outFile}${saved}.`);
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

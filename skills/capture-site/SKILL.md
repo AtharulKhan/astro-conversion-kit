@@ -79,6 +79,13 @@ source. Run each step as its own command, in this order:
 
        node <skill-dir>/scripts/media.mjs --capture capture --download .conversion/media-cache
 
+   It downloads six files at a time. By default (`--sizes referenced`) it fetches the originals
+   and every size a page, stylesheet, srcset, og tag or sitemap uses; a WordPress size only the
+   REST media list names is listed with `downloaded: false, reason: "unreferenced size"` and not
+   requested. It prints the split, e.g. `920 referenced (downloaded), 4,520 unreferenced sizes
+   (listed only)`: repeat that line to the person. Use `--sizes all` when the owner says old
+   emails or other sites may link to those sizes.
+
 4. **Templates.** Clusters the pages that answered 200 into `capture/templates.json`. On
    WordPress, pages group by template body class first (`home`, `page`, `single-post`,
    `archive`, template classes) and a page whose markup is clearly different (Jaccard below 0.5)
@@ -187,7 +194,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     redirects.json        every redirect, chains collapsed, hops kept; shortlinks marked verified or not
     links.json            internal and external links, with the pages that carry them
     scripts.json          third-party vendors with their ids and pages
-    media.json            every media file with sources, pages, status, type and bytes
+    media.json            every media file with sources, pages, status, type and bytes; a size
+                          only the REST list names: downloaded: false, "unreferenced size"
     css/                  every stylesheet, inline <style> blocks, manifest.json; the sheets a
                           stylesheet @imports (any host, 5 levels deep) too, their manifest
                           entries with importedBy: [importer hrefs] and the importer's pages;
