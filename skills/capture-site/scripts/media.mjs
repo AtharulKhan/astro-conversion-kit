@@ -30,9 +30,12 @@ Entries are keyed by path: references to the same path (another query string, ht
 www or not) are one entry, and the first URL found for it is the one listed and requested.
 Each file is checked with one paced HEAD request (GET when HEAD is refused), several at once.
 By default (--sizes referenced) the files checked and downloaded are every original in the REST
-media list and every file a page, stylesheet, srcset, og tag or sitemap references; a size
-only the REST media list names (WordPress registers several per upload) is listed with
-downloaded: false and reason "unreferenced size", and never requested. A file that times
+media list and every file a page, stylesheet, srcset, og tag or sitemap references; a REST
+size also counts as referenced when its file name appears anywhere in the captured pages/,
+css/ or js/ files (data-thumb, data-bg, JSON settings, scripts). A size only the REST media
+list names (WordPress registers several per upload) is listed with downloaded: false and
+reason "unreferenced size", and never requested. When the run stops, no new attempt starts;
+files in flight finish. A file that times
 out, resets the connection or answers 403 after 3 tries is listed with that status (0 for a
 network error, with \`error\`); three such files in a row stop the run. A file larger than
 --max-file-bytes is listed with status "too-large" and not saved; a file on a host that resolves
@@ -262,9 +265,46 @@ function restOriginals(captureDir, origin) {
   return paths;
 }
 
-// A size only the REST media list names: no page, stylesheet, srcset, og tag or sitemap uses it.
-const unreferencedSize = (entry, originals) =>
-  entry.source.length === 1 && entry.source[0] === 'rest' && !originals.has(entry.path);
+// Every file name with a media extension written anywhere in the captured pages, stylesheets and
+// scripts, decoded too. Themes and plugins name sizes in places the media list does not parse
+// (data-thumb, data-bg, data-lazyload, Elementor's data-settings JSON, slider scripts), so a REST
+// size counts as referenced when its file name appears anywhere at all.
+const NAME_IN_TEXT = new RegExp(`[^\\s"'()<>,;=\\\\/]+\\.(?:${[...MEDIA_EXTENSIONS].join('|')})(?![a-z0-9])`, 'gi');
+function namesInCapture(captureDir) {
+  const names = new Set();
+  for (const folder of ['pages', 'css', 'js']) {
+    const dir = join(captureDir, folder);
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (name === 'manifest.json') continue;
+      const file = join(dir, name);
+      if (!statSync(file).isFile()) continue;
+      for (const [found] of readFileSync(file, 'utf8').matchAll(NAME_IN_TEXT)) {
+        names.add(found.toLowerCase());
+        try {
+          names.add(decodeURIComponent(found).toLowerCase());
+        } catch {
+          // not percent-encoded
+        }
+      }
+    }
+  }
+  return names;
+}
+
+const fileName = (path) => {
+  const last = path.slice(path.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(last).toLowerCase();
+  } catch {
+    return last.toLowerCase();
+  }
+};
+
+// A size only the REST media list names: not an original, and no page, stylesheet, script,
+// srcset, og tag or sitemap mentions it (by any attribute or text, matched by file name).
+const unreferencedSize = (entry, originals, names) =>
+  entry.source.length === 1 && entry.source[0] === 'rest' && !originals.has(entry.path) && !names.has(fileName(entry.path));
 
 function downloadTarget(dir, path) {
   let decoded;
@@ -331,13 +371,16 @@ async function main() {
   const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted, maxBytes: args.maxFileBytes });
   const streak = new Set();
   const originals = restOriginals(captureDir, meta.canonicalOrigin ?? meta.origin ?? media[0]?.url);
+  const names = args.sizes === 'referenced' ? namesInCapture(captureDir) : new Set();
   let stop = null; // the entry whose answer stops the run; files in flight are let finish
 
-  // Checks (and downloads) one file; returns its last answer.
+  // Checks (and downloads) one file; returns its last answer, or null when the run started
+  // stopping before an attempt (the file is left for the next run).
   const check = async (entry, target) => {
     let res;
     let viaGet = false;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      if (stop) return null;
       viaGet = Boolean(args.download);
       if (!viaGet) {
         res = await request(entry.url, { method: 'HEAD' });
@@ -370,7 +413,7 @@ async function main() {
         continue;
       }
     }
-    if (args.sizes === 'referenced' && unreferencedSize(entry, originals)) {
+    if (args.sizes === 'referenced' && unreferencedSize(entry, originals, names)) {
       Object.assign(entry, { downloaded: false, reason: UNREFERENCED });
       continue;
     }
@@ -382,7 +425,9 @@ async function main() {
   const worker = async () => {
     while (!stop && todo.length > 0) {
       const { entry, target } = todo.shift();
-      const { res, viaGet } = await check(entry, target);
+      const checked = await check(entry, target);
+      if (!checked) return;
+      const { res, viaGet } = checked;
       const blocked = BLOCK_STATUSES.has(res.status);
       if (blocked && !GIVE_UP.has(res.status)) {
         stop ??= entry;
@@ -418,7 +463,7 @@ async function main() {
   const listedOnly = media.filter((m) => m.downloaded === false).length;
   const checked = media.length - listedOnly;
   const count = (n) => n.toLocaleString('en-US');
-  console.log(`${count(checked)} referenced (${args.download ? 'downloaded' : 'checked'}), ${count(listedOnly)} unreferenced ${listedOnly === 1 ? 'size' : 'sizes'} (listed only)`);
+  console.log(`${count(checked)} originals + referenced sizes (${args.download ? 'downloaded' : 'checked'}), ${count(listedOnly)} unreferenced ${listedOnly === 1 ? 'size' : 'sizes'} (listed only)`);
   console.log(`Listed ${media.length} media files (${checked - ok.length} not 200, ${bytes} bytes) in ${outFile}${saved}.`);
 }
 

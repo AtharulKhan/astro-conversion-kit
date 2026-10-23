@@ -111,7 +111,7 @@ test('the capture saves the theme stylesheet and a CSS manifest', () => {
 test('media.json lists every media file with its sources, pages, type and size', () => {
   assert.equal(mediaRun.code, 0, mediaRun.stderr);
   // Every size of every fixture image is used by a page, a srcset or the image sitemap.
-  assert.match(mediaRun.stdout, /^20 referenced \(downloaded\), 0 unreferenced sizes \(listed only\)$/m);
+  assert.match(mediaRun.stdout, /^20 originals \+ referenced sizes \(downloaded\), 0 unreferenced sizes \(listed only\)$/m);
   const media = readJson(join(cap, 'media.json'));
   // 20 = 15 images (5 originals x 3 sizes, all in the REST media list) + brochure.pdf + logo.svg
   // (the header logo, which is also the favicon) + the two WOFF2 fonts the theme CSS loads +
@@ -228,7 +228,7 @@ test('--sizes referenced (the default) downloads originals and referenced sizes 
     const files = join(dir, 'files');
     const result = await run(MEDIA, ['--capture', dir, '--download', files, '--delay', '0']);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /^3 referenced \(downloaded\), 2 unreferenced sizes \(listed only\)$/m);
+    assert.match(result.stdout, /^3 originals \+ referenced sizes \(downloaded\), 2 unreferenced sizes \(listed only\)$/m);
     const media = readJson(join(dir, 'media.json'));
     const listedOnly = { status: null, contentType: null, bytes: null, downloaded: false, reason: 'unreferenced size' };
     assert.deepEqual(
@@ -251,11 +251,74 @@ test('--sizes referenced (the default) downloads originals and referenced sizes 
     server.requests.length = 0;
     const all = await run(MEDIA, ['--capture', dir, '--download', files, '--delay', '0', '--sizes', 'all']);
     assert.equal(all.code, 0, all.stderr);
-    assert.match(all.stdout, /^5 referenced \(downloaded\), 0 unreferenced sizes \(listed only\)$/m);
+    assert.match(all.stdout, /^5 originals \+ referenced sizes \(downloaded\), 0 unreferenced sizes \(listed only\)$/m);
     assert.ok(readJson(join(dir, 'media.json')).every((m) => m.status === 200 && m.downloaded === undefined));
     assert.deepEqual(server.requests.sort(), ['GET /a-300x200.jpg', 'GET /b-300x200.jpg'], 'the files already saved are kept');
     const bad = await run(MEDIA, ['--capture', dir, '--sizes', 'some']);
     assert.equal(bad.code, 2);
+  } finally {
+    await server.close();
+  }
+});
+
+test('a REST-only size whose file name appears anywhere in a captured page, stylesheet or script is downloaded', async () => {
+  const server = await serve((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': 4 });
+    res.end(req.method === 'HEAD' ? undefined : 'jpeg');
+  });
+  try {
+    // data-thumb (WooCommerce), data-settings JSON (Elementor, with escaped slashes), a stylesheet
+    // the media list does not parse, and a theme script.
+    const dir = tinyCapture(
+      server.origin,
+      '<html><body><img src="/a.jpg"><div data-thumb="/a-100x100.jpg"></div>'
+        + '<div data-settings="{&quot;bg&quot;:&quot;https:\\/\\/x\\/a-200x200.jpg&quot;}"></div></body></html>',
+    );
+    mkdirSync(join(dir, 'css'));
+    writeFileSync(join(dir, 'css', '1.css'), '.hero{--bg:"a-300x300.jpg"}');
+    writeFileSync(join(dir, 'css', 'manifest.json'), '[]');
+    mkdirSync(join(dir, 'js'));
+    writeFileSync(join(dir, 'js', '1.js'), 'slides.push("/a-400x400.jpg");');
+    mkdirSync(join(dir, 'wp-rest'));
+    const sizes = Object.fromEntries(['100x100', '200x200', '300x300', '400x400', '500x500'].map((s) => [s, { source_url: `${server.origin}/a-${s}.jpg` }]));
+    writeFileSync(join(dir, 'wp-rest/media.json'), JSON.stringify([{ source_url: `${server.origin}/a.jpg`, media_details: { sizes } }]));
+    const result = await run(MEDIA, ['--capture', dir, '--download', join(dir, 'files'), '--delay', '0']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^5 originals \+ referenced sizes \(downloaded\), 1 unreferenced size \(listed only\)$/m);
+    const media = readJson(join(dir, 'media.json'));
+    assert.deepEqual(media.filter((m) => m.downloaded === false).map((m) => m.path), ['/a-500x500.jpg']);
+    for (const s of ['100x100', '200x200', '300x300', '400x400']) {
+      assert.equal(media.find((m) => m.path === `/a-${s}.jpg`).status, 200, s);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test('once the run is stopping, no worker starts a new attempt or retry', async () => {
+  const requests = [];
+  const server = await serve((req, res) => {
+    requests.push(req.url);
+    if (req.url === '/b1.png') {
+      res.writeHead(429);
+      res.end();
+    } else if (req.url === '/d1.png') {
+      setTimeout(() => req.socket.destroy(), 400);
+    } else {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': 3 });
+      res.end(req.method === 'HEAD' ? undefined : 'png');
+    }
+  });
+  try {
+    const dir = tinyCapture(server.origin, '<html><body><img src="/b1.png"><img src="/d1.png"><img src="/z.png"></body></html>');
+    // b1 answers 429 at 0, 0.5 and 1.5 s and stops the run; d1's third try would start near 2.3 s.
+    const result = await run(MEDIA, ['--capture', dir, '--delay', '0', '--concurrency', '2']);
+    assert.equal(result.code, 3, result.stderr);
+    assert.equal(requests.filter((r) => r === '/b1.png').length, 3);
+    assert.equal(requests.filter((r) => r === '/d1.png').length, 2, 'no retry after the stop');
+    assert.ok(!requests.includes('/z.png'), 'no new file after the stop');
+    const media = readJson(join(dir, 'media.json'));
+    assert.equal(media.find((m) => m.path === '/d1.png').status, null, 'left for the next run');
   } finally {
     await server.close();
   }

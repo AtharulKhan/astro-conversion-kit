@@ -96,10 +96,12 @@ source. Run each step as its own command, in this order:
        node <skill-dir>/scripts/media.mjs --capture capture --download .conversion/media-cache
 
    It downloads six files at a time. By default (`--sizes referenced`) it fetches the originals
-   and every size a page, stylesheet, srcset, og tag or sitemap uses; a WordPress size only the
-   REST media list names is listed with `downloaded: false, reason: "unreferenced size"` and not
-   requested. It prints the split, e.g. `920 referenced (downloaded), 4,520 unreferenced sizes
-   (listed only)`: repeat that line to the person. Use `--sizes all` when the owner says old
+   and every size the site uses: one a page, stylesheet, srcset, og tag or sitemap points at, or
+   whose file name appears anywhere in the captured pages, stylesheets or scripts (data-thumb,
+   data-bg, JSON settings, slider scripts). A WordPress size only the REST media list names is
+   listed with `downloaded: false, reason: "unreferenced size"` and not requested. It prints the
+   split, e.g. `920 originals + referenced sizes (downloaded), 4,520 unreferenced sizes (listed
+   only)`: repeat that line to the person. Use `--sizes all` when the owner says old
    emails or other sites may link to those sizes.
 
 4. **Templates.** Clusters the pages that answered 200 into `capture/templates.json`. On
