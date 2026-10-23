@@ -189,14 +189,19 @@ test('no live sitemap: build-rules and phases ship sitemap-index.xml as a decisi
   assert.match(phases, /The routes gate never calls `sitemap-index\.xml` or `sitemap-<n>\.xml` an extra/);
 });
 
-test('phases.md: wait for the preview to serve this build before shoot and styles, and stop it', () => {
+test('phases.md: serve the build with review:serve (vercel.json applied) before shoot and styles, and stop it', () => {
   const phases = read('references/phases.md');
+  const text = flat(phases);
   assert.match(phases, /\*\*Serve, then wait\.\*\*/);
-  assert.match(phases, /^ {4}npm run preview -- --background --port 4321$/m);
-  assert.match(phases, /^ {4}node -e .*fetch\('http:\/\/localhost:4321\/preview-ready\.txt'\).*$/m);
-  assert.match(phases, /^ {4}rm dist\/preview-ready\.txt$/m);
+  assert.match(text, /serve it with `npm run review:serve` \(it applies `vercel\.json` like staging does\) and use that origin for every `review:\*` step/);
+  assert.match(text, /`npm run preview` is only for sites whose media is in the repo/);
+  assert.match(phases, /^ {4}npm run review:serve -- --stop\n {4}npm run review:serve -- --background --port 4321$/m);
+  assert.match(text, /port 4321 is in use by another process \(pid <n>, <command>\); pass --port/);
   assert.match(flat(phases.split('## 8. visual')[1]), /Serve the full build and wait for it first/);
-  assert.match(phases, /npx astro preview stop/);
+  assert.doesNotMatch(phases, /preview-ready|npm run preview -- --background/);
+  const visual = flat(readFileSync(join(SKILL, '..', 'visual-review', 'SKILL.md'), 'utf8'));
+  assert.match(visual, /serve the build with `npm run review:serve` \(it applies `vercel\.json` like staging does/);
+  assert.match(visual, /`npm run preview` is only for sites whose media is in the repo/);
 });
 
 test('SKILL.md: the post-plan status is required non-interactively, state.mjs calls one at a time with the reason, one commit per template, stop the preview', () => {
@@ -204,5 +209,5 @@ test('SKILL.md: the post-plan status is required non-interactively, state.mjs ca
   assert.match(skill, /required in a non-interactive run too/);
   assert.match(skill, /never chained with `&&`: each rewrites `state\.json`/);
   assert.match(skill, /One commit per template/);
-  assert.match(skill, /Stop any preview server you started \(`npx astro preview stop`\)/);
+  assert.match(skill, /Stop any review server you started \(`npm run review:serve -- --stop`, and `npx astro preview stop` if you used the preview\)/);
 });

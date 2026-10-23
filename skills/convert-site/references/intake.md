@@ -71,7 +71,7 @@ Include each line that applies, worded for this run. Each becomes a `state.needs
 | Missing | What happens |
 |---|---|
 | `gh` not logged in | The repo stays local; "create the repo, push `main` and `astro-rebuild`, open the PR from `.conversion/pr-body.md`" goes on your list |
-| Hosting CLI not logged in | No staging deploy; `npm run preview` locally; the staging audit and `verify-live` are "Not covered"; "deploy staging" goes on your list |
+| Hosting CLI not logged in | No staging deploy; `npm run review:serve` locally; the staging audit and `verify-live` are "Not covered"; "deploy staging" goes on your list |
 | No form id yet (asked at the forms step, never here) | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` until you give the id; the PR opens as a draft; "create the form, send me the id" goes on your list |
 | No test address | No test submission; the `forms` launch check waits on you |
 | No store credentials and media over the limits | Media is served from the live site on staging only (`live-temporary`); "create the store, upload, regenerate rewrites" goes on your list and must be done before DNS moves |

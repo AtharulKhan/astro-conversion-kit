@@ -174,8 +174,8 @@ Lead with the PR link (and "draft: waiting on the form id" when it is one), then
 converted (counts), gates and visual review in one line each, the staging URL, the needs-you list
 under **Waiting on you** read from `state.mjs --dir $SITE get needsYou` (each item with the exact
 command or click, in runbook order), then every "Not covered" section verbatim. Say "PR open,
-waiting on your merge", never "done" or "live". Stop any preview server you started (`npx astro
-preview stop`), then stop.
+waiting on your merge", never "done" or "live". Stop any review server you started
+(`npm run review:serve -- --stop`, and `npx astro preview stop` if you used the preview), then stop.
 
 ## Resuming
 

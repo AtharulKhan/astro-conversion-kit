@@ -234,20 +234,25 @@ the seven must exit 0 before the commit (`feat: <template> template`). `links`,
 template set: shoot new at 390, 768 and 1440, diff against `capture/screens/live`, styles, sheet,
 look, write down every difference, fix from `capture/`, repeat. Never reshoot live to get a
 match. The proof is `npm run review:diff -- --a capture/screens/live --b review/new --out
-review/diff` and `npm run review:styles -- --live $LIVE --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json` exiting 0 for the template set (with `npm run preview` serving the build). From here a fix goes
+review/diff` and `npm run review:styles -- --live $LIVE --new http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/styles.json` exiting 0 for the template set (with `npm run review:serve` serving the build). From here a fix goes
 in the template, never in one page.
 
-**Serve, then wait.** Before every `review:shoot` or `review:styles` against the build, start
-the preview in the background and wait until it serves this build's `dist/` (a sentinel file),
-never a server that is still starting or a leftover one; then remove the sentinel, so no gate
-counts it as an extra:
+**Serve, then wait.** Before every `review:shoot` or `review:styles` against the build, serve
+it with `npm run review:serve` (it applies `vercel.json` like staging does) and use that origin for
+every `review:*` step. Its redirects keep their status codes, `dist/` answers next, and a rewrite to
+another origin is proxied: media left on live in `live-temporary` mode or not yet in the store, an
+`importmap` target rewritten to live. `astro preview` ignores `vercel.json`, so every rewritten
+image 404s there and every pixel diff fails: `npm run preview` is only for sites whose media is in
+the repo. Stop any leftover server first, then start it in the background; it returns once it
+answers, and it reads `dist/` on every request, so a rebuild needs no restart:
 
-    node -e "require('fs').writeFileSync('dist/preview-ready.txt', String(Date.now()))"
-    npm run preview -- --background --port 4321
-    node -e "const t=require('fs').readFileSync('dist/preview-ready.txt','utf8');(async()=>{for(let i=0;i<300;i++){try{const r=await fetch('http://localhost:4321/preview-ready.txt');if(r.ok&&(await r.text())===t)process.exit(0)}catch{}await new Promise(r=>setTimeout(r,200))}console.error('preview did not answer in 60 s');process.exit(1)})()"
-    rm dist/preview-ready.txt
+    npm run review:serve -- --stop
+    npm run review:serve -- --background --port 4321
 
-Stop it with `npx astro preview stop` when the review is done, and before the run ends.
+A port another process holds exits 2 ("port 4321 is in use by another process (pid <n>,
+<command>); pass --port") instead of binding another interface, where Chromium would reach the
+other server: pass a free `--port` and use that origin. Stop it with
+`npm run review:serve -- --stop` when the review is done, and before the run ends.
 
 **Overrides.** A looser visual threshold lives in the committed `docs/visual-overrides.json`,
 keyed by route folder: `{ "<route>": { "id": "<decision id>", "threshold": <at most 2>,

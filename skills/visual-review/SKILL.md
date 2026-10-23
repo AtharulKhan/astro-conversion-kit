@@ -89,8 +89,10 @@ embeds every image as data, so one file opens anywhere, and it can be tens of me
 
 Read `references/review-procedure.md` before the first run. In short:
 
-1. **Serve the new site.** `npm run build && npm run preview` (closest to production) or
-   `npm run dev` while iterating. Note the origin, e.g. `http://localhost:4321`.
+1. **Serve the new site.** `npm run build`, then serve the build with `npm run review:serve`
+   (it applies `vercel.json` like staging does, so media and scripts rewritten to another origin
+   load) and use that origin, e.g. `http://localhost:4321`, for every `review:*` step.
+   `npm run preview` is only for sites whose media is in the repo; `npm run dev` while iterating.
 2. **Shoot new** with the same `--routes` and widths the live shots used, so folder names match:
 
        npm run review:shoot -- --base http://localhost:4321 --routes capture/templates.json --widths 390,768,1440 --out review/new --delay 0

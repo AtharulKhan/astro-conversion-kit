@@ -20,7 +20,7 @@ The preview is `https://astro-rebuild.<slug>.pages.dev`: that is the staging URL
 `S set staging '"<url>"'`. Previews are public by default, so `launch-audit` and `verify-live`
 can reach them; the content is still noindexed.
 
-Not logged in: no deploy; `npm run preview` locally; the staging audit and `verify-live` go under
+Not logged in: no deploy; `npm run review:serve` locally; the staging audit and `verify-live` go under
 "Not covered"; "log in, create the project and deploy" (the three commands above) goes on the
 needs-you list.
 

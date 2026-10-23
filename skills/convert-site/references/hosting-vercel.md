@@ -78,7 +78,7 @@ steps after it:
   "connect the Vercel project to <owner>/<slug>: `npx vercel git connect <repo url> --yes`, or
   Project Settings, Git, in the dashboard"; the staging deploy still runs from the CLI.
 
-Not logged in, or no deploy: `npm run build` and `npm run preview` locally, the staging audit
+Not logged in, or no deploy: `npm run build` and `npm run review:serve` locally, the staging audit
 and `verify-live` go under "Not covered", and "log in (`npx vercel login`), then
 `npx vercel link --yes --project <slug> --scope <scope>`, the protection PATCH and
 `npx vercel deploy --yes --scope <scope>`" goes on the needs-you list.
