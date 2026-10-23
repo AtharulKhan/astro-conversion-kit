@@ -90,11 +90,13 @@ source. Run each step as its own command, in this order:
 
        node <skill-dir>/scripts/assets.mjs --capture capture
 
-   The logo is looked for on the home page inside the `<header>`, a `.logo` element, or any
-   element whose class or id contains "logo": first an `<img>` whose src, alt, class or id
-   contains "logo", then an inline `<svg>` with "logo" in its class, id, aria-label or `<title>`
-   (saved as `logo.svg`, `url: null` in `assets/index.json`), then the first `<img>` in a link to
-   the home page, then the first `<img>` in the header. Check `assets/logo.*` by eye: an account
+   The logo is looked for on the home page inside the `<header>` first, then inside any other
+   element whose class or id names a logo (`.logo`, `.site-logo`, `#logo-wrap`). In each: an
+   `<img>` whose src, alt, class or id has the word "logo" (not "logout"), then an inline `<svg>`
+   with "logo" in its class, id, aria-label or `<title>` (saved as `logo.svg`, `url: null` in
+   `assets/index.json`; its note says so when it only `<use>`s a symbol defined elsewhere on the
+   page, which renders empty on its own), then the first `<img>` in a link to the home page, then
+   the first `<img>`. Check `assets/logo.*` by eye: an account
    avatar or a sponsor mark can still win on an unusual header. The favicon and
    apple-touch-icon are saved as served from their `<link>` href, query string included, so
    one that points at a resize (`?w=32`, `?w=180`) of an uploads file differs in bytes from

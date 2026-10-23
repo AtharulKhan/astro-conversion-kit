@@ -156,3 +156,33 @@ test('assets.mjs prefers an image named logo, then an inline logo <svg>, then th
     await site.close();
   }
 });
+
+test('assets.mjs ranks the header before other logo elements, does not read "logout" as a logo, and notes a <use>-only svg', async () => {
+  const img = { headers: { 'Content-Type': 'image/png' } };
+  const site = await startStub({
+    '/uploads/brand.png': { ...img, body: 'brand' },
+    '/uploads/acme-logo.png': { ...img, body: 'acme' },
+    '/uploads/footer-logo-white.png': { ...img, body: 'white' },
+    '/theme/logout-icon.svg': { headers: { 'Content-Type': 'image/svg+xml' }, body: '<svg>out</svg>' },
+    '/theme/site-logo.svg': { headers: { 'Content-Type': 'image/svg+xml' }, body: '<svg>logo</svg>' },
+  });
+  try {
+    const footer = '<footer><div class="sponsor-logos"><img src="/uploads/acme-logo.png" alt="Acme logo"></div><div class="footer-logo"><img src="/uploads/footer-logo-white.png"></div></footer>';
+    const header = await pickLogo(site, `<header><a href="/"><img src="/uploads/brand.png" alt="SXSW"></a></header><main></main>${footer}`);
+    assert.equal(header.url, `${site.origin}/uploads/brand.png`, 'the header brand image beats footer logos');
+
+    const outside = await pickLogo(site, `<header><nav>menu</nav></header>${footer}`);
+    assert.equal(outside.url, `${site.origin}/uploads/acme-logo.png`, 'with no header image, other logo elements are searched');
+
+    const logout = await pickLogo(site, '<header><a class="menu-logout" href="/logout"><img src="/theme/logout-icon.svg" class="logout"></a><img src="/theme/site-logo.svg"></header>');
+    assert.equal(logout.url, `${site.origin}/theme/site-logo.svg`);
+
+    const used = await pickLogo(site, '<svg style="display:none"><symbol id="brand"><path d="M0 0"/></symbol></svg><header><svg class="logo"><use href="#brand"/></svg></header>');
+    assert.equal(used.file, 'assets/logo.svg');
+    assert.match(used.note, /uses a symbol defined elsewhere on the page/);
+    const drawn = await pickLogo(site, '<header><svg class="logo"><path d="M0 0"/></svg></header>');
+    assert.doesNotMatch(drawn.note, /symbol/);
+  } finally {
+    await site.close();
+  }
+});
