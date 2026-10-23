@@ -288,6 +288,16 @@ test('a source with a bare ":" compiles to its escaped form and the gate passes 
   assert.match(rejected.stderr, /vercel\.json: .*":" with no parameter name/);
 });
 
+test('a captured source with a mid-segment ":name" or a port is a literal URL: requested as it is, never as a sample', async () => {
+  // A sample (/p/sample/) would not match the literal rule /p/\:id/ and would fail as "no redirect".
+  const rows = ['/p/:id/,/contact/,301,crawl,', '/x/http://host:8080/y,/contact/,301,crawl,'];
+  const dir = await site('site-literal-colons', 'vercel', { rows });
+  const result = await gate(dir, good, ['--paths', '/p/:id/,/x/http://host:8080/y']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^redirects: 2 checked, 0 failed$/m);
+  assert.doesNotMatch(result.stdout, /sample/);
+});
+
 const SPACED = '/two words/';
 const NO_REDIRECT = { kind: 'redirect', path: SPACED, reason: 'a broken live href; nothing to redirect', action: 'none', approvedBy: 'client', date: '2026-10-23' };
 

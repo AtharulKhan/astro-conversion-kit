@@ -3,7 +3,8 @@
 //
 // `from` is a root-relative path, optionally with a query string (`/?p=7`), or a catch-all: a
 // trailing `/*` (the target may use `:splat`) or a `:name*` parameter (the target may use
-// `:name`). `to` is a root-relative path or an absolute URL. Matching is case-sensitive.
+// `:name`), on a `decision` row only (see isLiteral). `to` is a root-relative path or an absolute
+// URL. Matching is case-sensitive.
 import { readFileSync } from 'node:fs';
 
 export const CSV_HEADER = ['from', 'to', 'status', 'source', 'note'];
@@ -49,6 +50,21 @@ export function sourceProblem(from) {
   if (!from.startsWith('/')) return 'does not start with /';
   if (/[\u0000-\u001f\u007f]/.test(from)) return 'contains a control character';
   if (/\s/.test(from)) return 'contains whitespace';
+  return null;
+}
+
+// A row from the capture is a live URL and holds no parameters: every ":" and "*" in its source is
+// literal. Only a row a person wrote (source "decision") may use :name parameters and * splats.
+export const isLiteral = (row) => row.source !== 'decision';
+
+// sourceProblem, plus what a host cannot write: _redirects has no escape, so on Cloudflare a
+// literal source with ":<name>" or "*" would be read as a placeholder or a splat.
+export function hostSourceProblem(row, host) {
+  const problem = sourceProblem(row.from);
+  if (problem) return problem;
+  if (host === 'cloudflare' && isLiteral(row) && /:\w|\*/.test(splitFrom(row.from).path)) {
+    return 'contains ":<name>" or "*", which _redirects reads as a placeholder or splat';
+  }
   return null;
 }
 

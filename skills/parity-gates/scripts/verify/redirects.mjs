@@ -10,7 +10,7 @@ import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { applyExceptions, exceptionFailure, isNoRedirect } from '../lib/exceptions.mjs';
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
-import { SKIPPED_JSON, isDynamic, isExternal, isNoop, readRedirectsCsv, sourceProblem } from '../lib/redirects-csv.mjs';
+import { SKIPPED_JSON, hostSourceProblem, isDynamic, isExternal, isLiteral, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
 import { hostResolver } from '../lib/host-resolver.mjs';
 
 const NAME = 'redirects';
@@ -82,10 +82,10 @@ function servedPaths(dist) {
 // The entries to check, by source: baseline redirects first, then redirects.csv rows not in it.
 function entriesOf(baseline, rows) {
   const entries = new Map();
-  for (const r of baseline) entries.set(r.from, { from: r.from, to: r.to, status: r.status, unverified: r.verified === false });
+  for (const r of baseline) entries.set(r.from, { from: r.from, to: r.to, status: r.status, source: r.source, unverified: r.verified === false });
   for (const row of rows) {
     if (entries.has(row.from)) continue;
-    entries.set(row.from, { from: row.from, to: row.to, status: row.status, unverified: /unverified/i.test(row.note) });
+    entries.set(row.from, { from: row.from, to: row.to, status: row.status, source: row.source, unverified: /unverified/i.test(row.note) });
   }
   return [...entries.values()];
 }
@@ -184,7 +184,7 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
       if (hops.length) failures.push({ path: entry.from, field: 'redirect', expected: NO_REDIRECT, actual: show(hops) });
       continue;
     }
-    if (notCompiled.has(entry.from) && sourceProblem(entry.from)) {
+    if (notCompiled.has(entry.from) && hostSourceProblem(entry, host)) {
       skips.push({ from: entry.from, reason: `${SKIP_NOT_COMPILED}: ${notCompiled.get(entry.from)}` });
       continue;
     }
@@ -196,7 +196,7 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
       skips.push({ from: entry.from, reason: SKIP_CLOUDFLARE_QUERY });
       continue;
     }
-    const dynamic = isDynamic(entry.from);
+    const dynamic = !isLiteral(entry) && isDynamic(entry.from);
     const requests = dynamic ? samplesFor(entry.from, target, pages) : [{ url: entry.from, target }];
     for (const request of requests) {
       checked += 1;

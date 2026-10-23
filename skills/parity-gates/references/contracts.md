@@ -120,7 +120,8 @@ vendors.
 
 - `from`: a root-relative path, optionally with a query (`/?p=7`), or a catch-all: a trailing
   `/*` (the target may use `:splat`) or a `:name*` or `:name+` parameter (the target may use
-  `:name`).
+  `:name`). Catch-alls and parameters are read only on a `decision` row; on a captured row
+  every `:` and `*` is a literal character of the live URL.
   Matching is case-sensitive. No spaces: encode them as `%20`.
 - `to`: a root-relative path or an absolute URL.
 - `status`: 301, 302, 303, 307 or 308.

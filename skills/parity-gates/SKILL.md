@@ -67,13 +67,16 @@ Cloudflare: a query row (`/?p=7`) cannot be matched by `_redirects` and goes to
 `cloudflare-query-redirects.csv`, to be created as a Single Redirect (a "needs you" item). A
 query row whose target is its own path (`/?p=2` to `/`) is a no-op and is left out on both hosts.
 
-A source that is not a valid absolute path (a broken live href the capture followed, such as
-`/trackshttps://www.example.com/x/`) is compiled in a form the host accepts when one exists: a
-`:` that starts no parameter is written `\:` for Vercel (Vercel rejects a bare one, and so does
-the gates' simulation of it), and `//` is kept. A source with no valid form (no leading `/`,
-whitespace, a control character) is dropped, named on stderr and listed as `{ source, reason }`
-in `redirects-skipped.json` beside the csv; the redirects gate counts a listed row as skipped,
-never passed. When the path should simply have no redirect, record a "no redirect" exception
+A captured row (any `source` but `decision`) is a live URL and holds no parameters: for Vercel
+every `:` and `*` in it is escaped (`/foo:bar/` is written `/foo\:bar/`, and so is
+`/trackshttps://www.example.com/x/`, a broken live href the capture followed); `//` is kept.
+Only a `decision` row uses `:name` parameters and `*` splats, and even there a `:` before a
+digit (a port) is escaped. Vercel rejects a bare `:`, and so does the gates' simulation of it.
+A source with no valid form (no leading `/`, whitespace, a control character; on Cloudflare also
+a captured `:<name>` or `*`, which `_redirects` cannot escape) is dropped, named on stderr and
+listed as `{ source, reason }` in `redirects-skipped.json`. That file sits beside
+`redirects.csv` (the site root), never under `public/`, so it is not deployed. The redirects gate
+and `verify-live` count a listed row as skipped, never passed. When the path should simply have no redirect, record a "no redirect" exception
 instead (section 4): `{ "kind": "redirect", "path": "<source>", "reason": "...", "action": "none", "approvedBy": "...", "date": "..." }`.
 
 ## 3. Verify

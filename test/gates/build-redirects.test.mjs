@@ -269,6 +269,52 @@ test('vercel: a source with a bare ":" (not a parameter) is escaped as "\\:", an
   assert.ok(!existsSync(join(root, 'redirects-skipped.json')));
 });
 
+test('vercel: a captured row escapes every ":" and "*" (live sources hold no parameters); a decision row keeps its :name parameters but never a ":" before a digit', async () => {
+  const out = join(root, 'colons-vercel.json');
+  const rows = [
+    '/foo:bar/,/contact/,301,crawl,',
+    '/x/http://host:8080/y,/contact/,301,sitemap,',
+    '/star*/,/contact/,301,crawl,',
+    '/o/:slug,/about/,301,decision,',
+    '/d/a:8080/,/about/,301,decision,',
+  ];
+  const result = await compile(['--csv', csv('colons.csv', rows), '--host', 'vercel', '--out', out, '--trailing-slash', 'always']);
+  assert.equal(result.code, 0, result.stderr);
+  const config = JSON.parse(readFileSync(out, 'utf8'));
+  const sources = config.redirects.map((r) => r.source);
+  for (const want of ['/foo\\:bar/', '/x/http\\://host\\:8080/y', '/star\\*/', '/o/:slug', '/d/a\\:8080/']) {
+    assert.ok(sources.includes(want), `${want} in:\n${sources.join('\n')}`);
+  }
+  const dist = join(root, 'colons-dist');
+  for (const page of ['contact', 'about']) {
+    mkdirSync(join(dist, page), { recursive: true });
+    writeFileSync(join(dist, page, 'index.html'), `<h1>${page}</h1>`);
+  }
+  const hops = (url) => resolveVercel(url, { config, dist }).hops.map((h) => h.to);
+  assert.deepEqual(hops('/foo:bar/'), ['/contact/']);
+  assert.deepEqual(hops('/foo:baz/'), [], 'a literal colon matches only itself');
+  assert.deepEqual(hops('/x/http://host:8080/y'), ['/contact/']);
+  assert.deepEqual(hops('/star*/'), ['/contact/']);
+  assert.deepEqual(hops('/starry/'), [], 'a literal "*" is no wildcard');
+  assert.deepEqual(hops('/o/anything'), ['/about/']);
+});
+
+test('cloudflare: a captured source with ":<name>" or "*" is dropped (_redirects reads them as a placeholder or splat); a decision row keeps them', async () => {
+  const dir = join(root, 'colons-cloudflare');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'redirects.csv');
+  writeFileSync(file, `${[HEADER, '/foo:bar/,/contact/,301,crawl,', '/star*/,/contact/,301,crawl,', '/o/:slug,/about/,301,decision,'].join('\n')}\n`);
+  const out = join(dir, '_redirects');
+  const result = await compile(['--csv', file, '--host', 'cloudflare', '--out', out]);
+  assert.equal(result.code, 0, result.stderr);
+  const skipped = JSON.parse(readFileSync(join(dir, 'redirects-skipped.json'), 'utf8'));
+  assert.deepEqual(skipped.map((s) => s.source), ['/foo:bar/', '/star*/']);
+  assert.match(skipped[0].reason, /placeholder/);
+  const text = readFileSync(out, 'utf8');
+  assert.ok(!text.includes('/foo:bar/') && !text.includes('/star*/'));
+  assert.match(text, /^\/o\/:slug \/about\/ 301$/m);
+});
+
 // Sources no host rule can hold: no leading "/", whitespace, a control character.
 const UNESCAPABLE = ['trackshttps-no-slash/', '/two words/', '/tab\there/', '/ctl\u0001char/'];
 
