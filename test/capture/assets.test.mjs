@@ -177,6 +177,9 @@ test('assets.mjs ranks the header before other logo elements, does not read "log
     const logout = await pickLogo(site, '<header><a class="menu-logout" href="/logout"><img src="/theme/logout-icon.svg" class="logout"></a><img src="/theme/site-logo.svg"></header>');
     assert.equal(logout.url, `${site.origin}/theme/site-logo.svg`);
 
+    const camel = await pickLogo(site, '<header><img src="/uploads/brand.png" alt="avatar"><img src="/theme/site-logo.svg" class="headerLogo"></header>');
+    assert.equal(camel.url, `${site.origin}/theme/site-logo.svg`, 'a camelCase class names the logo');
+
     const used = await pickLogo(site, '<svg style="display:none"><symbol id="brand"><path d="M0 0"/></symbol></svg><header><svg class="logo"><use href="#brand"/></svg></header>');
     assert.equal(used.file, 'assets/logo.svg');
     assert.match(used.note, /uses a symbol defined elsewhere on the page/);

@@ -132,6 +132,17 @@ test('a Sitemap: line on another host passes only when the live robots.txt carri
   assert.equal(unknown.code, 1, 'without the captured robots.txt the line is not known to be live');
 });
 
+test('a carried Sitemap: line on the site\'s own host is never skipped: with --origin staging it still fails', async () => {
+  const dist = makeDist(join(root, 'dist-robots-own-host'));
+  const live = readFileSync(join(capture, 'robots.txt'), 'utf8');
+  const ownLine = [...live.matchAll(/^Sitemap:\s*(\S+)$/gm)].map((m) => m[1]).find((u) => !u.includes('other.example.com'));
+  assert.ok(ownLine, 'the fixture robots.txt names its own sitemap');
+  writeFileSync(join(dist, 'robots.txt'), `User-agent: *\nSitemap: ${ownLine}\n`);
+  const result = await runGate('sitemaps', ['--dist', dist, '--baseline', baseline, '--capture', capture, '--origin', 'https://staging.example.com'], { cwd: root });
+  assert.equal(result.code, 1, result.stdout);
+  assert.match(result.stdout, /\/robots\.txt sitemap line: expected "https:\/\/staging\.example\.com\//);
+});
+
 test('a robots.txt Sitemap: line must point at a file in dist', async () => {
   const dist = makeDist(join(root, 'dist-robots'));
   writeFileSync(join(dist, 'robots.txt'), `User-agent: *\nSitemap: ${DIST_ORIGIN}/sitemap-index.xml\nSitemap: ${DIST_ORIGIN}/sitemap_index.xml\n`);

@@ -73,8 +73,9 @@ function imageSrc(img) {
   return LAZY_SRC.map((name) => attr(img, name)).find(Boolean) ?? null;
 }
 
-// "logo" or "logos" as a word of a name: sxsw-logo.svg, custom-logo, "Brand logo", not "logout".
-const LOGO = /(^|[^a-z])logos?([^a-z]|$)/i;
+// "logo" or "logos" as a word of a name: sxsw-logo.svg, custom-logo, "Brand logo", headerLogo
+// (a camelCase word start counts), not "logout" or "catalogue".
+const LOGO = /(^|[^A-Za-z]|[a-z](?=L))[Ll][Oo][Gg][Oo][Ss]?([^A-Za-z]|$)/;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const XLINK_NS = 'http://www.w3.org/1999/xlink';
 const mentionsLogo = (node, names) => names.some((name) => LOGO.test(attr(node, name) ?? ''));

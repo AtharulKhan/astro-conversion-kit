@@ -92,19 +92,29 @@ export function liveSitemapLines(capture) {
   return file && existsSync(file) ? sitemapLines(readFileSync(file, 'utf8')) : [];
 }
 
+const hostOf = (url) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {
+    return null;
+  }
+};
+
 // Every "Sitemap:" line of dist/robots.txt is a URL on compareOrigin naming a file in dist, or a
-// URL on another origin that the live robots.txt carried verbatim (`live`, its Sitemap: URLs).
-export function robotsSitemapFailures(dist, compareOrigin, live = []) {
+// URL on another host (never the site's own, `ownOrigins`, www or not) that the live robots.txt
+// carried verbatim (`live`, its Sitemap: URLs).
+export function robotsSitemapFailures(dist, compareOrigin, live = [], ownOrigins = []) {
   const file = join(dist, 'robots.txt');
   if (!existsSync(file)) return { checked: 0, failures: [] };
   const lines = sitemapLines(readFileSync(file, 'utf8'));
   const carried = new Set(live);
+  const ownHosts = new Set([compareOrigin, ...ownOrigins].map(hostOf).filter(Boolean));
   const failures = [];
   for (const url of lines) {
     const origin = originOf(url);
     const path = pathOf(url);
     const rel = path.replace(/^\/+/, '');
-    if (origin !== compareOrigin && carried.has(url)) continue;
+    if (origin !== compareOrigin && carried.has(url) && !ownHosts.has(hostOf(url))) continue;
     if (origin !== compareOrigin) failures.push({ path: '/robots.txt', field: 'sitemap line', expected: `${compareOrigin}${origin ? new URL(url).pathname : ''}`, actual: url });
     else if (!rel || !existsSync(join(dist, rel)) || !statSync(join(dist, rel)).isFile()) {
       failures.push({ path: '/robots.txt', field: 'sitemap line', expected: 'a file in dist', actual: url });
@@ -113,7 +123,7 @@ export function robotsSitemapFailures(dist, compareOrigin, live = []) {
   return { checked: lines.length, failures };
 }
 
-export function checkSitemaps({ dist, capture, routes, compareOrigin, sitemaps = [], paths = () => true }) {
+export function checkSitemaps({ dist, capture, routes, compareOrigin, ownOrigins = [], sitemaps = [], paths = () => true }) {
   const pages = routes.filter((r) => r.status === 200 && PAGE_KINDS.has(r.kind) && !r.noindex && paths(r.path));
   const feeds = routes.filter((r) => r.status === 200 && r.kind === 'feed' && paths(r.path));
   const { roots, failures } = readSitemaps(dist, sitemaps);
@@ -131,7 +141,7 @@ export function checkSitemaps({ dist, capture, routes, compareOrigin, sitemaps =
       if (!expected.has(path) && paths(path)) failures.push({ path, field, expected: null, actual: url });
     }
   }
-  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist, compareOrigin, liveSitemapLines(capture)) : { checked: 0, failures: [] };
+  const robots = paths('/robots.txt') ? robotsSitemapFailures(dist, compareOrigin, liveSitemapLines(capture), ownOrigins) : { checked: 0, failures: [] };
   failures.push(...robots.failures);
   for (const feed of feeds) {
     const candidates = feedFiles(feed.path);
@@ -174,7 +184,8 @@ function main() {
   }
   const sitemapsFile = join(args.baseline, 'sitemaps.json');
   const sitemaps = existsSync(sitemapsFile) ? readJson(sitemapsFile) : [];
-  const results = checkSitemaps({ dist: args.dist, capture: args.capture, routes, compareOrigin, sitemaps, paths: args.paths });
+  const ownOrigins = [meta.canonicalOrigin, meta.origin].map((o) => originOf(o ?? '')).filter(Boolean);
+  const results = checkSitemaps({ dist: args.dist, capture: args.capture, routes, compareOrigin, ownOrigins, sitemaps, paths: args.paths });
   report(NAME, results, { json: args.json });
 }
 

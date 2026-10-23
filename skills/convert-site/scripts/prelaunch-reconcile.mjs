@@ -126,9 +126,10 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ------------------------------------------------------------------------------- the inputs
 
-// The size a PNG's IHDR records, or null.
+// The Sitemap: URLs a robots.txt text names.
 const sitemapLines = (text) => [...text.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
 
+// The size a PNG's IHDR records, or null.
 function pngSize(file) {
   try {
     const b = readFileSync(file);
@@ -197,13 +198,13 @@ export function loadBaseline(dir, captureDir = null) {
     anyFile: (pattern) => [...files].some((p) => pattern.test(p)),
     isMedia: (path) => mediaPaths.has(path),
     pagesWithOgImage: (image) => Object.keys(allSeo).filter((p) => sameUrl(allSeo[p].og?.image, image)),
-    // Whether live published a sitemap: one the capture saved (baseline/sitemaps.json) or one
-    // capture/sitemaps/index.json records answering 200.
     // The Sitemap: URLs of the live robots.txt the capture saved, [] without it.
     liveSitemapLines: () => {
       const file = captureDir ? join(captureDir, 'robots.txt') : null;
       return file && existsSync(file) ? sitemapLines(readFileSync(file, 'utf8')) : [];
     },
+    // Whether live published a sitemap: one the capture saved (baseline/sitemaps.json) or one
+    // capture/sitemaps/index.json records answering 200.
     hadSitemap: () => read('sitemaps.json', []).length > 0 || captured(join('sitemaps', 'index.json'), []).some((s) => s.status === 200),
     // The pages the crawl found answering 200 (not media).
     crawled: () => routes.filter((r) => r.status === 200 && r.kind !== 'media').map((r) => r.path),
