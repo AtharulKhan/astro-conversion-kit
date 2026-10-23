@@ -25,8 +25,8 @@ Plan modes: repo (or no plan file): each file is in dist with the same bytes; pu
 only when there is no dist yet, since once built dist is what deploys. store: each file under
 the plan's prefix is in the manifest with the same bytes. live-temporary: files under the prefix
 are not checked and the summary counts them as skipped (served from live); a skip is not a pass.
-With PUBLIC_INDEXABLE=true, live-temporary fails every file: a release build may not serve media
-from the live site. In every mode a file outside the prefix (theme fonts, a plan without a
+With PUBLIC_INDEXABLE=true, live-temporary fails every file under the prefix (every file when the
+plan has none): a release build may not serve media from the live site. In every mode a file outside the prefix (theme fonts, a plan without a
 prefix covers everything) is checked in dist like repo mode. A media exception names the media
 path in path, the baseline byte count in from and the built one in to (to "" for a file the
 build drops).
@@ -126,12 +126,9 @@ function main() {
     const note = `skipped: ${unreferenced} unreferenced ${unreferenced === 1 ? 'size' : 'sizes'} (listed in media.json, not downloaded)`;
     return { ...results, skipped, skipReason, notes: [...(results.notes ?? []), note] };
   };
-  if (mode === 'live-temporary' && process.env.PUBLIC_INDEXABLE === 'true') {
-    const failures = items.map((m) => ({ path: m.path, field: 'media', expected: 'served by the build', actual: FROM_LIVE }));
-    return report(NAME, withUnreferenced({ checked: items.length, failures }), { json: args.json });
-  }
   // repo mode serves everything from dist; the other modes only what lies outside the prefix.
   const inside = mode === 'repo' ? () => false : underPrefix(plan?.prefix);
+  const release = mode === 'live-temporary' && process.env.PUBLIC_INDEXABLE === 'true';
   const fromDist = media.filter((m) => !inside(m.path));
   let distSize = () => null;
   if (fromDist.some((m) => selected(m, args.paths))) {
@@ -150,7 +147,12 @@ function main() {
   const sizeOf = (path) => (inside(path) ? storeSize(path) : distSize(path));
   const checked = mode === 'live-temporary' ? fromDist : media;
   const results = checkMedia({ media: checked, sizeOf, exceptions: gateExceptions(NAME, args), paths: args.paths });
-  if (mode === 'live-temporary') Object.assign(results, { skipped: items.length - results.checked, skipReason: 'served from live' });
+  if (release) {
+    // A release build may not serve the prefix from live; what lies outside it was checked above.
+    const fromLive = items.filter((m) => inside(m.path));
+    results.failures.push(...fromLive.map((m) => ({ path: m.path, field: 'media', expected: 'served by the build', actual: FROM_LIVE })));
+    results.checked += fromLive.length;
+  } else if (mode === 'live-temporary') Object.assign(results, { skipped: items.length - results.checked, skipReason: 'served from live' });
   return report(NAME, withUnreferenced(results), { json: args.json });
 }
 
