@@ -55,8 +55,16 @@ browser) and whether each is installed and logged in. Every script prints `--hel
 ![45 WordPress sites converted to static Astro: average run time 83 minutes, design parity passed on 45 of 45, Google PageSpeed performance 74 to 98 on mobile and 87 to 99 on desktop](docs/examples/results.png)
 
 Averages over 45 WordPress conversions run with the kit, intake to pull request. Every run passed
-the pixel-parity review at all three widths. Public demo sites, with their before and after
-screenshots and the full gate output, are being added to [docs/examples](docs/examples/README.md).
+the pixel-parity review at all three widths.
+
+Public demos, converted by a coding agent following the skills as published:
+[sxsw.com](https://sxsw-com-astro-v2.vercel.app) (WordPress VIP, block theme, 71 pages) and
+[harvard.edu](https://harvard-edu-astro.vercel.app) (WordPress multisite, 457 pages). Drag between
+the live page and the Astro build on the
+[before and after page](https://astro-conversion-kit-demos.vercel.app); the counts, timings and
+screenshots are in [docs/examples](docs/examples/README.md).
+
+![sxsw.com /about/ at 1440 px: the live WordPress page on the left, the Astro build on the right, 0.00 % of pixels differ](docs/examples/sxsw-about-1440.png)
 
 ## What happens
 
