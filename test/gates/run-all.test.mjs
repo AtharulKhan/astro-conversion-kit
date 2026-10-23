@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +55,29 @@ test('stops at the first failing gate with its exit code', async () => {
   assert.match(result.stdout, /^seo: \d+ checked, 1 failed$/m);
   assert.doesNotMatch(result.stdout, /^text:/m);
   assert.doesNotMatch(result.stdout, /gates passed/);
+});
+
+test('verify:proposals passes with a markup proposal, which no gate compares; an unknown field still exits 2', async (t) => {
+  const proposals = join(root, 'proposals.json');
+  t.after(() => rmSync(proposals, { force: true }));
+  const markup = {
+    id: 'relative-links', path: '/about/', field: 'markup', from: '<a href="https://www.example.com/contact/">',
+    to: '<a href="/contact/">', reason: 'links stay on the preview host', approvedBy: 'proposed', date: '2026-10-23',
+  };
+  writeFileSync(proposals, JSON.stringify([markup]));
+  const on = await runGate('run-all', ['--dist', good, '--baseline', baseline, '--endpoint', '/contact/', '--origin', DIST_ORIGIN], {
+    cwd: root, env: { PUBLIC_INDEXABLE: '', PROPOSALS: 'on' },
+  });
+  assert.equal(on.code, 0, on.stdout + on.stderr);
+  assert.match(on.stdout, new RegExp(`^All ${GATES.length} gates passed$`, 'm'));
+  assert.doesNotMatch(on.stdout, /exception/);
+
+  writeFileSync(proposals, JSON.stringify([{ ...markup, field: 'html' }]));
+  const unknown = await runGate('run-all', ['--dist', good, '--baseline', baseline, '--endpoint', '/contact/', '--origin', DIST_ORIGIN], {
+    cwd: root, env: { PUBLIC_INDEXABLE: '', PROPOSALS: 'on' },
+  });
+  assert.equal(unknown.code, 2, unknown.stdout + unknown.stderr);
+  assert.match(unknown.stdout + unknown.stderr, /field "html" is not one of .*\|markup/);
 });
 
 test('an option no gate accepts exits 2; --help exits 0', async () => {

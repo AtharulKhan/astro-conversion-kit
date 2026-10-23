@@ -94,6 +94,15 @@ You still get the whole conversion: every gate, the visual review against a loca
 suggestions and a runbook. Deploying is then the runbook's first step, and the staging audit is
 listed under "Not covered" until it runs.
 
+## Why do links on the preview take me to the live site?
+
+The build keeps every link exactly as the live site wrote it, and WordPress writes internal links
+absolute (`https://www.example.com/team/`). On a preview or staging host, clicking one goes back
+to live, and a launch audit of the preview crawls only its first page. Root-relative links can
+be switched on as a proposal (`PROPOSALS=on` builds only), recorded with `field: "markup"`; see
+[build-rules.md](../skills/convert-site/references/build-rules.md), "URLs in the captured markup".
+After launch, the absolute links point at the new site, since it answers on the same host.
+
 ## Will my search rankings survive?
 
 The kit keeps what search engines see: every URL, title, description, canonical, robots directive,

@@ -127,8 +127,8 @@ This section is the rule; the references link here.
 - **Proposal** (`proposals.json`, the same shape plus `id`, the decision id, and
   `approvedBy: "proposed"`; several records may share one id): an improvement. Code switches it
   with `proposalOn(id)`; it ships only in a `PROPOSALS=on` build, gated by `npm run
-  verify:proposals`. When a person approves it, the records move to `exceptions.json` with their
-  name in `approvedBy`.
+  verify:proposals`. A change no gate measures (rewritten hrefs) is `field: "markup"`, never
+  compared. When a person approves it, the records move to `exceptions.json` (`approvedBy`).
 
 ## Hosting
 

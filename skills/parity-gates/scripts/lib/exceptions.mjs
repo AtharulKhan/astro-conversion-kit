@@ -10,6 +10,9 @@ export const EXCEPTION_KEYS = ['path', 'field', 'from', 'to', 'reason', 'approve
 export const EXCEPTION_FIELDS = [
   'title', 'description', 'canonical', 'robots', 'lang', 'h1', 'h2', 'text',
   'og', 'jsonLd', 'link', 'redirect', 'media', 'routes',
+  // A reviewed change no gate measures (a rewritten href that still resolves): accepted as a
+  // record, never compared.
+  'markup',
 ];
 const MAY_BE_EMPTY = new Set(['from', 'to']);
 

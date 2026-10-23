@@ -36,6 +36,19 @@ parity and this file is wrong: say so and fix this file.
   root-relative or to another host. The links gate counts same-origin absolute links as internal.
   Dropping or changing one because it cannot work on a static site is a `links` exception
   (`exceptions.json`, SKILL.md "Decisions, exceptions, proposals"), never an edit.
+- **So a preview's links lead to live.** WordPress writes every internal link absolute, so on a
+  staging or preview host each click on a captured same-origin `<a href>` goes back to the live
+  site, and `launch-audit` on that host crawls only the first page. The default build keeps it
+  that way (it equals live); say so when you hand over the preview URL. To make a preview that
+  can be clicked through, offer it as a proposal: one decision, and a `proposalOn(id)` switch in
+  a small helper the page body passes through, that rewrites body `<a href>` on the live origin
+  (`https://`, `http://` or `//`, with or without `www.`) to root-relative. It leaves head tags
+  (canonical, alternate, og) alone and keeps any href that a `link` exception records exactly
+  as recorded. Record it in `proposals.json` with `field: "markup"`, one record per page it
+  changes (`from` the live href form, `to` the root-relative one); no gate compares it, since the
+  links gate already counts both forms as internal. A reference implementation is
+  `src/lib/links.mjs` in the angrybirds.com demo
+  ([ethanplusai/angrybirds-com#2](https://github.com/ethanplusai/angrybirds-com/pull/2)).
 - **WordPress API head links are kept as captured.** `wp-json/` (`rel="https://api.w.org/"`),
   `xmlrpc.php?rsd` (`EditURI`) and `wp-json/wp/v2/pages/N` (`alternate`) stay in the head
   although nothing answers them on a static host. The build generates their links exceptions,
