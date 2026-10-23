@@ -63,7 +63,7 @@ test('hosting-vercel.md: link with the team slug, deploy, protection only when t
   const flatAll = vercel.replace(/\s+/g, ' ');
   assert.match(flatAll, /every staging deploy is a production deploy: `npx vercel deploy --prod --yes --scope <scope>` from `astro-rebuild`, every time, until launch/);
   assert.match(flatAll, /Before the custom domain is attached \(launch day, from `main`\), the production alias `<slug>\.vercel\.app` is staging/);
-  assert.match(flatAll, /the `alias` list of `deployment`/);
+  assert.match(flatAll, /taken from `deployment\.productionUrl` in the same JSON/);
   assert.match(flatAll, /`https:\/\/<slug>\.vercel\.app` as the fallback/);
   assert.match(flatAll, /one GET that answers 200 with the staging noindex/);
   assert.match(flatAll, /Never the raw deployment URL/);

@@ -75,8 +75,9 @@ default (runbook).
 **Deploy.** `vercel deploy` ends with a JSON block: read `deployment.url` and
 `deployment.target` from it rather than the text above it. `deployment.url` is the raw
 deployment URL. On the default path `target` is `"production"` every time, and the staging URL
-is the production alias, taken from the `alias` list of `deployment` in the same JSON, with
-`https://<slug>.vercel.app` as the fallback when the list is missing. Confirm it with one GET
+is the production alias, taken from `deployment.productionUrl` in the same JSON (a
+production deploy carries it; the CLI also prints it as "Aliased"), with
+`https://<slug>.vercel.app` as the fallback when the field is missing. Confirm it with one GET
 that answers 200 with the staging noindex (`noindex` in the page's robots meta) before recording
 it: `S set staging '"<alias>"'`. Never the raw deployment URL. On the opt-in path the first
 `vercel deploy --yes` is a production deploy too (the first deploy of a new project always is)

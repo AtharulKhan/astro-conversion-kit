@@ -76,7 +76,7 @@ so that alias is the staging URL: anyone with the link can open it, every page c
 reviewers. No protection setting is changed; every staging redeploy is
 `npx vercel deploy --prod` from the conversion branch, because until the custom domain is
 attached on launch day the production alias is staging. `verify-live` and `launch-audit` run
-against the alias (taken from the deploy JSON's `alias` list, confirmed with one GET that
+against the alias (taken from the deploy JSON's `deployment.productionUrl`, confirmed with one GET that
 answers 200 with the noindex) (the raw `*-<hash>.vercel.app` deployment URL stays protected, and a script pointed at
 it gets a 302 to `vercel.com/sso-api`, which `verify-live` reports as deployment protection,
 exit 3). Protection is opt-in: when the owner asks for staging behind Vercel Authentication,

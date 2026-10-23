@@ -378,8 +378,8 @@ accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`for
 `docs/LAUNCH.md` section A for the person.
 
 Then the staging deploy (host file; on Vercel: link with the team slug, deploy, take the URL
-from the deploy JSON: the production alias from its `alias` list, `https://<slug>.vercel.app`
-when the list is missing, confirmed with one GET that answers 200 with the staging noindex,
+from the deploy JSON: the production alias from `deployment.productionUrl`,
+`https://<slug>.vercel.app` when the field is missing, confirmed with one GET that answers 200 with the staging noindex,
 never the raw deployment URL; only when the owner opted in to protection (`publicStaging`
 `false`), the protection PATCH comes between link and deploy). On the default public path every
 staging deploy is `npx vercel deploy --prod --yes --scope <scope>` from `astro-rebuild`: until

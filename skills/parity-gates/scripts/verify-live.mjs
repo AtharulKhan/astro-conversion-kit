@@ -46,8 +46,10 @@ Requests carry a browser user agent and ask for identity encoding. A 403, 429, 5
 error is retried after twice the delay, doubling each time; three in a row stop the run. A
 request with no full response within 30 s is that check's failure (field "timeout"), not a
 block: the run goes on. A redirect to vercel.com/sso-api is Vercel's deployment protection, not
-the site: the run stops at the first one and says to pass --bypass, or to have the bypass secret
-created (Settings, Deployment Protection, Protection Bypass for Automation) and run it again.
+the site: the run stops at the first one. On a public staging (the default) that means the
+wrong URL: run it against the project's production alias, not the raw deployment URL. Only
+when staging was deliberately protected, pass --bypass with the bypass secret a person created
+(Settings, Deployment Protection, Protection Bypass for Automation).
 
 Exit codes: 0 every check passed, 1 a check failed, 2 usage or missing input, 3 stopped after
 three consecutive blocked responses (run it again later) or at deployment protection.`;
