@@ -33,8 +33,10 @@ rerun with a longer `--delay` (for example 5000). Never retry in a tight loop.
   must use the same `--routes`, the same `--full` choice and the same widths as the live shoot, or
   the folders will not line up and every row fails as missing.
 - **Serve the new site.** For iteration `npm run dev`; for a run whose result you will report,
-  `npm run build && npm run preview`, because the built output is what ships. Either is a local
-  origin such as `http://localhost:4321`.
+  `npm run build && npm run review:serve`, because the built output is what ships; it applies
+  `vercel.json` (or `dist/_redirects`) like staging does, so media and scripts rewritten to
+  another origin load. `npm run preview` only when the site's media is in the repo. Either is a
+  local origin such as `http://localhost:4321`.
 
 ## 1. Shoot new
 

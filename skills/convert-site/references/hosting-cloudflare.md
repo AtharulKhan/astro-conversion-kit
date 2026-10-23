@@ -92,7 +92,11 @@ for the runbook.
 **Live-temporary.** No R2 credentials: the plan says `live-temporary`. Add the 302 line it
 prints, before any other rule matching the prefix, to `public/_redirects` (after
 `redirects:build`, which rewrites that file, or as a row in `redirects.csv` with `source`
-`decision`, status 302, which survives regeneration; prefer the row):
+`decision`, status 302, which survives regeneration; prefer the row). The local review serves
+the build with `npm run review:serve`, which applies `dist/_redirects` when the site has no
+`vercel.json` (the simple `source destination [status]` lines, in file order, splats and
+`:placeholders`, 301/302 redirects and 200 rewrites; it warns on any other line), so the 302
+sends each image to live there as on the preview:
 
     node --input-type=module -e "import { rewriteConfig } from '$KIT/skills/convert-site/scripts/media-plan.mjs'; console.log(rewriteConfig('live-temporary', '$LIVE', '/wp-content/uploads/', { store: 'r2' }))"
 

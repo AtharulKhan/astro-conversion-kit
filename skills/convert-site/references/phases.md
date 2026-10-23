@@ -261,7 +261,8 @@ every `review:*` step. Its redirects keep their status codes, `dist/` answers ne
 another origin is proxied: media left on live in `live-temporary` mode or not yet in the store, an
 `importmap` target rewritten to live. `astro preview` ignores `vercel.json`, so every rewritten
 image 404s there and every pixel diff fails: `npm run preview` is only for sites whose media is in
-the repo. Stop any leftover server first, then start it in the background; it returns once it
+the repo. On Cloudflare (no `vercel.json`) it applies `dist/_redirects` the same way. It re-reads
+either file when it changes. Stop any leftover server first, then start it in the background; it returns once it
 answers, and it reads `dist/` on every request, so a rebuild needs no restart:
 
     npm run review:serve -- --stop

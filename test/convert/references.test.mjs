@@ -202,6 +202,12 @@ test('phases.md: serve the build with review:serve (vercel.json applied) before 
   const visual = flat(readFileSync(join(SKILL, '..', 'visual-review', 'SKILL.md'), 'utf8'));
   assert.match(visual, /serve the build with `npm run review:serve` \(it applies `vercel\.json` like staging does/);
   assert.match(visual, /`npm run preview` is only for sites whose media is in the repo/);
+  assert.match(text, /On Cloudflare \(no `vercel\.json`\) it applies `dist\/_redirects` the same way\. It re-reads either file when it changes/);
+  const procedure = flat(readFileSync(join(SKILL, '..', 'visual-review', 'references', 'review-procedure.md'), 'utf8'));
+  assert.match(procedure, /`npm run build && npm run review:serve`, because the built output is what ships; it applies `vercel\.json` \(or `dist\/_redirects`\) like staging does/);
+  assert.doesNotMatch(procedure, /npm run build && npm run preview/);
+  const cloudflare = flat(read('references/hosting-cloudflare.md'));
+  assert.match(cloudflare, /`npm run review:serve`, which applies `dist\/_redirects` when the site has no `vercel\.json`/);
 });
 
 test('SKILL.md: the post-plan status is required non-interactively, state.mjs calls one at a time with the reason, one commit per template, stop the preview', () => {

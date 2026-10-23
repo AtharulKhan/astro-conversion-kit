@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startFixture } from '../fixture/serve.mjs';
@@ -38,7 +39,7 @@ function serve(args) {
     child.stdout.on('data', (chunk) => {
       out += chunk;
       const m = /serving \S+ at (http:\/\/localhost:\d+)/.exec(out);
-      if (m) done({ child, origin: m[1] });
+      if (m) done({ child, origin: m[1], stderr: () => err });
     });
     child.stderr.on('data', (chunk) => { err += chunk; });
     child.on('exit', (code) => fail(new Error(`review-serve exited ${code} before serving\n${out}\n${err}`)));
@@ -59,6 +60,11 @@ before(async () => {
   upstreamSeen = [];
   upstream = createServer((req, res) => {
     upstreamSeen.push({ method: req.method, url: req.url, cookie: req.headers.cookie });
+    if (req.url === '/gz.js') {
+      const body = gzipSync('export const zipped = true;\n');
+      res.writeHead(200, { 'Content-Type': 'text/javascript', 'Content-Encoding': 'gzip', 'Content-Length': body.length });
+      return res.end(body);
+    }
     res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'public, max-age=60', 'Set-Cookie': 'track=1' });
     res.end(req.method === 'HEAD' ? undefined : 'export default 1;\n');
   });
@@ -86,6 +92,7 @@ before(async () => {
         { source: '/wp-content/uploads/:path*', destination: `${fixture.origin}/wp-content/uploads/:path*` },
         { source: '/_static/importmap.js', destination: `${upstreamOrigin}/_static/importmap.js` },
         { source: '/inside/', destination: '/local-target.html' },
+        { source: '/gz.js', destination: `${upstreamOrigin}/gz.js` },
       ],
     }),
   );
@@ -161,6 +168,12 @@ test('serves dist/, applies vercel.json redirects and rewrites, proxies other or
     assert.equal(seen.url, '/_static/importmap.js?ver=3');
     assert.equal(seen.cookie, undefined);
 
+    // fetch decompresses a gzip answer, so its upstream content-length no longer applies.
+    const zipped = await fetch(`${origin}/gz.js`);
+    assert.equal(zipped.status, 200);
+    assert.equal(zipped.headers.get('content-length'), null);
+    assert.equal(await zipped.text(), 'export const zipped = true;\n');
+
     // A local rewrite destination is served from dist/.
     const inside = await fetch(`${origin}/inside/`);
     assert.equal(inside.status, 200);
@@ -232,4 +245,98 @@ test('--background detaches with a pid file and --stop ends it', async () => {
   const again = spawnSync(process.execPath, [SERVE, '--dir', site, '--stop'], { encoding: 'utf8' });
   assert.equal(again.status, 0);
   assert.match(again.stdout, /not running/);
+});
+
+// A copy of the test site without the shared vercel.json, so a test may change its own config.
+function siteCopy() {
+  const copy = mkdtempSync(join(tmpdir(), 'review-serve-copy-'));
+  cpSync(join(site, 'dist'), join(copy, 'dist'), { recursive: true });
+  return copy;
+}
+
+test('vercel.json is re-read when it changes: a rewrite added while serving applies without a restart', async () => {
+  const copy = siteCopy();
+  writeFileSync(join(copy, 'vercel.json'), JSON.stringify({ rewrites: [] }));
+  const port = await freePort();
+  const { child, origin } = await serve(['--dir', copy, '--port', String(port)]);
+  try {
+    const before = await fetch(`${origin}/wp-content/uploads/2026/01/hero.jpg`);
+    assert.equal(before.status, 404);
+    await before.text();
+    writeFileSync(join(copy, 'vercel.json'), JSON.stringify({
+      rewrites: [{ source: '/wp-content/uploads/:path*', destination: `${fixture.origin}/wp-content/uploads/:path*` }],
+    }, null, 2));
+    const after = await fetch(`${origin}/wp-content/uploads/2026/01/hero.jpg`);
+    assert.equal(after.status, 200);
+    assert.ok(Buffer.from(await after.arrayBuffer()).equals(readFileSync(FIXTURE_IMAGE)));
+  } finally {
+    await stop(child);
+    rmSync(copy, { recursive: true, force: true });
+  }
+});
+
+test('without vercel.json, dist/_redirects applies in file order: splats, placeholders, 301/302 and 200 proxies', async () => {
+  const copy = siteCopy();
+  const upstreamOrigin = `http://127.0.0.1:${upstream.address().port}`;
+  writeFileSync(join(copy, 'dist', '_redirects'), [
+    '# media stays on live until the store exists',
+    `/wp-content/uploads/* ${fixture.origin}/wp-content/uploads/:splat 302`,
+    '/old-about/ /about/ 301',
+    '/team/:name/ /about/?who=:name 301',
+    `/_static/importmap.js ${upstreamOrigin}/_static/importmap.js 200`,
+    '/inside/ /local-target.html 200',
+    '/first/ /about/ 301',
+    '/first/ /elsewhere/ 302',
+    '/geo/ /about/ 302 Country=us',
+    '',
+  ].join('\n'));
+  const port = await freePort();
+  const { child, origin, stderr } = await serve(['--dir', copy, '--port', String(port)]);
+  try {
+    for (const [path, status, location] of [
+      ['/wp-content/uploads/2026/01/hero.jpg?ver=2', 302, `${fixture.origin}/wp-content/uploads/2026/01/hero.jpg?ver=2`],
+      ['/old-about/', 301, '/about/'],
+      ['/team/ann/', 301, '/about/?who=ann'],
+      ['/first/', 301, '/about/'],
+    ]) {
+      const res = await fetch(`${origin}${path}`, { redirect: 'manual' });
+      assert.equal(res.status, status, path);
+      assert.equal(res.headers.get('location'), location, path);
+    }
+    // Followed like a browser does: the live file's bytes.
+    const image = await fetch(`${origin}/wp-content/uploads/2026/01/hero.jpg`);
+    assert.equal(image.status, 200);
+    assert.ok(Buffer.from(await image.arrayBuffer()).equals(readFileSync(FIXTURE_IMAGE)));
+
+    const script = await fetch(`${origin}/_static/importmap.js`);
+    assert.equal(script.status, 200);
+    assert.equal(await script.text(), 'export default 1;\n');
+    const inside = await fetch(`${origin}/inside/`);
+    assert.match(await inside.text(), /<title>Local target<\/title>/);
+    const home = await fetch(`${origin}/`);
+    assert.match(await home.text(), /<title>Home<\/title>/);
+    const geo = await fetch(`${origin}/geo/`, { redirect: 'manual' });
+    assert.equal(geo.status, 404, 'a line it does not understand is skipped');
+    await geo.text();
+    assert.match(stderr(), /_redirects line 9 not understood, skipped: \/geo\/ \/about\/ 302 Country=us/);
+  } finally {
+    await stop(child);
+    rmSync(copy, { recursive: true, force: true });
+  }
+});
+
+test('--stop with a pid file naming another process says it is stale and leaves the process alone', () => {
+  const copy = siteCopy();
+  try {
+    mkdirSync(join(copy, '.conversion'), { recursive: true });
+    const pidFile = join(copy, '.conversion', 'review-serve.pid');
+    writeFileSync(pidFile, `${process.pid}\n`);
+    const res = spawnSync(process.execPath, [SERVE, '--dir', copy, '--stop'], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /pid file is stale/);
+    assert.ok(!existsSync(pidFile));
+    process.kill(process.pid, 0);
+  } finally {
+    rmSync(copy, { recursive: true, force: true });
+  }
 });

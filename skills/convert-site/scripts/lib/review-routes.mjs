@@ -138,3 +138,65 @@ export function routes(config = {}) {
     },
   };
 }
+
+// Cloudflare Pages _redirects: "source destination [status]" per line, "#" comments. A source
+// matches the whole path; "*" (the splat, at most once) matches anything and ":name" one segment;
+// the destination takes :splat and :name. Status 301, 302, 303, 307 or 308 redirects (302 when
+// none is given); 200 rewrites (proxied when the destination is on another origin). The first
+// matching line wins. A line in any other shape (conditions, other statuses) is skipped and
+// passed to warn(lineNumber, line).
+const CF_REDIRECT = new Set([301, 302, 303, 307, 308]);
+
+function compileCloudflare(source) {
+  const names = [];
+  let re = '';
+  for (const part of source.split(/(\*|:[A-Za-z_]\w*)/)) {
+    if (part === '*') {
+      names.push('splat');
+      re += '(.*)';
+    } else if (/^:[A-Za-z_]\w*$/.test(part)) {
+      names.push(part.slice(1));
+      re += '([^/]+)';
+    } else re += escapeRe(part);
+  }
+  return { regex: new RegExp(`^${re}$`), names };
+}
+
+export function cloudflareRoutes(text, warn = () => {}) {
+  const lines = [];
+  String(text).split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) return;
+    const fields = line.split(/\s+/);
+    const status = fields.length === 3 && /^\d{3}$/.test(fields[2]) ? Number(fields[2]) : fields.length === 2 ? 302 : NaN;
+    const ok = fields[0].startsWith('/') && (CF_REDIRECT.has(status) || status === 200)
+      && (fields[0].match(/\*/g) ?? []).length <= 1;
+    if (!ok) {
+      warn(i + 1, line);
+      return;
+    }
+    lines.push({ destination: fields[1], status, ...compileCloudflare(fields[0]) });
+  });
+
+  function first(path, search) {
+    for (const rule of lines) {
+      const m = rule.regex.exec(path);
+      if (!m) continue;
+      const params = Object.fromEntries(rule.names.map((name, k) => [name, m[k + 1]]));
+      const to = rule.destination.replace(/:([A-Za-z_]\w*)/g, (match, name) => (name in params ? params[name] : match));
+      return { status: rule.status, to: withQuery(to, search) };
+    }
+    return null;
+  }
+
+  return {
+    redirect(path, search = '') {
+      const hit = first(path, search);
+      return hit && hit.status !== 200 ? { location: hit.to, status: hit.status } : null;
+    },
+    rewrite(path, search = '') {
+      const hit = first(path, search);
+      return hit && hit.status === 200 ? { destination: hit.to, external: isExternal(hit.to) } : null;
+    },
+  };
+}

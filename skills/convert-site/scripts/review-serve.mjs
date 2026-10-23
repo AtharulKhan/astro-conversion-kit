@@ -11,7 +11,7 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assertNodeVersion } from './lib/node-version.mjs';
-import { routes } from './lib/review-routes.mjs';
+import { cloudflareRoutes, routes } from './lib/review-routes.mjs';
 import { contentTypeFor } from './media-upload.mjs';
 
 const HELP = `Usage: node review-serve.mjs [--dir <site>] [--port 4321] [--background | --stop]
@@ -22,6 +22,10 @@ the way the staging host does: redirects first (with their status codes), then t
 order. A rewrite to another origin (media left on the live site in live-temporary mode, an
 importmap target) is proxied: GET and HEAD only, same path and query, the response streamed with
 its cache-control, no cookies either way. A rewrite to a local path serves that file from dist/.
+With no vercel.json, dist/_redirects (Cloudflare Pages) applies instead, first matching line
+wins: "source destination [status]" with * and :name, 301/302/303/307/308 redirect (302 when no
+status), 200 rewrites or proxies; any other line is skipped with a warning on stderr. Either
+file is re-read when it changes, so a rebuild or a new rewrite needs no restart.
 
 Use it instead of astro preview whenever media or scripts are not in dist/: astro preview ignores
 vercel.json, so every rewritten image would 404 and every pixel diff would fail.
@@ -144,7 +148,10 @@ async function proxy(req, res, destination) {
     return;
   }
   const out = {};
+  // fetch has decoded a compressed body, so the upstream length no longer matches it.
+  const decoded = upstream.headers.has('content-encoding');
   for (const name of PASS_HEADERS) {
+    if (decoded && name === 'content-length') continue;
     const value = upstream.headers.get(name);
     if (value !== null) out[name] = value;
   }
@@ -153,12 +160,52 @@ async function proxy(req, res, destination) {
   Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
 }
 
+// A file's change stamp, or null when it is absent.
+function stamp(file) {
+  try {
+    const s = statSync(file);
+    return `${s.mtimeMs}:${s.size}`;
+  } catch {
+    return null;
+  }
+}
+
+// The routing table: vercel.json when the site has one, else dist/_redirects (Cloudflare Pages),
+// else none. Re-read whenever either file changes, so redirects:build, a new media rewrite or a
+// rebuild takes effect without a restart.
+function routeTable(dir, dist) {
+  const vercelFile = join(dir, 'vercel.json');
+  const redirectsFile = join(dist, '_redirects');
+  let key;
+  let current;
+  return () => {
+    const next = `${stamp(vercelFile)}|${stamp(redirectsFile)}`;
+    if (next === key) return current;
+    if (existsSync(vercelFile)) {
+      const config = readConfig(dir);
+      current = { table: routes(config), cleanUrls: config.cleanUrls === true };
+    } else if (existsSync(redirectsFile)) {
+      const warn = (n, line) => console.error(`review-serve: dist/_redirects line ${n} not understood, skipped: ${line}`);
+      current = { table: cloudflareRoutes(readFileSync(redirectsFile, 'utf8'), warn), cleanUrls: false };
+    } else current = { table: routes({}), cleanUrls: false };
+    key = next;
+    return current;
+  };
+}
+
 export function handler({ dir }) {
   const dist = join(dir, 'dist');
-  const config = readConfig(dir);
-  const table = routes(config);
-  const cleanUrls = config.cleanUrls === true;
+  const currentRoutes = routeTable(dir, dist);
+  currentRoutes();
   return async (req, res) => {
+    let table;
+    let cleanUrls;
+    try {
+      ({ table, cleanUrls } = currentRoutes());
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end(`review-serve: ${err.message}\n`);
+    }
     const url = new URL(req.url, 'http://localhost');
     const { pathname: path, search } = url;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -266,6 +313,16 @@ async function startBackground({ dir, port }) {
   throw new UsageError(`the server did not start in 30 s; see ${logPath}`);
 }
 
+// The command line of a running pid, or null when no such process runs.
+function commandOf(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function stopBackground({ dir }) {
   const pidFile = join(dir, PID_FILE);
   if (!existsSync(pidFile)) {
@@ -274,6 +331,15 @@ async function stopBackground({ dir }) {
   }
   const pid = Number(readFileSync(pidFile, 'utf8').trim());
   rmSync(pidFile, { force: true });
+  const command = commandOf(pid);
+  if (command === null) {
+    console.log(`review-serve: not running (pid ${pid} had already exited)`);
+    return;
+  }
+  if (!command.includes('review-serve.mjs')) {
+    console.log(`review-serve: pid file is stale (pid ${pid} is not review-serve: ${command}); removed it`);
+    return;
+  }
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
