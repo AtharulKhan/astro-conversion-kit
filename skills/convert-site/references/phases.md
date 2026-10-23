@@ -120,8 +120,11 @@ The plan phase decides; the scaffold writes. Every decision goes into state with
 
        node $KIT/skills/convert-site/scripts/media-plan.mjs --media capture/media.json --host <hosting> --out .conversion/media-plan.json
 
-   Exit 2 with "media paths share no folder": choose the prefix that holds most files, pass
-   `--prefix`, and record a decision. Mode `store` with no store credentials in the environment
+   Without `--prefix` the plan takes the longest folder holding at least 90 % of the media
+   bytes, never a theme or plugin folder (`/wp-content/themes/`, `/wp-content/plugins/`: those
+   files stay in `public/` and are counted outside the prefix) and never a WordPress year or
+   month folder. Exit 2 with "no media folder holds at least 90 %": choose the prefix that holds
+   most of the bytes, pass `--prefix`, and record a decision. Mode `store` with no store credentials in the environment
    (`BLOB_READ_WRITE_TOKEN`, or `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
    `R2_BUCKET`): rerun with `--mode live-temporary`, record the decision, and add the needs-you
    item "create the store, upload, regenerate rewrites; live-temporary must be gone before DNS
