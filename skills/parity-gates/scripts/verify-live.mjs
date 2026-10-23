@@ -10,7 +10,8 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { attr, findAll, parseHtml } from './lib/html.mjs';
-import { isNoop } from './lib/redirects-csv.mjs';
+import { SKIPPED_JSON, hostSourceProblem, isNoop, readSkippedListing } from './lib/redirects-csv.mjs';
+import { DEFAULT_EXCEPTIONS, isNoRedirect, loadExceptions } from './lib/exceptions.mjs';
 
 const USAGE = `Usage: node verify-live.mjs --base <url> --baseline baseline [options]
 
@@ -39,6 +40,11 @@ Checks a deployed site against the baseline:
                           and check each one at its url against its bytes; a url that is a site
                           path (starts with "/") is requested at <base><path>
   --delay <ms>            pause between requests (default: 500)
+  --skipped <file>        build-redirects' listing of dropped sources (default: ${SKIPPED_JSON}):
+                          a baseline redirect listed there with a reason, whose source has no
+                          valid host form, is skipped with that reason, not requested
+  --exceptions <file>     exceptions.json (default: ${DEFAULT_EXCEPTIONS}): a redirect with a
+                          { kind: "redirect", action: "none" } exception is skipped with its reason
   --json                  print { checked, failed, failures[], skipped[] } as JSON
   --help                  show this help
 
@@ -62,6 +68,8 @@ const OPTIONS = {
   sample: { type: 'string' },
   'media-manifest': { type: 'string' },
   delay: { type: 'string', default: '500' },
+  skipped: { type: 'string', default: SKIPPED_JSON },
+  exceptions: { type: 'string', default: DEFAULT_EXCEPTIONS },
   json: { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 };
@@ -356,6 +364,22 @@ async function main() {
   // A size the capture listed but never downloaded (downloaded: false) is not served by the build.
   const mediaList = listed.filter((m) => m.downloaded !== false);
   const oldOrigins = new Set([meta.origin, meta.canonicalOrigin].filter(Boolean).map((o) => new URL(o).origin));
+  // Redirects the deploy does not carry on purpose: a source build-redirects dropped (no host can
+  // write it; the cloudflare check is the stricter one) or a "no redirect" exception.
+  let notCompiled;
+  let noRedirect;
+  if (args.skipped !== SKIPPED_JSON && !existsSync(args.skipped)) usageError(`not found: ${args.skipped}`);
+  try {
+    notCompiled = readSkippedListing(args.skipped);
+    noRedirect = new Map(loadExceptions(args.exceptions, { env: {} }).filter(isNoRedirect).map((e) => [e.path, e.reason]));
+  } catch (error) {
+    usageError(error.message);
+  }
+  const redirectSkip = (r) => {
+    if (noRedirect.has(r.from)) return `no redirect (exception): ${noRedirect.get(r.from)}`;
+    if (notCompiled.has(r.from) && hostSourceProblem(r, 'cloudflare')) return `not compiled (${SKIPPED_JSON}): ${notCompiled.get(r.from)}`;
+    return null;
+  };
 
   const lines = [];
   const out = (line) => (args.json ? lines.push(line) : process.stdout.write(`${line}\n`));
@@ -372,7 +396,9 @@ async function main() {
       await verifier.route(r, { expectNoindex: args['expect-noindex'], liveNoindex });
     }
     for (const r of redirects) {
-      if (isNoop(r)) await verifier.noop(r);
+      const why = redirectSkip(r);
+      if (why) verifier.skip('redirect', r.from, why);
+      else if (isNoop(r)) await verifier.noop(r);
       else await verifier.redirect(r, oldOrigins);
     }
     await verifier.sitemap();
@@ -387,7 +413,11 @@ async function main() {
     process.stdout.write(`${JSON.stringify(stopped ? { ...results, stopped } : results, null, 2)}\n`);
   } else {
     process.stdout.write(`verify-live: ${results.checked} checked, ${results.failed} failed\n`);
-    if (results.skipped.length) process.stdout.write(`verify-live: ${results.skipped.length} not checked (sampled out)\n`);
+    const sampledOut = results.skipped.filter((s) => s.check !== 'redirect');
+    const redirectSkips = results.skipped.filter((s) => s.check === 'redirect');
+    for (const s of redirectSkips) process.stdout.write(`  skipped redirect ${s.path}: ${s.reason}\n`);
+    if (sampledOut.length) process.stdout.write(`verify-live: ${sampledOut.length} not checked (sampled out)\n`);
+    if (redirectSkips.length) process.stdout.write(`verify-live: ${redirectSkips.length} redirects skipped with a reason\n`);
     if (stopped) process.stdout.write(`verify-live: ${stopped}\n`);
   }
   process.exit(stopped ? 3 : results.failed > 0 ? 1 : 0);

@@ -5,7 +5,7 @@
 // trailing `/*` (the target may use `:splat`) or a `:name*` parameter (the target may use
 // `:name`), on a `decision` row only (see isLiteral). `to` is a root-relative path or an absolute
 // URL. Matching is case-sensitive.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 export const CSV_HEADER = ['from', 'to', 'status', 'source', 'note'];
 export const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -70,6 +70,21 @@ export function hostSourceProblem(row, host) {
 
 // Where build-redirects lists the rows it dropped ([{ source, reason }]), beside the csv.
 export const SKIPPED_JSON = 'redirects-skipped.json';
+
+// That listing as source -> reason, for the entries with a non-empty reason; an empty Map when the
+// file does not exist. Throws on a file that is not a JSON array.
+export function readSkippedListing(file) {
+  if (!existsSync(file)) return new Map();
+  let listed;
+  try {
+    listed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${file}: not valid JSON (${error.message})`);
+  }
+  if (!Array.isArray(listed)) throw new Error(`${file}: expected an array of { source, reason }`);
+  const valid = listed.filter((s) => typeof s?.source === 'string' && typeof s.reason === 'string' && s.reason.trim());
+  return new Map(valid.map((s) => [s.source, s.reason]));
+}
 
 // Returns [{ from, to, status, source, note, line }]. Throws on a malformed file. With
 // lenientFrom, a non-empty "from" that sourceProblem rejects is returned instead of thrown, for

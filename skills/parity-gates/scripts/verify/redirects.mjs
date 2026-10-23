@@ -3,14 +3,14 @@
 // compiled config, in exactly one hop to its target; every target is a page or file in dist or an
 // external URL; no redirect source is also a page or file in dist; and no built page or file is
 // redirected away from its own URL by the rules (the slash rules included).
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
 import { applyExceptions, exceptionFailure, isNoRedirect } from '../lib/exceptions.mjs';
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
-import { SKIPPED_JSON, hostSourceProblem, isDynamic, isExternal, isLiteral, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
+import { SKIPPED_JSON, hostSourceProblem, isDynamic, isExternal, isLiteral, isNoop, readRedirectsCsv, readSkippedListing } from '../lib/redirects-csv.mjs';
 import { hostResolver } from '../lib/host-resolver.mjs';
 import { excludedBy } from '../lib/excluded.mjs';
 
@@ -255,15 +255,11 @@ const exit2 = (message) => {
 
 // build-redirects' listing of dropped sources: source -> reason, for the entries with a reason.
 function readNotCompiled(file) {
-  if (!existsSync(file)) return new Map();
-  let listed;
   try {
-    listed = JSON.parse(readFileSync(file, 'utf8'));
+    return readSkippedListing(file);
   } catch (error) {
-    return exit2(`${file}: not valid JSON (${error.message})`);
+    return exit2(error.message);
   }
-  if (!Array.isArray(listed)) exit2(`${file}: expected an array of { source, reason }`);
-  return new Map(listed.filter((s) => typeof s?.source === 'string' && typeof s.reason === 'string' && s.reason.trim()).map((s) => [s.source, s.reason]));
 }
 
 // Cloudflare reads the _redirects Astro copied into dist/ from public/; a copy anywhere else is not
