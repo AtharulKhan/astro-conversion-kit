@@ -131,7 +131,19 @@ vendors.
   A hop row keeps the head's status and source; it is in `baseline/redirects.json` too.
 
 The file is RFC 4180 CSV (quote a field holding a comma). A malformed file makes
-`build-redirects.mjs` exit 2 naming the line.
+`build-redirects.mjs` exit 2 naming the line; a `from` with no valid host form (no leading `/`,
+whitespace, a control character) is not malformed: the row is dropped and listed in
+`redirects-skipped.json`.
+
+## redirects-skipped.json
+
+Written beside `redirects.csv` by `build-redirects.mjs` when a row's source has no valid form,
+removed by a run that drops nothing:
+
+    [{ "source": "/two words/", "reason": "contains whitespace: no host rule can match it" }]
+
+The redirects gate skips a listed row (`not compiled`) when its source really has no valid form
+and the reason is not empty; any other row missing from the config fails.
 
 ## cloudflare-query-redirects.csv
 

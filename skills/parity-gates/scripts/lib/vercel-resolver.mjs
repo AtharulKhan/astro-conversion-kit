@@ -44,7 +44,9 @@ function tokenize(src) {
       i += 2;
       continue;
     }
-    if ((ch === ':' && /\w/.test(src[i + 1] ?? '')) || ch === '(') {
+    // Vercel rejects a config whose source has a ":" that starts no parameter.
+    if (ch === ':' && !/\w/.test(src[i + 1] ?? '')) throw new Error(`source ${src}: ":" with no parameter name (a literal colon is written "\\:")`);
+    if (ch === ':' || ch === '(') {
       let j = i;
       let name;
       if (ch === ':') {

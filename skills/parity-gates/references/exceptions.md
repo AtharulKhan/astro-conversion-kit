@@ -90,6 +90,23 @@ a skipped route is a URL the new site may not answer. `sitemaps`, `forms`, `scri
 `--allow-extra`; a dropped vendor is `keep: false` in `baseline/scripts.json`; forms are set by
 `--endpoint`, `--honeypot` and `--thank-you`.
 
+### No redirect on purpose
+
+A `redirect` exception changes a target; it cannot say "this source has no redirect". That
+record has a `kind` instead of a `field`:
+
+    { "kind": "redirect", "path": "/trackshttps://www.example.com/exhibitor-contact/",
+      "reason": "a broken live href; nothing should redirect it", "action": "none" }
+
+`kind` (`"redirect"`), `path` (the redirect source), `reason` and `action` (`"none"`) are
+required; `approvedBy` and `date` may be added like on any record. The redirects gate requests
+the path through the compiled rules and passes it only when nothing redirects it; on a path it
+does not check, it fails as `path not checked`. The other gates ignore the record. Use it for a
+redirect the capture recorded that the new site should not carry, such as a source
+build-redirects dropped into `redirects-skipped.json` because no host rule can hold it (the
+listing alone already makes the gate skip that row; the exception turns the skip into an
+approved, checked difference).
+
 ## How a record matches
 
 `from` is replaced by `to` wherever it equals the whole value, an array item or an object value;

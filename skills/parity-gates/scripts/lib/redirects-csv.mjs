@@ -42,8 +42,23 @@ export function parseCsvText(text) {
   return rows.filter((r) => r.some((cell) => cell.trim() !== ''));
 }
 
-// Returns [{ from, to, status, source, note, line }]. Throws on a malformed file.
-export function parseRedirectsCsv(text, file = 'redirects.csv') {
+// Why a source can be written as no host rule at all, or null when it can. A live page's broken
+// href can reach the capture this way; build-redirects drops such a row and lists it in
+// SKIPPED_JSON. A bare ":" or a "//" is not here: both have a valid (escaped or literal) form.
+export function sourceProblem(from) {
+  if (!from.startsWith('/')) return 'does not start with /';
+  if (/[\u0000-\u001f\u007f]/.test(from)) return 'contains a control character';
+  if (/\s/.test(from)) return 'contains whitespace';
+  return null;
+}
+
+// Where build-redirects lists the rows it dropped ([{ source, reason }]), beside the csv.
+export const SKIPPED_JSON = 'redirects-skipped.json';
+
+// Returns [{ from, to, status, source, note, line }]. Throws on a malformed file. With
+// lenientFrom, a non-empty "from" that sourceProblem rejects is returned instead of thrown, for
+// build-redirects to drop and the redirects gate to account for.
+export function parseRedirectsCsv(text, file = 'redirects.csv', { lenientFrom = false } = {}) {
   const [header, ...rows] = parseCsvText(text.replace(/^﻿/, ''));
   if (!header || CSV_HEADER.some((name, i) => (header[i] ?? '').trim() !== name)) {
     throw new Error(`${file}: the first line must be ${CSV_HEADER.join(',')}`);
@@ -51,9 +66,10 @@ export function parseRedirectsCsv(text, file = 'redirects.csv') {
   return rows.map((cells, index) => {
     const line = index + 2;
     const [from, to, status, source = '', note = ''] = cells.map((c) => c.trim());
-    if (!from?.startsWith('/')) throw new Error(`${file}:${line}: "from" must start with /, got ${JSON.stringify(from ?? '')}`);
+    const lenient = lenientFrom && Boolean(from);
+    if (!lenient && !from?.startsWith('/')) throw new Error(`${file}:${line}: "from" must start with /, got ${JSON.stringify(from ?? '')}`);
     if (!to) throw new Error(`${file}:${line}: "to" is empty`);
-    if (/\s/.test(from) || /\s/.test(to)) throw new Error(`${file}:${line}: "from" and "to" must not contain spaces (encode them as %20)`);
+    if ((!lenient && /\s/.test(from)) || /\s/.test(to)) throw new Error(`${file}:${line}: "from" and "to" must not contain spaces (encode them as %20)`);
     const code = Number(status);
     if (!REDIRECT_STATUSES.has(code)) {
       throw new Error(`${file}:${line}: status must be one of ${[...REDIRECT_STATUSES].join(', ')}, got ${JSON.stringify(status ?? '')}`);
@@ -62,8 +78,8 @@ export function parseRedirectsCsv(text, file = 'redirects.csv') {
   });
 }
 
-export function readRedirectsCsv(file) {
-  return parseRedirectsCsv(readFileSync(file, 'utf8'), file);
+export function readRedirectsCsv(file, options) {
+  return parseRedirectsCsv(readFileSync(file, 'utf8'), file, options);
 }
 
 // "/?p=7&a=b" -> { path: "/", query: [["p","7"],["a","b"]] }

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import {
-  CLOUDFLARE_QUERY_CSV, isCatchAll, isDynamic, isExternal, isNoop, readRedirectsCsv, splitFrom,
+  CLOUDFLARE_QUERY_CSV, SKIPPED_JSON, isCatchAll, isDynamic, isExternal, isNoop, readRedirectsCsv, sourceProblem, splitFrom,
 } from './lib/redirects-csv.mjs';
 
 const NAME = 'build-redirects';
@@ -67,6 +67,13 @@ A static file at a redirect source competes with the rule: hosts differ on which
 the redirects gate fails any source that is also a page or file in dist. Delete the page or the
 row.
 
+A source that is not a valid absolute path (a broken live href the capture followed) is written
+in a form the host accepts when one exists: a ":" that starts no parameter is escaped as "\\:"
+for Vercel, and "//" is kept as it is. A source with no valid form (it does not start with /, or
+holds whitespace or a control character) is dropped, named on stderr and listed with its reason
+in ${SKIPPED_JSON} ([{ source, reason }]) beside the csv; the redirects gate counts a listed
+row as skipped. A recompile with nothing to drop removes the file.
+
 Exit codes: 0 written, 2 usage error or a malformed csv.
 `;
 
@@ -77,7 +84,9 @@ const fail = (message) => {
 const warn = (message) => process.stderr.write(`${NAME}: warning: ${message}\n`);
 
 // Escape path-to-regexp's special characters, keeping :name, :name*, :name+ and :name? parameters.
-const pathToRegexpSafe = (path) => path.replace(/(:\w+[*+?]?)|([(){}*+?])/g, (m, param, ch) => param ?? `\\${ch}`);
+// A ":" that starts no parameter (/trackshttps://..., a broken live href) becomes "\:", the form
+// Vercel accepts for a literal colon.
+const pathToRegexpSafe = (path) => path.replace(/(:\w+[*+?]?)|([(){}*+?:])/g, (m, param, ch) => param ?? `\\${ch}`);
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // The extensions that make a path a static file for the slash rules, besides every extension
@@ -280,6 +289,29 @@ function writeCloudflare(out, rows, mode, csv, feeds = []) {
   return `${rows.length} rows -> ${lines.length} rules in ${out} (cloudflare)`;
 }
 
+// The rows whose source has a valid form; the others are named on stderr and listed in
+// SKIPPED_JSON beside the csv (removed when there are none).
+function dropInvalidSources(rows, csv) {
+  const listing = join(dirname(csv), SKIPPED_JSON);
+  const kept = [];
+  const skipped = [];
+  for (const row of rows) {
+    const reason = sourceProblem(row.from);
+    if (reason) skipped.push({ source: row.from, reason: `${reason}: no host rule can match it` });
+    else kept.push(row);
+  }
+  if (!skipped.length) {
+    rmSync(listing, { force: true });
+    return kept;
+  }
+  writeFileSync(listing, `${JSON.stringify(skipped, null, 2)}\n`);
+  process.stderr.write(
+    `${NAME}: ${skipped.length} row(s) skipped, the source has no valid form: ` +
+      `${skipped.map((s) => `${JSON.stringify(s.source)} (${s.reason.split(':')[0]})`).join(', ')}; listed in ${listing}\n`,
+  );
+  return kept;
+}
+
 function main() {
   assertNodeVersion();
   const argv = process.argv.slice(2);
@@ -311,10 +343,11 @@ function main() {
   if (!existsSync(values.csv)) fail(`not found: ${values.csv}`);
   let rows;
   try {
-    rows = readRedirectsCsv(values.csv);
+    rows = readRedirectsCsv(values.csv, { lenientFrom: true });
   } catch (error) {
     fail(error.message);
   }
+  rows = dropInvalidSources(rows, values.csv);
   let feeds = [];
   if (values.routes !== undefined) {
     if (!existsSync(values.routes)) fail(`not found: ${values.routes}`);

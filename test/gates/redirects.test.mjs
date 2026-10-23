@@ -272,6 +272,67 @@ test('a built file whose extension the compiler never saw is caught as redirecte
   assert.match(result.stdout, /^ {2}\/wp-content\/uploads\/2026\/01\/data\.Qxz redirected: expected "no redirect", got "built file redirected by rule [^"]+: 308 \/wp-content\/uploads\/2026\/01\/data\.Qxz\/"$/m);
 });
 
+const COLON_SOURCE = '/trackshttps://www.example.com/exhibitor-contact/';
+
+test('a source with a bare ":" compiles to its escaped form and the gate passes it; an unescaped one is rejected like Vercel does', async () => {
+  const dir = await site('site-colon', 'vercel', { rows: [`${COLON_SOURCE},/contact/,301,crawl,`] });
+  assert.ok(vercelConfig(dir).redirects.some((r) => r.source === '/trackshttps\\://www.example.com/exhibitor-contact/'));
+  const passed = await gate(dir, good, ['--paths', COLON_SOURCE]);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^redirects: 1 checked, 0 failed$/m);
+  const raw = vercelConfig(dir);
+  raw.redirects.unshift({ source: COLON_SOURCE, destination: '/contact/', statusCode: 301 });
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify(raw));
+  const rejected = await gate(dir, good, ['--paths', COLON_SOURCE]);
+  assert.equal(rejected.code, 2, rejected.stdout);
+  assert.match(rejected.stderr, /vercel\.json: .*":" with no parameter name/);
+});
+
+const SPACED = '/two words/';
+const NO_REDIRECT = { kind: 'redirect', path: SPACED, reason: 'a broken live href; nothing to redirect', action: 'none' };
+
+for (const host of ['vercel', 'cloudflare']) {
+  test(`${host}: a source with no valid form passes only when redirects-skipped.json lists it or an exception says no redirect`, async () => {
+    const dir = await site(`site-unescapable-${host}`, host, { rows: [`${SPACED},/contact/,301,crawl,`] });
+    const dist = host === 'cloudflare' ? cloudflareBuild(dir, `dist-unescapable-${host}`) : good;
+    const listing = join(dir, 'redirects-skipped.json');
+    const listed = JSON.parse(readFileSync(listing, 'utf8'));
+    assert.deepEqual(listed.map((s) => s.source), [SPACED]);
+    const skipped = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(skipped.code, 0, skipped.stdout + skipped.stderr);
+    assert.match(skipped.stdout, /^ {2}\/two words\/ skipped: not compiled \(redirects-skipped\.json\): .*whitespace/m);
+    assert.match(skipped.stdout, /^redirects: 0 checked, 0 failed, 1 skipped \(not compiled \(redirects-skipped\.json\)\)$/m);
+
+    writeFileSync(listing, JSON.stringify([{ source: SPACED, reason: '' }]));
+    const noReason = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(noReason.code, 1, 'a listing without a reason does not count');
+    rmSync(listing);
+    const failed = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(failed.code, 1, failed.stdout);
+    assert.match(failed.stdout, /\/two words\/ redirect: expected "\/contact\/", got "no redirect: 404/);
+
+    writeFileSync(join(dir, 'exceptions.json'), JSON.stringify([NO_REDIRECT]));
+    const excepted = await gate(dir, dist, ['--paths', SPACED]);
+    assert.equal(excepted.code, 0, excepted.stdout + excepted.stderr);
+    assert.match(excepted.stdout, /^redirects: 1 checked, 0 failed$/m);
+  });
+}
+
+test('a "no redirect" exception fails when the build still redirects the path, and on a path the gate does not check', async () => {
+  writeFileSync(join(vercelDir, 'exceptions.json'), JSON.stringify([
+    { ...NO_REDIRECT, path: '/old-services' },
+    { ...NO_REDIRECT, path: '/nowhere' },
+  ]));
+  try {
+    const result = await gate(vercelDir, good, ['--paths', '/old-services,/nowhere']);
+    assert.equal(result.code, 1, result.stdout);
+    assert.match(result.stdout, /^ {2}\/old-services redirect: expected "no redirect \(exception\)", got "301 \/services\/"$/m);
+    assert.match(result.stdout, /\/nowhere exception: .*"path not checked"/);
+  } finally {
+    rmSync(join(vercelDir, 'exceptions.json'));
+  }
+});
+
 test('usage and missing inputs exit 2; --help exits 0', async () => {
   assert.equal((await gate(vercelDir, good, ['--bogus'])).code, 2);
   assert.equal((await gate(vercelDir, join(root, 'nope'))).code, 2);

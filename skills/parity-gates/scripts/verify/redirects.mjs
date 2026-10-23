@@ -3,14 +3,14 @@
 // compiled config, in exactly one hop to its target; every target is a page or file in dist or an
 // external URL; no redirect source is also a page or file in dist; and no built page or file is
 // redirected away from its own URL by the rules (the slash rules included).
-import { existsSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, gateExceptions, report } from '../lib/gate-cli.mjs';
-import { applyExceptions, exceptionFailure } from '../lib/exceptions.mjs';
+import { applyExceptions, exceptionFailure, isNoRedirect } from '../lib/exceptions.mjs';
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
-import { isDynamic, isExternal, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
+import { SKIPPED_JSON, isDynamic, isExternal, isNoop, readRedirectsCsv, sourceProblem } from '../lib/redirects-csv.mjs';
 import { hostResolver } from '../lib/host-resolver.mjs';
 
 const NAME = 'redirects';
@@ -18,6 +18,8 @@ const DEFAULT_CSV = 'redirects.csv';
 const UNVERIFIED = ' [unverified live]';
 export const SKIP_NOOP = 'noop: destination equals source path';
 export const SKIP_CLOUDFLARE_QUERY = 'query redirect, needs a Cloudflare Single Redirect';
+export const SKIP_NOT_COMPILED = `not compiled (${SKIPPED_JSON})`;
+const NO_REDIRECT = 'no redirect (exception)';
 const SAMPLE = 'sample';
 const OPTIONS = {
   host: { type: 'string', default: '', description: 'vercel or cloudflare (default: whichever config exists)' },
@@ -45,6 +47,11 @@ redirect away fails as "built page redirected by rule <rule>" (a slash rule that
 correct the redirects.csv row that catches the page) instead.
 A redirect exception (field "redirect", path = the source, from = the baseline target, to = the
 new target) approves a changed target. Write the host config with build-redirects.mjs first.
+A "no redirect" exception { kind: "redirect", path, reason, action: "none" } says the path has
+no redirect on purpose: it is requested and passes only when the rules do not redirect it.
+A source with no valid form (no leading /, whitespace, a control character) that build-redirects
+dropped and listed with a reason in ${SKIPPED_JSON} beside the csv is skipped (${SKIP_NOT_COMPILED}).
+Any other row missing from the config fails as "no redirect".
 `;
 
 const show = (hops, max = 4) =>
@@ -150,11 +157,15 @@ export function builtUrls(files, routes = []) {
   return urls;
 }
 
-export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true }) {
+// notCompiled: source -> reason, from build-redirects' SKIPPED_JSON.
+export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true, notCompiled = new Map() }) {
   const relevant = exceptions.filter((e) => e.field === 'redirect');
+  const noRedirect = new Set(exceptions.filter(isNoRedirect).map((e) => e.path));
   const entries = entriesOf(baseline, rows).filter((e) => paths(e.from));
   const known = new Set(entries.map((e) => e.from));
-  const failures = relevant.filter((e) => paths(e.path) && !known.has(e.path)).map((e) => exceptionFailure(e, 'path not checked'));
+  const failures = [...relevant, ...exceptions.filter(isNoRedirect)]
+    .filter((e) => paths(e.path) && !known.has(e.path))
+    .map((e) => exceptionFailure(e, 'path not checked'));
   const skips = [];
   const { served, pages } = servedPaths(dist);
   const local = (url) => {
@@ -167,6 +178,16 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
     const { expected, staleExceptions } = applyExceptions({ redirect: local(entry.to) }, entry.from, relevant);
     failures.push(...staleExceptions.map((e) => exceptionFailure(e, 'no longer matches the baseline')));
     const target = expected.redirect;
+    if (noRedirect.has(entry.from)) {
+      checked += 1;
+      const { hops } = resolve(entry.from);
+      if (hops.length) failures.push({ path: entry.from, field: 'redirect', expected: NO_REDIRECT, actual: show(hops) });
+      continue;
+    }
+    if (notCompiled.has(entry.from) && sourceProblem(entry.from)) {
+      skips.push({ from: entry.from, reason: `${SKIP_NOT_COMPILED}: ${notCompiled.get(entry.from)}` });
+      continue;
+    }
     if (isNoop({ from: entry.from, to: target })) {
       skips.push({ from: entry.from, reason: SKIP_NOOP });
       continue;
@@ -219,6 +240,19 @@ const exit2 = (message) => {
   process.exit(2);
 };
 
+// build-redirects' listing of dropped sources: source -> reason, for the entries with a reason.
+function readNotCompiled(file) {
+  if (!existsSync(file)) return new Map();
+  let listed;
+  try {
+    listed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    return exit2(`${file}: not valid JSON (${error.message})`);
+  }
+  if (!Array.isArray(listed)) exit2(`${file}: expected an array of { source, reason }`);
+  return new Map(listed.filter((s) => typeof s?.source === 'string' && typeof s.reason === 'string' && s.reason.trim()).map((s) => [s.source, s.reason]));
+}
+
 // Cloudflare reads the _redirects Astro copied into dist/ from public/; a copy anywhere else is not
 // what deploys.
 function pickHost(args) {
@@ -246,11 +280,12 @@ function main() {
   let rows = [];
   if (existsSync(args.csv)) {
     try {
-      rows = readRedirectsCsv(args.csv);
+      rows = readRedirectsCsv(args.csv, { lenientFrom: true });
     } catch (error) {
       exit2(error.message);
     }
   } else if (args.csv !== DEFAULT_CSV) exit2(`not found: ${args.csv}`);
+  const notCompiled = readNotCompiled(join(dirname(args.csv), SKIPPED_JSON));
   const metaFile = join(args.baseline, 'meta.json');
   const meta = existsSync(metaFile) ? readJson(metaFile) : {};
   const origins = [meta.origin, meta.canonicalOrigin].filter(Boolean).map((o) => o.replace(/\/+$/, ''));
@@ -270,6 +305,7 @@ function main() {
     exceptions: gateExceptions(NAME, args),
     origins,
     paths: args.paths,
+    notCompiled,
   });
   report(NAME, results, { json: args.json });
 }
