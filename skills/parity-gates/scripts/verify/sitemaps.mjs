@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from '../lib/node-version.mjs';
 import { gateArgs, report } from '../lib/gate-cli.mjs';
 import { feedFiles, firstExisting, originOf, PAGE_KINDS, readJson, requireInputs } from '../lib/dist.mjs';
+import { excludedBy } from '../lib/excluded.mjs';
 
 const NAME = 'sitemaps';
 const OPTIONS = {
@@ -105,8 +106,6 @@ const hostOf = (url) => {
 // Every "Sitemap:" line of dist/robots.txt is a URL on compareOrigin naming a file in dist, or a
 // URL on another host (never the site's own, `ownOrigins`, www or not) that the live robots.txt
 // carried verbatim (`live`, its Sitemap: URLs), or a carried line under an `excluded` prefix.
-const underExcluded = (path, prefixes) => prefixes.some((p) => path.startsWith(p) || (p.endsWith('/') && path === p.slice(0, -1)));
-
 export function robotsSitemapFailures(dist, compareOrigin, live = [], ownOrigins = [], excluded = []) {
   const file = join(dist, 'robots.txt');
   if (!existsSync(file)) return { checked: 0, failures: [] };
@@ -119,7 +118,7 @@ export function robotsSitemapFailures(dist, compareOrigin, live = [], ownOrigins
     const path = pathOf(url);
     const rel = path.replace(/^\/+/, '');
     if (origin !== compareOrigin && carried.has(url) && !ownHosts.has(hostOf(url))) continue;
-    if (carried.has(url) && underExcluded(path, excluded)) continue;
+    if (carried.has(url) && excludedBy(excluded, origin ? new URL(url).pathname : path)) continue;
     if (origin !== compareOrigin) failures.push({ path: '/robots.txt', field: 'sitemap line', expected: `${compareOrigin}${origin ? new URL(url).pathname : ''}`, actual: url });
     else if (!rel || !existsSync(join(dist, rel)) || !statSync(join(dist, rel)).isFile()) {
       failures.push({ path: '/robots.txt', field: 'sitemap line', expected: 'a file in dist', actual: url });

@@ -18,7 +18,7 @@
 // After the crawl one path that cannot exist (/<32 hex>/) is requested once, so the site's own
 // 404 page lands in pages/404.html and meta.json `notFound` (it is not a route).
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
@@ -79,8 +79,12 @@ to list and download the media.
                         (repeatable), e.g. a multisite's sub-sites: --exclude /president/,/news-room/.
                         Sitemaps under one are listed in sitemaps/index.json as skipped: "excluded",
                         links to one stay in the HTML and are listed in links.json "excluded",
-                        and meta.json "excluded" names the prefixes. --resume keeps them; more
-                        given on --resume are added
+                        and meta.json "excluded" names the prefixes. Paths compare in one form
+                        (/présidence/ = /pr%c3%a9sidence/). A stylesheet or root icon that
+                        redirects under one is not followed there. --resume keeps them; one
+                        added on --resume removes what was already captured under it (pages and
+                        their files, redirects from it, stylesheets and scripts only those pages
+                        used) and says what it removed
   --help                show this help
 
 Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ only for the
@@ -284,6 +288,10 @@ function sitemapFileName(href, taken = new Map()) {
   if (free(base)) return base;
   for (let n = 2; ; n += 1) if (free(withSuffix(base, String(n)))) return withSuffix(base, String(n));
 }
+
+// The next free numbered file name (<n>.css, <n>.js) among entries: one past the highest, so a
+// name is never reused after entries are dropped (--resume with a new --exclude prefix).
+const nextFile = (entries, ext) => `${Math.max(0, ...entries.map((e) => Number.parseInt(e.file, 10)).filter(Number.isFinite)) + 1}.${ext}`;
 
 const byKey = (key) => (a, b) => (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0);
 
@@ -541,6 +549,84 @@ class Crawler {
     if (row) this.addRecord({ ...extractPage('', url, { status: CHALLENGE, finalUrl: url }), challenge: found.cause });
   }
 
+  // --resume with new --exclude prefixes (`added`): forget what was captured under them, as a run
+  // with them from the start would never have had it. Records under them and their pages/ and
+  // text/ files, their foundBy, slugs and seen rows, queued URLs, redirects from them, feeds and
+  // sitemaps under them (sitemaps are then listed skipped), discovery errors on them, and the
+  // stylesheets and scripts only their pages used (with the sheets only those imported). Returns
+  // what was removed: { page, redirect, feed, sitemap, stylesheet, script } counts.
+  dropExcluded(added) {
+    const state = this.state;
+    const under = (url) => this.excluded(url);
+    const fromUnder = (path) => excludedBy(added, path.split('?')[0]) !== null;
+    const remove = (file) => rmSync(join(this.out, file), { force: true });
+    const counts = { page: 0, redirect: 0, feed: 0, sitemap: 0, stylesheet: 0, script: 0 };
+    const pages = new Set();
+    state.records = state.records.filter((r) => {
+      if (!under(r.url)) return true;
+      if (r.snapshot) {
+        remove(r.snapshot);
+        remove(`text/${r.snapshot.replace(/^pages\//, '').replace(/\.html$/, '')}.txt`);
+      }
+      pages.add(r.path);
+      this.recorded.delete(r.url);
+      counts.page += 1;
+      return false;
+    });
+    for (const key of Object.keys(state.foundBy)) if (under(key)) delete state.foundBy[key];
+    for (const [slug, key] of Object.entries(state.slugs)) if (under(key)) delete state.slugs[slug];
+    state.seen = state.seen.filter((key) => !under(key));
+    this.seen = new Set(state.seen);
+    state.queue = state.queue.filter((item) => !under(item.url));
+    const redirects = state.redirects.length;
+    state.redirects = state.redirects.filter((r) => !fromUnder(r.from));
+    counts.redirect = redirects - state.redirects.length;
+    state.feeds = state.feeds.filter((f) => {
+      if (!under(f.url)) return true;
+      if (f.file) remove(f.file);
+      counts.feed += 1;
+      return false;
+    });
+    for (const [url, e] of Object.entries(state.sitemapLog ?? {})) {
+      if (e.skipped || !under(url)) continue;
+      if (e.file) remove(e.file);
+      state.sitemapLog[url] = { skipped: EXCLUDED };
+      counts.sitemap += 1;
+    }
+    if (state.discoveryErrors) state.discoveryErrors = state.discoveryErrors.filter((e) => !under(e.url));
+    // Stylesheets and scripts: drop the removed pages; one left with no page goes, with its file,
+    // and so does a sheet only removed sheets imported.
+    const prune = (bucket, key, folder, count) => {
+      if (!bucket) return;
+      const lost = new Set();
+      for (const e of bucket.entries) {
+        const before = e.pages.length;
+        e.pages = e.pages.filter((p) => !pages.has(p));
+        if (before > 0 && e.pages.length === 0) lost.add(e);
+      }
+      const dead = new Set(lost);
+      const deadHrefs = () => new Set([...dead].map((d) => d[key]));
+      for (let changed = true; changed;) {
+        changed = false;
+        const gone = deadHrefs();
+        for (const e of bucket.entries) {
+          const importers = e.importedBy ?? [];
+          if (dead.has(e) || e.pages.length > 0 || importers.length === 0 || !importers.every((href) => gone.has(href))) continue;
+          dead.add(e);
+          changed = true;
+        }
+      }
+      for (const e of dead) if (e.file) remove(join(folder, e.file));
+      bucket.entries = bucket.entries.filter((e) => !dead.has(e));
+      const kept = new Set(bucket.entries.map((e) => e[key]));
+      bucket.queue = bucket.queue.filter((q) => kept.has(q.url));
+      counts[count] = dead.size;
+    };
+    prune(state.css, 'href', 'css', 'stylesheet');
+    prune(state.js, 'src', 'js', 'script');
+    return counts;
+  }
+
   // The site's own 404 page, from one request for a random path, once per capture. A 200 (a soft
   // 404) or a redirect is recorded with no page; a challenge stops the run like any other; a
   // blocked answer leaves it for the next run.
@@ -580,14 +666,15 @@ class Crawler {
   // each in meta.json `icons` as { status, file, contentType, bytes }: proof of what live served
   // at the root, whatever the pages link. A 200 is saved byte for byte as assets/root-<name>
   // (file); a 200 that is an HTML page (a soft 404) is not saved and says so in `note`; one
-  // over ICON_MAX_BYTES is status "too-large". A blocked answer is left unset, so the next run
-  // asks again.
+  // over ICON_MAX_BYTES is status "too-large"; one that redirects under an --exclude prefix is
+  // not followed there (its 3xx is recorded with a note). A blocked answer is left unset, so the
+  // next run asks again.
   async probeIcons() {
     this.state.icons ??= {};
     for (const path of ROOT_ICONS) {
       if (this.state.icons[path] !== undefined) continue;
       const url = new URL(path, this.state.canonicalOrigin).href;
-      const res = await this.fetch(url, { redirect: 'follow', raw: true, maxBytes: ICON_MAX_BYTES });
+      const { res, excludedAt } = await this.fetchFollowing(url, { raw: true, maxBytes: ICON_MAX_BYTES });
       const verdict = this.judge(res, url);
       if (verdict?.stop) {
         this.noteChallenge(url, verdict.stop, { row: false });
@@ -596,7 +683,8 @@ class Crawler {
       if (BLOCK_STATUSES.has(res.status)) continue;
       const contentType = res.headers?.['content-type'] ?? null;
       const entry = { status: res.status, file: null, contentType, bytes: null };
-      if (res.status === 200 && HTML_TYPE.test(contentType ?? '')) entry.note = 'answered HTML, not an icon';
+      if (excludedAt) entry.note = `redirects to ${excludedAt}, under an excluded prefix`;
+      else if (res.status === 200 && HTML_TYPE.test(contentType ?? '')) entry.note = 'answered HTML, not an icon';
       else if (res.status === 200) {
         const body = Buffer.isBuffer(res.body) ? res.body : Buffer.from(String(res.body ?? ''));
         entry.file = `assets/root-${basename(path)}`;
@@ -606,6 +694,22 @@ class Crawler {
       this.state.icons[path] = entry;
     }
     return 'done';
+  }
+
+  // A file's redirects followed by hand, each hop asked with `options`: a hop under an --exclude
+  // prefix is never requested (excludedAt names its path), nor one past MAX_HOPS.
+  // Returns { res, finalUrl, excludedAt? }: the last answer and the URL that gave it.
+  async fetchFollowing(url, options = {}) {
+    let current = url;
+    for (let hop = 0; ; hop += 1) {
+      const res = await this.fetch(current, { ...options, redirect: 'manual' });
+      const location = res.headers?.location;
+      if (!(res.status >= 300 && res.status < 400) || !location || hop >= MAX_HOPS) return { res, finalUrl: current };
+      const next = new URL(location, current);
+      next.hash = '';
+      if (this.excluded(next.href)) return { res, finalUrl: current, excludedAt: pathOf(next.href) };
+      current = next.href;
+    }
   }
 
   // Where an answer leads: { next } to follow, or { end } (fetchChain's result) to stop there.
@@ -738,8 +842,7 @@ class Crawler {
       if (!/^https?:$/.test(url.protocol) || forbidden(url) || this.excluded(url.href)) continue;
       let entry = css.entries.find((e) => e.href === style.href);
       if (!entry) {
-        const n = css.entries.filter((e) => e.href).length + 1;
-        entry = { file: `${n}.css`, href: style.href, pages: [], status: null };
+        entry = { file: nextFile(css.entries, 'css'), href: style.href, pages: [], status: null };
         css.entries.push(entry);
         css.queue.push({ url: style.href, attempts: 0 });
       }
@@ -747,15 +850,20 @@ class Crawler {
     }
   }
 
-  async visitCss(item, res) {
+  // A sheet that redirects under an --exclude prefix is recorded "excluded", not followed there.
+  async visitCss(item, { res, finalUrl, excludedAt }) {
     if (BLOCK_STATUSES.has(res.status)) return { blocked: true, status: res.status };
     const entry = this.state.css.entries.find((e) => e.href === item.url);
+    if (excludedAt) {
+      entry.status = EXCLUDED;
+      return {};
+    }
     entry.status = res.status;
     if (res.status === 200) {
       const text = Buffer.isBuffer(res.body) ? res.body.toString('utf8') : String(res.body ?? '');
       writeText(join(this.out, 'css', entry.file), text);
       // A redirected sheet's relative url()s and @imports resolve against where it ended up.
-      if (res.finalUrl && res.finalUrl !== item.url) entry.finalUrl = res.finalUrl;
+      if (finalUrl !== item.url) entry.finalUrl = finalUrl;
       this.followImports(entry, text, entry.finalUrl ?? item.url);
     }
     return {};
@@ -770,8 +878,7 @@ class Crawler {
       let entry = css.entries.find((e) => e.href === href);
       if (!entry) {
         const depth = (importer.depth ?? 0) + 1;
-        const n = css.entries.filter((e) => e.href).length + 1;
-        entry = { file: `${n}.css`, href, pages: [], status: null, depth, importedBy: [] };
+        entry = { file: nextFile(css.entries, 'css'), href, pages: [], status: null, depth, importedBy: [] };
         css.entries.push(entry);
         if (depth > IMPORT_MAX_DEPTH) entry.status = 'too-deep';
         else css.queue.push({ url: href, attempts: 0 });
@@ -795,8 +902,8 @@ class Crawler {
     if (!this.state.css) return 'done';
     return this.drain(
       this.state.css.queue,
-      (item) => this.fetch(item.url, { redirect: 'follow' }),
-      (item, res) => this.visitCss(item, res),
+      (item) => this.fetchFollowing(item.url),
+      (item, fetched) => this.visitCss(item, fetched),
       (item, status) => {
         this.state.css.entries.find((e) => e.href === item.url).status = status;
       },
@@ -823,7 +930,7 @@ class Crawler {
       let entry = js.entries.find((e) => e.src === script.src);
       if (!entry) {
         const kind = script.kind ?? 'script';
-        entry = { file: `${js.entries.length + 1}.js`, src: script.src, kind, pages: [], status: null };
+        entry = { file: nextFile(js.entries, 'js'), src: script.src, kind, pages: [], status: null };
         js.entries.push(entry);
         js.queue.push({ url: script.src, attempts: 0 });
       }
@@ -1220,6 +1327,7 @@ async function main() {
   const out = resolve(args.out);
   let state;
   let newSeeds = [];
+  let addedExclude = [];
   if (args.resume) {
     try {
       state = loadState(out);
@@ -1239,8 +1347,10 @@ async function main() {
     const known = new Set(state.options.seeds ?? []);
     newSeeds = [...new Set(args.seeds.filter((seed) => !known.has(seed)))];
     state.options.seeds = [...known, ...newSeeds];
-    // Prefixes given on --resume join the saved ones; what is queued under them is dropped.
-    state.options.exclude = parseExclude([...(state.options.exclude ?? []), ...args.exclude]);
+    // Prefixes given on --resume join the saved ones; what was captured under them is dropped below.
+    const saved = state.options.exclude ?? [];
+    state.options.exclude = parseExclude([...saved, ...args.exclude]);
+    addedExclude = state.options.exclude.filter((p) => !saved.includes(p));
   } else {
     state = newState(args.origin, {
       includeQuery: args.includeQuery,
@@ -1256,8 +1366,14 @@ async function main() {
   http.resetBlocked();
   const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
   const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs, concurrency: args.concurrency });
-  if (args.resume && args.exclude.length > 0) {
-    state.queue = state.queue.filter((item) => !crawler.excluded(item.url));
+  if (addedExclude.length > 0) {
+    const removed = crawler.dropExcluded(addedExclude);
+    const parts = Object.entries(removed).filter(([, n]) => n > 0).map(([what, n]) => `${n} ${what}${n === 1 ? '' : 's'}`);
+    if (parts.length > 0) {
+      const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+      console.log(`Removed ${list} now under --exclude ${addedExclude.join(', ')}.`);
+    }
+    saveState(out, state);
   }
   // Seeds given on --resume: once the home page is known they join the queue here (before that,
   // discovery queues every seed in the options), and a finished capture crawls again for them.

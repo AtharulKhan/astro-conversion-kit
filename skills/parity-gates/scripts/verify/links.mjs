@@ -14,6 +14,7 @@ import { relTokens } from '../lib/head.mjs';
 import { srcsetUrls } from '../lib/srcset.mjs';
 import { distFiles, feedFiles, htmlPages, originOf, pageFiles, pageFormat, readJson, requireInputs } from '../lib/dist.mjs';
 import { findHost, hostResolver } from '../lib/host-resolver.mjs';
+import { excludedBy } from '../lib/excluded.mjs';
 
 const NAME = 'links';
 const OPTIONS = {
@@ -86,11 +87,6 @@ export function resolveLink(url, { present, format, redirectSources, mediaPaths 
   return BROKEN;
 }
 
-// True when path is under one of the capture's --exclude prefixes (baseline/meta.json excluded);
-// a prefix ending in / also covers its path without the slash.
-const underExcluded = (path, prefixes = []) =>
-  prefixes.some((p) => path.startsWith(p) || (p.endsWith('/') && path === p.slice(0, -1)));
-
 // A link that lands on a page or file in dist in one hop through the host's rules.
 const oneHop = (resolve, url) => {
   const { hops, final } = resolve(`${url.pathname}${url.search}`);
@@ -126,7 +122,7 @@ export function checkLinks({ dist, redirects, media, meta, exceptions, origin = 
         continue;
       }
       if (!internal.has(url.origin)) continue;
-      if (underExcluded(decode(url.pathname), meta.excluded)) {
+      if (excludedBy(meta.excluded, url.pathname)) {
         excluded += 1;
         continue;
       }

@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -195,4 +195,91 @@ test('--exclude needs a value and refuses /', async () => {
   const all = await run(CAPTURE, ['http://127.0.0.1:9', '--out', out, '--exclude', '/']);
   assert.equal(all.code, 2);
   assert.match(all.stderr, /whole site/);
+});
+
+test('prefixes and paths compare in one form: non-ASCII, percent-encoded and either-case escapes', () => {
+  const accented = parseExclude(['/présidence/']);
+  assert.deepEqual(accented, ['/pr%C3%A9sidence/']);
+  assert.equal(excludedBy(accented, new URL('http://x/présidence/bio/').pathname), '/pr%C3%A9sidence/');
+  assert.equal(excludedBy(accented, '/pr%c3%a9sidence/bio/'), '/pr%C3%A9sidence/', 'lowercase escapes match');
+  assert.equal(excludedBy(parseExclude(['/pr%c3%a9sidence/']), '/pr%C3%A9sidence/'), '/pr%C3%A9sidence/');
+  assert.equal(excludedBy(['/president/'], '/%70resident/'), '/president/', 'an escaped unreserved letter is that letter');
+  assert.equal(excludedBy(['/President/'], '/president/'), null, 'paths stay case-sensitive');
+});
+
+test('a prefix added on --resume removes what was already captured under it, everywhere', async () => {
+  const fresh = await startFixture();
+  try {
+    const out = tempDir();
+    const first = await run(CAPTURE, [fresh.origin, '--out', out, '--delay', '0', '--no-wayback', '--seed', '/old-services']);
+    assert.equal(first.code, 0, first.stderr);
+    const blog = readJson(out, 'inventory.json').find((r) => r.path === '/blog/');
+    assert.ok(blog?.snapshot && existsSync(join(out, blog.snapshot)), 'the first run captured /blog/');
+    const text = `text/${blog.snapshot.replace(/^pages\//, '').replace(/\.html$/, '')}.txt`;
+    assert.ok(existsSync(join(out, text)));
+
+    const again = await run(CAPTURE, [fresh.origin, '--out', out, '--delay', '0', '--no-wayback', '--resume', '--exclude', '/blog/,/old-services']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.match(again.stdout, /Removed 1 page and 1 redirect now under --exclude \/blog\/, \/old-services/);
+    assert.deepEqual(readJson(out, 'inventory.json').filter((r) => r.path.startsWith('/blog')), []);
+    assert.ok(!existsSync(join(out, blog.snapshot)), 'its snapshot is deleted');
+    assert.ok(!existsSync(join(out, text)), 'its text is deleted');
+    const state = readJson(out, 'state.json');
+    assert.deepEqual(Object.keys(state.foundBy).filter((k) => new URL(k).pathname.startsWith('/blog')), []);
+    assert.deepEqual(Object.values(state.slugs).filter((k) => new URL(k).pathname.startsWith('/blog')), []);
+    assert.deepEqual(readJson(out, 'redirects.json').filter((r) => r.from.startsWith('/old-services')), []);
+    assert.ok(readJson(out, 'links.json').excluded['/blog/'].length > 0, 'links to it are listed excluded');
+    assert.deepEqual(readJson(out, 'meta.json').excluded, ['/blog/', '/old-services']);
+  } finally {
+    await fresh.close();
+  }
+});
+
+const sheetPage = (title, sheet) => ({ body: `<html><head><title>${title}</title><link rel="stylesheet" href="${sheet}"></head><body><a href="/only/">only</a></body></html>` });
+
+test('a stylesheet only excluded pages used is dropped on --resume, its file deleted', async () => {
+  const stub = await startStub({
+    '/': sheetPage('Home', '/a.css'),
+    '/only/': sheetPage('Only', '/b.css'),
+    '/a.css': { headers: { 'Content-Type': 'text/css' }, body: 'a{}' },
+    '/b.css': { headers: { 'Content-Type': 'text/css' }, body: 'b{}' },
+  });
+  try {
+    const out = tempDir();
+    const first = await run(CAPTURE, [stub.origin, '--out', out, '--delay', '0', '--no-wayback']);
+    assert.equal(first.code, 0, first.stderr);
+    const b = readJson(out, 'css/manifest.json').find((e) => e.href.endsWith('/b.css'));
+    assert.ok(b.file && existsSync(join(out, 'css', b.file)));
+    const again = await run(CAPTURE, [stub.origin, '--out', out, '--delay', '0', '--no-wayback', '--resume', '--exclude', '/only/']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.match(again.stdout, /Removed 1 page and 1 stylesheet now under --exclude \/only\//);
+    assert.deepEqual(readJson(out, 'css/manifest.json').map((e) => new URL(e.href).pathname), ['/a.css']);
+    assert.ok(!existsSync(join(out, 'css', b.file)));
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a stylesheet or root icon that redirects under an excluded prefix is not followed there', async () => {
+  const stub = await startStub({
+    '/': sheetPage('Home', '/style.css'),
+    '/style.css': { status: 301, headers: { Location: '/president/style.css' } },
+    '/favicon.ico': { status: 302, headers: { Location: '/president/favicon.ico' } },
+    '/president/style.css': { headers: { 'Content-Type': 'text/css' }, body: 'p{}' },
+    '/president/favicon.ico': { headers: { 'Content-Type': 'image/x-icon' }, body: 'ico' },
+  });
+  try {
+    const out = tempDir();
+    const result = await run(CAPTURE, [stub.origin, '--out', out, '--delay', '0', '--no-wayback', '--exclude', '/president/']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(stub.requests.filter((u) => u.startsWith('/president')), []);
+    const sheet = readJson(out, 'css/manifest.json').find((e) => e.href.endsWith('/style.css'));
+    assert.deepEqual([sheet.file, sheet.status], [null, 'excluded']);
+    assert.deepEqual(readJson(out, 'meta.json').icons['/favicon.ico'], {
+      status: 302, file: null, contentType: 'text/html; charset=UTF-8', bytes: null, note: 'redirects to /president/favicon.ico, under an excluded prefix',
+    });
+    assert.ok(!existsSync(join(out, 'assets/root-favicon.ico')));
+  } finally {
+    await stub.close();
+  }
 });

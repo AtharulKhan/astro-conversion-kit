@@ -92,9 +92,13 @@ source. Run each step as its own command, in this order:
    A sitemap under one is listed in `sitemaps/index.json` as `{ url, skipped: "excluded" }`; a
    redirect into one is recorded with that target, unrequested; links to one stay in the saved
    HTML and are listed in `links.json` `excluded`, not `internal`; `meta.json` `excluded` names
-   the prefixes and the baseline carries them. `--resume` keeps them (more given there are
-   added, and what was queued under them is dropped); `media.mjs` and `assets.mjs` skip files
-   under them too.
+   the prefixes and the baseline carries them. Prefixes and paths compare in one form, so
+   `/présidence/`, `/pr%c3%a9sidence/` and `/pr%C3%A9sidence/` are the same prefix. A stylesheet
+   or root icon that redirects under one is not followed there (the sheet is listed with status
+   `"excluded"`). `--resume` keeps them; a prefix added on `--resume` removes what was already
+   captured under it (its pages with their `pages/` and `text/` files, redirects from it, feeds
+   and sitemaps under it, and stylesheets and scripts only those pages used) and prints what it
+   removed. `media.mjs` and `assets.mjs` skip files under them too.
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
