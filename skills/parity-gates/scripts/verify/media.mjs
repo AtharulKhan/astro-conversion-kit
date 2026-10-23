@@ -123,7 +123,8 @@ function main() {
     if (!unreferenced) return results;
     const skipped = (results.skipped ?? 0) + unreferenced;
     const skipReason = [results.skipReason, UNREFERENCED].filter(Boolean).join('; ');
-    return { ...results, skipped, skipReason };
+    const note = `skipped: ${unreferenced} unreferenced ${unreferenced === 1 ? 'size' : 'sizes'} (listed in media.json, not downloaded)`;
+    return { ...results, skipped, skipReason, notes: [...(results.notes ?? []), note] };
   };
   if (mode === 'live-temporary' && process.env.PUBLIC_INDEXABLE === 'true') {
     const failures = items.map((m) => ({ path: m.path, field: 'media', expected: 'served by the build', actual: FROM_LIVE }));

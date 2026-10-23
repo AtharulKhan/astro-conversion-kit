@@ -13,7 +13,10 @@ const HELP = `Usage: node media-plan.mjs --media capture/media.json --host verce
                           --out docs/media-plan.json
 
 Reads the captured media list (only status 200 entries count) and writes a plan:
-  { mode, store?, totals: { count, bytes, largest }, reasons, prefix, thresholds }
+  { mode, store?, totals: { count, bytes, largest }, reasons, prefix, thresholds,
+    unreferencedSizes? }
+unreferencedSizes counts the sizes media.mjs listed but did not download (downloaded: false);
+the field is present only when there are some, and the output names them.
 
 mode is "repo" when total < --max-total, every file < --max-file and
 count < --max-count; otherwise "store", with store "blob" on vercel and "r2"
@@ -113,6 +116,7 @@ export function planMedia(entries, { host, maxTotal = DEFAULTS.maxTotal, maxFile
     throw new Error(`--prefix must start and end with "/" and must not be "/", got "${prefix}"`);
   }
   const ok = entries.filter((e) => e.status === 200);
+  const unreferenced = entries.filter((e) => e.downloaded === false).length;
   const bytes = ok.reduce((sum, e) => sum + (Number(e.bytes) || 0), 0);
   const largestEntry = ok.reduce((big, e) => ((Number(e.bytes) || 0) > (Number(big?.bytes) || 0) ? e : big), null);
   const largest = Number(largestEntry?.bytes) || 0;
@@ -152,6 +156,7 @@ export function planMedia(entries, { host, maxTotal = DEFAULTS.maxTotal, maxFile
     reasons,
     prefix: chosenPrefix,
     thresholds: { maxTotal, maxFile, maxCount },
+    ...(unreferenced ? { unreferencedSizes: unreferenced } : {}),
   };
 }
 
@@ -250,6 +255,10 @@ function main() {
   const where = plan.store ? `${plan.mode} (${plan.store})` : plan.mode;
   console.log(`media: ${plan.totals.count} files, ${formatSize(plan.totals.bytes)} -> ${where}; wrote ${opts.out}`);
   for (const reason of plan.reasons) console.log(`  - ${reason}`);
+  if (plan.unreferencedSizes) {
+    const n = plan.unreferencedSizes;
+    console.log(`  ${n} unreferenced ${n === 1 ? 'size' : 'sizes'} listed, not downloaded; pass --sizes all to the capture if old links may use them`);
+  }
   if (plan.warning) console.log(`warning: ${plan.warning}`);
 }
 

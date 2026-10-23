@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -196,6 +196,19 @@ test('with --expect-noindex, a meta robots noindex on the page stands in for the
   const plain = await live((await serve(good)).origin, ['--expect-noindex']);
   assert.equal(plain.code, 1);
   assert.match(plain.stdout, /^ {2}FAIL route \/about\/ x-robots-tag: expected "noindex \(header or meta robots\)", got null$/m);
+});
+
+test('a baseline media entry with downloaded: false is never sampled (the build does not serve it)', async () => {
+  const listed = join(root, 'baseline-listed');
+  cpSync(baseline, listed, { recursive: true });
+  const media = JSON.parse(readFileSync(join(baseline, 'media.json'), 'utf8'));
+  const extra = { path: '/wp-content/uploads/2026/01/hero-150x150.jpg', bytes: null, contentType: null, referencedBy: [], downloaded: false, reason: 'unreferenced size' };
+  writeFileSync(join(listed, 'media.json'), JSON.stringify([...media, extra]));
+  const host = await serve(good);
+  const result = await verifyLive(['--base', host.origin, '--baseline', listed, '--delay', '0']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^verify-live: 51 checked, 0 failed$/m);
+  assert.doesNotMatch(result.stdout, /hero-150x150\.jpg (?!skipped)/);
 });
 
 test('a media file whose size changed fails', async () => {
