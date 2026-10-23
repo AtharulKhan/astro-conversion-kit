@@ -17,18 +17,14 @@ following `convert-site`:
 
 ## Public demo sites
 
-Two WordPress sites converted by a coding agent following the skills as published, shown as
-the runs left them. Each has a public Astro build on Vercel (a noindexed staging deploy) and a
-before-and-after page where you drag between the live page and the Astro build. The screenshots
-on that page are the ones the kit's visual review took during the run, not retaken, and each
-pair carries the review's pixel-diff percentage for that page and width.
-
-**Before and after:** https://astro-conversion-kit-demos.vercel.app
+WordPress sites converted by a coding agent following the skills as published, shown as the
+runs left them. Each has a public Astro build on Vercel (a noindexed staging deploy). The images
+put the live WordPress page beside the Astro build at 1440 px.
 
 The numbers below are read from each converted repository: `.conversion/state.json` for the
-phase results and timings, `baseline/` for the counts, `review/diff/diff.json` for the pixel
-diffs. Agent time is the time the agent spent working, intake to pull request; both runs also
-sat idle for a while on an API rate limit, and that pause is not counted.
+phase results and timings, `baseline/` for the counts. Agent time is the time the agent spent
+working, intake to pull request; the sxsw.com and harvard.edu runs also sat idle for a while on
+an API rate limit, and that pause is not counted.
 
 ### sxsw.com
 
@@ -37,16 +33,16 @@ WordPress on WordPress VIP, block theme with the Interactivity API, Osano consen
 | | |
 |---|---|
 | Astro build | https://sxsw-com-astro-v2.vercel.app |
-| Before and after | https://astro-conversion-kit-demos.vercel.app/#sxsw |
 | Pages | 71 (82 captured URLs; 11 answer 404 on live and are reproduced) |
 | Redirects | 83 |
 | Media | 916 files, 2.0 GB |
 | Templates | 26 |
 | Agent time | 1 h 35 min |
 
-![sxsw.com /about/ at 1440 px, top of the page: the live WordPress page on the left, the Astro build on the right](sxsw-about-1440.png)
+![sxsw.com home page hero, before on WordPress and after on Astro, with the hero video playing on both](sxsw-home.gif)
 
-`/about/` at 1440 px: live on the left, Astro on the right, 0.00 % of pixels differ.
+The home page hero at 1440 px, recorded frame by frame on both sites with the hero video at the
+same timestamps.
 
 ### harvard.edu
 
@@ -56,16 +52,15 @@ run as their own installs (`/president/`, `/media-relations/`) out by prefix.
 | | |
 |---|---|
 | Astro build | https://harvard-edu-astro.vercel.app |
-| Before and after | https://astro-conversion-kit-demos.vercel.app/#harvard |
 | Pages | 457 (461 captured URLs; 4 answer 404 on live and are reproduced) |
 | Redirects | 417 |
 | Media | 2,537 files, 563 MB |
 | Templates | 30 |
 | Agent time | 4 h 01 min |
 
-![harvard.edu /ai/ at 1440 px, top of the page: the live WordPress page on the left, the Astro build on the right](harvard-ai-1440.png)
+![harvard.edu /ai/ page, before on WordPress and after on Astro](harvard-ai-1440.png)
 
-`/ai/` at 1440 px: live on the left, Astro on the right, 0.00 % of pixels differ.
+`/ai/` at 1440 px, the screenshots the visual review took during the run.
 
 ### angrybirds.com
 
@@ -79,6 +74,10 @@ WordPress on WP Engine behind Cloudflare, converted in a separate run with the m
 | Redirects | 2 |
 | Media | 15,715 files in Vercel Blob, 102 theme and plugin files in the repo |
 | Templates | 23 clusters, built as 8 layouts |
+
+![angrybirds.com home page, before on WordPress and after on Astro](angrybirds-home-1440.png)
+
+The home page at 1440 px, live beside a local build of the converted repository.
 
 ## What a demo is not
 
