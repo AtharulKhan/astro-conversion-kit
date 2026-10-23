@@ -12,6 +12,7 @@ import { applyExceptions, exceptionFailure, isNoRedirect } from '../lib/exceptio
 import { distFiles, feedFiles, pageFiles, pageFormat, PAGE_KINDS, readJson, requireInputs, servedPath } from '../lib/dist.mjs';
 import { SKIPPED_JSON, hostSourceProblem, isDynamic, isExternal, isLiteral, isNoop, readRedirectsCsv } from '../lib/redirects-csv.mjs';
 import { hostResolver } from '../lib/host-resolver.mjs';
+import { excludedBy } from '../lib/excluded.mjs';
 
 const NAME = 'redirects';
 const DEFAULT_CSV = 'redirects.csv';
@@ -52,6 +53,8 @@ no redirect on purpose: it is requested and passes only when the rules do not re
 A source with no valid form (no leading /, whitespace, a control character) that build-redirects
 dropped and listed with a reason in ${SKIPPED_JSON} beside the csv is skipped (${SKIP_NOT_COMPILED}).
 Any other row missing from the config fails as "no redirect".
+A target under a prefix the capture left out (baseline meta.json "excluded") is not built: like
+an external target, only the first hop's location and status are checked.
 `;
 
 const show = (hops, max = 4) =>
@@ -158,7 +161,7 @@ export function builtUrls(files, routes = []) {
 }
 
 // notCompiled: source -> reason, from build-redirects' SKIPPED_JSON.
-export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true, notCompiled = new Map() }) {
+export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve, host = 'vercel', exceptions = [], origins = [], paths = () => true, notCompiled = new Map(), excluded = [] }) {
   const relevant = exceptions.filter((e) => e.field === 'redirect');
   const noRedirect = new Set(exceptions.filter(isNoRedirect).map((e) => e.path));
   const entries = entriesOf(baseline, rows).filter((e) => paths(e.from));
@@ -208,6 +211,16 @@ export function checkRedirects({ dist, baseline, rows = [], routes = [], resolve
       if (last !== null && !want.includes('?')) last = withoutQuery(last);
       const same = dynamic ? (a, b) => unslash(a) === unslash(b) : (a, b) => a === b;
 
+      // A target the capture left out (meta.excluded) is not built: like an external target, only
+      // the first hop's location and status are checked.
+      if (!isExternal(want) && excludedBy(excluded, withoutQuery(want))) {
+        let first = hops.length ? local(hops[0].to) : null;
+        if (first !== null && !want.includes('?')) first = withoutQuery(first);
+        if (hops.length === 0) fail('redirect', want, `no redirect: ${final.status} at ${final.path}`);
+        else if (!same(first, want)) fail('redirect', want, show(hops, 1));
+        else if (hops[0].status !== entry.status) fail('status', entry.status, `${hops[0].status}`);
+        continue;
+      }
       if (final.status === 'loop') fail('loop', `1 hop to ${want}`, show(hops));
       else if (hops.length === 0) fail('redirect', want, `no redirect: ${final.status} at ${final.path}`);
       else if (!same(last, want)) fail('redirect', want, show(hops));
@@ -306,6 +319,7 @@ function main() {
     origins,
     paths: args.paths,
     notCompiled,
+    excluded: Array.isArray(meta.excluded) ? meta.excluded : [],
   });
   report(NAME, results, { json: args.json });
 }

@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -296,6 +296,31 @@ test('a captured source with a mid-segment ":name" or a port is a literal URL: r
   assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /^redirects: 2 checked, 0 failed$/m);
   assert.doesNotMatch(result.stdout, /sample/);
+});
+
+test('a target under a baseline meta.excluded prefix is checked like an external one: status and location of the first hop only', async () => {
+  const excluded = join(root, 'baseline-excluded');
+  cpSync(baseline, excluded, { recursive: true });
+  const meta = JSON.parse(readFileSync(join(excluded, 'meta.json'), 'utf8'));
+  writeFileSync(join(excluded, 'meta.json'), JSON.stringify({ ...meta, excluded: ['/private/'] }));
+  // /private/area is unslashed: on an "always" site the slash rule adds a second hop the gate ignores.
+  const rows = ['/go-private,/private/area/,301,decision,', '/go-private-bare,/private/area,301,decision,'];
+  const dir = await site('site-excluded', 'vercel', { rows });
+  const paths = ['--paths', '/go-private,/go-private-bare'];
+  const run = (base) => runGate('redirects', ['--dist', good, '--baseline', base, ...paths], { cwd: dir });
+  const plain = await run(baseline);
+  assert.equal(plain.code, 1, 'without the exclusion the target must be built');
+  assert.match(plain.stdout, /\/go-private target: expected "a page or file in dist", got "404 at \/private\/area\/"/);
+  const passed = await run(excluded);
+  assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /^redirects: 2 checked, 0 failed$/m);
+  // The first hop still has to land on the target with the row's status.
+  const config = vercelConfig(dir);
+  config.redirects = config.redirects.map((r) => (r.source === '/go-private' ? { ...r, destination: '/private/other/', statusCode: 302 } : r));
+  writeFileSync(join(dir, 'vercel.json'), JSON.stringify(config));
+  const wrong = await run(excluded);
+  assert.equal(wrong.code, 1);
+  assert.match(wrong.stdout, /\/go-private redirect: expected "\/private\/area\/", got "302 \/private\/other\/"/);
 });
 
 const SPACED = '/two words/';
