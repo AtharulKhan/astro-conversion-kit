@@ -9,7 +9,8 @@
 // <script src> (classic or module), import map URL and modulepreload file to js/ (stylesheets'
 // @import rules are followed, 5 deep); after the crawl the
 // Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
-// CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
+// CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in) and
+// CAPTURE_WAYBACK_RETRY_MS the wait before its one retry.
 // A bot challenge (lib/challenge.mjs) on any page or discovery request stops the run at once:
 // the URL is recorded with status "challenge" (never a page) and queued again for --resume.
 // The tiny-untitled-page rule alone stops it only on the capture's first HTML response or on
@@ -72,9 +73,11 @@ to list and download the media.
   --help                show this help
 
 Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ only for the
-REST lists. A Wayback failure is noted in meta.json and never fails the capture.
+REST lists. A Wayback listing that fails is asked for once more 10 s later; a second failure
+is noted in meta.json and never fails the capture.
 
-Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address.
+Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address;
+CAPTURE_WAYBACK_RETRY_MS=<ms> replaces the 10 s wait before the Wayback retry.
 Each URL is tried 3 times; one that still answers 403, 429, 503 or a network error is
 recorded with that status and its attempts, and the crawl moves on.
 An anti-bot challenge (SiteGround's /.well-known/sgcaptcha/, Cloudflare's challenge page, a
@@ -105,6 +108,9 @@ const ROOT_ICONS = ['/favicon.ico', '/apple-touch-icon.png'];
 // HTML responses in a row matching only the tiny-page heuristic that stop the run.
 const SUSPECT_LIMIT = 3;
 const MAX_ATTEMPTS = 3;
+// The Wayback listing is asked for at most twice, 10 s apart.
+const WAYBACK_TRIES = 2;
+const WAYBACK_RETRY_MS = 10_000;
 const RETRY_MIN_MS = 500;
 const SAVE_EVERY = 25;
 const SOURCE_ORDER = ['sitemap', 'rest', 'crawl', 'shortlink', 'seed'];
@@ -799,17 +805,24 @@ class Crawler {
     });
   }
 
-  // Archived paths on this host that the crawl never saw. Never fatal: a failure is noted and
-  // the file is written empty.
-  async wayback(endpoint) {
+  // Archived paths on this host that the crawl never saw. The archive is often slow or briefly
+  // down, so a failed listing is asked for once more after `retryMs`. Never fatal: a second
+  // failure is noted and the file is written empty.
+  async wayback(endpoint, retryMs = WAYBACK_RETRY_MS) {
     const known = new Set([...this.state.seen.map(pathOf), ...this.state.records.map((r) => r.path)]);
     const host = new URL(this.state.canonicalOrigin).host.replace(/^www\./i, '');
-    try {
-      const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint });
-      return { status: 'ok', paths: paths.length };
-    } catch (err) {
-      writeText(join(this.out, WAYBACK_FILE), '');
-      return { status: 'failed', error: err.message };
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint });
+        return { status: 'ok', paths: paths.length };
+      } catch (err) {
+        if (attempt < WAYBACK_TRIES) {
+          await sleep(retryMs);
+          continue;
+        }
+        writeText(join(this.out, WAYBACK_FILE), '');
+        return { status: 'failed', error: err.message };
+      }
     }
   }
 
@@ -1158,7 +1171,8 @@ async function main() {
   if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();
   if (args.noWayback) state.options.noWayback = true;
   if (outcome === 'done' && !state.options.noWayback && !state.wayback) {
-    state.wayback = await crawler.wayback(process.env.CAPTURE_WAYBACK_CDX || CDX_ENDPOINT);
+    const retryMs = Number(process.env.CAPTURE_WAYBACK_RETRY_MS);
+    state.wayback = await crawler.wayback(process.env.CAPTURE_WAYBACK_CDX || CDX_ENDPOINT, Number.isFinite(retryMs) && retryMs >= 0 ? retryMs : undefined);
   }
   if (outcome === 'challenge') stopChallenge();
   const inventory = crawler.writeOutputs({ finished: outcome === 'done' });

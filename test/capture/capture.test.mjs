@@ -48,7 +48,7 @@ function startCdx(paths = ['/old-team/', '/2019/05/summer-sale/']) {
 // Runs capture.mjs with --no-wayback unless `wayback` names a CDX endpoint to use instead.
 async function capture(args, { wayback } = {}) {
   try {
-    const env = wayback ? { ...process.env, CAPTURE_WAYBACK_CDX: wayback } : process.env;
+    const env = wayback ? { ...process.env, CAPTURE_WAYBACK_CDX: wayback, CAPTURE_WAYBACK_RETRY_MS: '0' } : process.env;
     const flags = wayback || args.includes('--help') || args.includes('--no-wayback') ? [] : ['--no-wayback'];
     const { stdout, stderr } = await exec(process.execPath, [SCRIPT, ...args, ...flags], { env });
     return { code: 0, stdout, stderr };
@@ -489,6 +489,45 @@ test('a Wayback failure is recorded in meta.json and never fails the capture; --
   assert.equal(cdx.requests.length, before, 'no CDX request');
   assert.ok(!existsSync(join(skipped, 'wayback-unverified.txt')));
   assert.deepEqual(readJson(skipped, 'meta.json').wayback, { status: 'skipped' });
+});
+
+test('a Wayback listing that fails once is asked again once before it is recorded as failed', async () => {
+  const site = await startStub({ '/': { body: '<html><head><title>Home</title></head><body>home</body></html>' } });
+  let asked = 0;
+  let failures = 1; // the next answers that fail
+  const flaky = createServer((req, res) => {
+    asked += 1;
+    const host = new URL(req.url, 'http://cdx').searchParams.get('url').replace(/\/\*$/, '');
+    if (failures > 0) {
+      failures -= 1;
+      res.writeHead(504);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([['original'], [`http://${host}/old/`]]));
+  });
+  await new Promise((done) => flaky.listen(0, '127.0.0.1', done));
+  try {
+    const out = tempDir();
+    const run = await capture([site.origin, '--out', out, '--delay', '0'], { wayback: `http://127.0.0.1:${flaky.address().port}/cdx` });
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(asked, 2, 'one retry');
+    assert.deepEqual(readJson(out, 'meta.json').wayback, { status: 'ok', paths: 1 });
+    assert.equal(readFileSync(join(out, 'wayback-unverified.txt'), 'utf8'), '/old/\n');
+
+    asked = 0;
+    failures = 2; // both tries fail: recorded as failed, the capture still succeeds
+    const failed = tempDir();
+    const again = await capture([site.origin, '--out', failed, '--delay', '0'], { wayback: `http://127.0.0.1:${flaky.address().port}/cdx` });
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(asked, 2, 'asked twice, never a third time');
+    assert.equal(readJson(failed, 'meta.json').wayback.status, 'failed');
+    assert.match(readJson(failed, 'meta.json').wayback.error, /504/);
+  } finally {
+    await site.close();
+    await new Promise((done) => { flaky.closeAllConnections(); flaky.close(done); });
+  }
 });
 
 test('stylesheets and <style> blocks are saved under css/ with a manifest', async () => {

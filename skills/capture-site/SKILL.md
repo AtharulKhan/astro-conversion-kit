@@ -51,7 +51,8 @@ source. Run each step as its own command, in this order:
    REST; `--no-rest` skips), the link crawl, and `--seed <path>` or `--seed-file <file>` (one
    path or URL per line, `#` comments) for paths the crawl cannot reach (old URLs, an old
    `.htaccess`). After the crawl, Wayback paths it did not find go to `wayback-unverified.txt`
-   (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and never fetched unless you
+   (`--no-wayback` skips; a listing that fails is asked for once more 10 s later before
+   `meta.json` `wayback` records `failed`). `?p=` shortlinks are recorded unverified and never fetched unless you
    pass `--verify-shortlinks`. After the crawl it requests one path that cannot exist
    (`/<32 hex>/`) once, so the site's own 404 page is saved as `pages/404.html` (`meta.json`
    `notFound`; a site that answers 200 or redirects there is recorded with no page), and asks
@@ -94,7 +95,10 @@ source. Run each step as its own command, in this order:
    contains "logo", then an inline `<svg>` with "logo" in its class, id, aria-label or `<title>`
    (saved as `logo.svg`, `url: null` in `assets/index.json`), then the first `<img>` in a link to
    the home page, then the first `<img>` in the header. Check `assets/logo.*` by eye: an account
-   avatar or a sponsor mark can still win on an unusual header.
+   avatar or a sponsor mark can still win on an unusual header. The favicon and
+   apple-touch-icon are saved as served from their `<link>` href, query string included, so
+   one that points at a resize (`?w=32`, `?w=180`) of an uploads file differs in bytes from
+   that file's entry in `media.json`: keep the saved icon, not the original.
 
 6. **Live screenshots**, one per template at 390, 768 and 1440, with the visual-review shooter:
 
