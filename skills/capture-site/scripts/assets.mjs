@@ -13,9 +13,10 @@ import * as csstree from 'css-tree';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { serializeOuter } from 'parse5';
 import { attr, children, findAll, isElement, parseHtml } from '../../parity-gates/scripts/lib/html.mjs';
+import { excludedBy, parseExclude } from './lib/exclude.mjs';
 import { BLOCK_LIMIT, DEFAULT_CONCURRENCY, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, MAX_FILE_BYTES, pacing, POLITE_DELAY_MS } from './lib/http.mjs';
 
-const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--concurrency <n>] [--polite] [--ua "<string>"] [--max-file-bytes <n>]
+const USAGE = `Usage: node assets.mjs --capture <dir> [--exclude <prefix>[,...]] [--delay <ms>] [--concurrency <n>] [--polite] [--ua "<string>"] [--max-file-bytes <n>]
 
 Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
 (logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is found on the home page inside
@@ -26,6 +27,10 @@ alt, class or id says "logo", else an inline <svg> that does (saved as logo.svg)
 capture.mjs; without it, fonts are reported as not captured).
 
   --capture <dir>   the capture folder written by capture.mjs
+  --exclude <prefix>[,<prefix>...]  also leave out assets on the site whose path starts with
+                    one of these (repeatable); the capture's own --exclude prefixes (meta.json
+                    excluded) always apply. One under a prefix is listed with the note
+                    "excluded (under <prefix>)" and never requested
   --delay <ms>      time between request starts on a host (default ${DEFAULT_DELAY_MS})
   --concurrency <n> requests in flight on a host at once (default ${DEFAULT_CONCURRENCY})
   --polite          one request at a time, ${POLITE_DELAY_MS} ms apart; --delay and
@@ -194,13 +199,20 @@ function extensionFor(url, contentType) {
 }
 
 function parseArgs(argv) {
-  const args = { capture: null, delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
+  const args = { capture: null, exclude: [], delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i) => (i < argv.length && !argv[i].startsWith('--') ? argv[i] : null);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--capture' && value(i + 1)) args.capture = argv[(i += 1)];
     else if (arg === '--ua' && value(i + 1)) args.ua = argv[(i += 1)];
+    else if (arg === '--exclude' && value(i + 1)) {
+      try {
+        args.exclude = parseExclude([...args.exclude, argv[(i += 1)]]);
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
     else if (arg === '--delay' && value(i + 1)) {
       args.delayMs = Number(argv[(i += 1)]);
       if (!Number.isInteger(args.delayMs) || args.delayMs < 0) return { error: '--delay needs a whole number' };
@@ -247,7 +259,18 @@ async function main() {
 
   const fontNames = new Map(); // file name -> url, so two fonts with one name do not overwrite
   // Saves url as <out>/<stem><ext>, or fonts/<name> (kept when already saved).
+  const prefixes = [...(meta.excluded ?? []), ...args.exclude];
+  const site = origin ? new URL(origin).host.replace(/^www\./i, '').toLowerCase() : null;
+  const excludedPrefix = (url) => {
+    const target = new URL(url);
+    return target.host.replace(/^www\./i, '').toLowerCase() === site ? excludedBy(prefixes, target.pathname) : null;
+  };
   const save = async (kind, url, stem, { keepName = false } = {}) => {
+    const prefix = excludedPrefix(url);
+    if (prefix) {
+      entries.push({ kind, url, file: null, status: null, note: `excluded (under ${prefix})` });
+      return;
+    }
     let name = null;
     if (keepName) {
       const original = basename(new URL(url).pathname) || 'font';

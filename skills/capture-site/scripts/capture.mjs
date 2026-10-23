@@ -33,6 +33,7 @@ import { CDX_ENDPOINT, WAYBACK_FILE, waybackPaths } from './lib/wayback.mjs';
 import { extensionOf, NEVER, NOT_PAGES, PAGE_EXTENSIONS } from './lib/page-rules.mjs';
 import { cssImports } from './lib/css-urls.mjs';
 import { CHALLENGE, SUSPECT, detectChallenge } from './lib/challenge.mjs';
+import { excludedBy, parseExclude } from './lib/exclude.mjs';
 import { parse } from 'parse5';
 
 const USAGE = `Usage: node capture.mjs <origin> --out <dir> [options]
@@ -73,6 +74,12 @@ to list and download the media.
                         --seed, --seed-file and --include-query also apply on --resume
   --no-rest             do not use the platform's REST API for discovery
   --no-wayback          do not ask the Wayback Machine for archived URLs
+  --exclude <prefix>[,<prefix>...]  never request a URL whose path starts with one of these
+                        (repeatable), e.g. a multisite's sub-sites: --exclude /president/,/news-room/.
+                        Sitemaps under one are listed in sitemaps/index.json as skipped: "excluded",
+                        links to one stay in the HTML and are listed in links.json "excluded",
+                        and meta.json "excluded" names the prefixes. --resume keeps them; more
+                        given on --resume are added
   --help                show this help
 
 Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ only for the
@@ -106,6 +113,8 @@ const MAX_HOPS = 10;
 const SITEMAP_PATH = /sitemap|\.xml(\.gz)?$/i;
 // Why a sitemap on another host is listed in sitemaps/index.json but never fetched.
 const OTHER_HOST = 'other host';
+// Why a sitemap under an --exclude prefix is listed in sitemaps/index.json but never fetched.
+const EXCLUDED = 'excluded';
 // The root icons a launch needs, asked for once so a missing one is evidence live lacked it.
 const ROOT_ICONS = ['/favicon.ico', '/apple-touch-icon.png'];
 // HTML responses in a row matching only the tiny-page heuristic that stop the run.
@@ -147,7 +156,7 @@ function readSeedFile(file) {
 function parseArgs(argv) {
   const args = {
     origin: null, out: null, delayMs: null, concurrency: null, polite: false, max: null, resume: false, ua: DEFAULT_UA,
-    seeds: [], verifyShortlinks: false, includeQuery: false, noRest: false, noWayback: false, help: false,
+    seeds: [], exclude: [], verifyShortlinks: false, includeQuery: false, noRest: false, noWayback: false, help: false,
   };
   const value = (i, flag) => {
     if (i >= argv.length || argv[i].startsWith('--')) throw new UsageError(`${flag} needs a value`);
@@ -166,6 +175,13 @@ function parseArgs(argv) {
     } else if (arg === '--polite') args.polite = true; else if (arg === '--ua') args.ua = value((i += 1), arg);
     else if (arg === '--seed') args.seeds.push(value((i += 1), arg));
     else if (arg === '--seed-file') args.seeds.push(...readSeedFile(value((i += 1), arg)));
+    else if (arg === '--exclude') {
+      try {
+        args.exclude = parseExclude([...args.exclude, value((i += 1), arg)]);
+      } catch (err) {
+        throw new UsageError(err.message);
+      }
+    }
     else if (arg === '--resume') args.resume = true;
     else if (arg === '--verify-shortlinks') args.verifyShortlinks = true;
     else if (arg === '--include-query') args.includeQuery = true;
@@ -302,6 +318,14 @@ class Crawler {
     return this.scopeFn;
   }
 
+  // True for a URL on the site whose path is under an --exclude prefix: never requested.
+  excluded(href) {
+    const prefixes = this.state.options.exclude ?? [];
+    if (prefixes.length === 0) return false;
+    const url = new URL(href);
+    return bareHost(url) === bareHost(new URL(this.state.origin)) && excludedBy(prefixes, url.pathname) !== null;
+  }
+
   retryWait(attempts) {
     return Math.max(RETRY_MIN_MS, this.delayMs) * 2 ** Math.max(0, attempts - 1);
   }
@@ -319,7 +343,7 @@ class Crawler {
 
   enqueue(href, source, base, kind = 'page') {
     const key = this.scope(href, base);
-    if (!key) return null;
+    if (!key || this.excluded(key)) return null;
     if (isShortlink(new URL(key))) return null; // recorded as an unverified redirect instead
     const sources = (this.state.foundBy[key] ??= []);
     if (!sources.includes(source)) sources.push(source);
@@ -343,6 +367,11 @@ class Crawler {
       if (SITEMAP_PATH.test(target.pathname) && bareHost(target) !== site) {
         this.noteSitemap(url, null, null, { host: target.host, skipped: OTHER_HOST });
         return { status: null, skipped: OTHER_HOST, headers: {}, body: '' };
+      }
+      // Under an --exclude prefix (a multisite's sub-site sitemap index): never asked for.
+      if (this.excluded(url)) {
+        if (SITEMAP_PATH.test(target.pathname)) this.noteSitemap(url, null, null, { skipped: EXCLUDED });
+        return { status: null, skipped: EXCLUDED, headers: {}, body: '' };
       }
       for (let attempt = 1; ; attempt += 1) {
         const res = await this.fetch(url, options);
@@ -375,7 +404,7 @@ class Crawler {
   }
 
   // Every sitemap the capture asked for, with its answer: sitemaps/index.json.
-  // A skipped one (on another host) is { url, host, skipped } and never fetched.
+  // A skipped one is never fetched: { url, host, skipped: "other host" } or { url, skipped: "excluded" }.
   noteSitemap(url, status, file, skipped = null) {
     const log = (this.state.sitemapLog ??= {});
     log[url] = skipped ?? { status, file };
@@ -573,8 +602,9 @@ class Crawler {
     next.hash = '';
     const offSite = bareHost(next) !== bareHost(new URL(this.state.canonicalOrigin));
     const looped = chain.some((c) => c.url === next.href);
-    if (offSite || looped || forbidden(next) || notAPage(next) || hop === MAX_HOPS) {
-      return { end: { res: null, finalUrl: next.href, chain, offSite, looped } };
+    const excluded = !offSite && this.excluded(next.href);
+    if (offSite || looped || excluded || forbidden(next) || notAPage(next) || hop === MAX_HOPS) {
+      return { end: { res: null, finalUrl: next.href, chain, offSite, looped, excluded } };
     }
     return { next: next.href };
   }
@@ -689,7 +719,7 @@ class Crawler {
       } catch {
         continue;
       }
-      if (!/^https?:$/.test(url.protocol) || forbidden(url)) continue;
+      if (!/^https?:$/.test(url.protocol) || forbidden(url) || this.excluded(url.href)) continue;
       let entry = css.entries.find((e) => e.href === style.href);
       if (!entry) {
         const n = css.entries.filter((e) => e.href).length + 1;
@@ -720,7 +750,7 @@ class Crawler {
   followImports(importer, text, base) {
     const css = this.state.css;
     for (const href of cssImports(text, base)) {
-      if (forbidden(new URL(href))) continue;
+      if (forbidden(new URL(href)) || this.excluded(href)) continue;
       let entry = css.entries.find((e) => e.href === href);
       if (!entry) {
         const depth = (importer.depth ?? 0) + 1;
@@ -773,7 +803,7 @@ class Crawler {
       } catch {
         continue;
       }
-      if (!/^https?:$/.test(url.protocol) || bareHost(url) !== site || forbidden(url)) continue;
+      if (!/^https?:$/.test(url.protocol) || bareHost(url) !== site || forbidden(url) || this.excluded(url.href)) continue;
       let entry = js.entries.find((e) => e.src === script.src);
       if (!entry) {
         const kind = script.kind ?? 'script';
@@ -855,7 +885,9 @@ class Crawler {
     const host = new URL(this.state.canonicalOrigin).host.replace(/^www\./i, '');
     for (let attempt = 1; ; attempt += 1) {
       try {
-        const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint });
+        const prefixes = this.state.options.exclude ?? [];
+        const skip = (path) => excludedBy(prefixes, path) !== null;
+        const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint, skip });
         return { status: 'ok', paths: paths.length };
       } catch (err) {
         if (attempt < WAYBACK_TRIES) {
@@ -887,7 +919,7 @@ class Crawler {
       return {};
     }
 
-    const finalKey = result.offSite ? null : this.scope(result.finalUrl);
+    const finalKey = result.offSite || result.excluded ? null : this.scope(result.finalUrl);
     const landed = res && finalKey && upperEscapes(result.finalUrl) === finalKey;
     // A redirect that only changes the escapes' case lands on this same page: no redirect row.
     if (landed && finalKey === item.url) {
@@ -1112,24 +1144,32 @@ class Crawler {
       challenge: this.state.challenge ?? null,
       notFound: this.state.notFound ?? null,
       icons: this.state.icons ?? {},
+      excluded: this.state.options.exclude ?? [],
     });
     json('sitemaps/index.json', Object.entries(this.state.sitemapLog ?? {})
-      .map(([url, e]) => (e.skipped ? { url, host: e.host, skipped: e.skipped } : { url, status: e.status, file: e.file }))
+      .map(([url, e]) => (e.skipped ? { url, ...(e.host ? { host: e.host } : {}), skipped: e.skipped } : { url, status: e.status, file: e.file }))
       .sort(byKey('url')));
     json('css/manifest.json', this.cssManifest());
     json('js/manifest.json', this.jsManifest());
 
+    // Links to a path under an --exclude prefix are listed apart (excluded), never as internal:
+    // the build serves no such page, and the gates treat them like links off the site.
     const internal = {};
     const external = {};
+    const excluded = {};
+    const prefixes = this.state.options.exclude ?? [];
     const add = (map, target, from) => {
       (map[target] ??= new Set()).add(from);
     };
     for (const r of inventory) {
-      for (const link of r.internalLinks) if (link !== r.path) add(internal, link, r.path);
+      for (const link of r.internalLinks) {
+        if (link === r.path) continue;
+        add(excludedBy(prefixes, link.split('?')[0]) ? excluded : internal, link, r.path);
+      }
       for (const link of r.externalLinks) add(external, link, r.path);
     }
     const plain = (map) => Object.fromEntries(Object.keys(map).sort().map((k) => [k, [...map[k]].sort()]));
-    json('links.json', { internal: plain(internal), external: plain(external) });
+    json('links.json', { internal: plain(internal), external: plain(external), ...(prefixes.length ? { excluded: plain(excluded) } : {}) });
 
     const vendors = {};
     for (const r of inventory) {
@@ -1183,11 +1223,14 @@ async function main() {
     const known = new Set(state.options.seeds ?? []);
     newSeeds = [...new Set(args.seeds.filter((seed) => !known.has(seed)))];
     state.options.seeds = [...known, ...newSeeds];
+    // Prefixes given on --resume join the saved ones; what is queued under them is dropped.
+    state.options.exclude = parseExclude([...(state.options.exclude ?? []), ...args.exclude]);
   } else {
     state = newState(args.origin, {
       includeQuery: args.includeQuery,
       noRest: args.noRest,
       seeds: args.seeds,
+      exclude: args.exclude,
       verifyShortlinks: args.verifyShortlinks,
       noWayback: args.noWayback,
     });
@@ -1197,6 +1240,9 @@ async function main() {
   http.resetBlocked();
   const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
   const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs, concurrency: args.concurrency });
+  if (args.resume && args.exclude.length > 0) {
+    state.queue = state.queue.filter((item) => !crawler.excluded(item.url));
+  }
   // Seeds given on --resume: once the home page is known they join the queue here (before that,
   // discovery queues every seed in the options), and a finished capture crawls again for them.
   if (state.fingerprint && newSeeds.length > 0) {

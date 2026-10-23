@@ -1,8 +1,9 @@
 // Legacy URLs from the Wayback Machine's CDX API.
-// waybackPaths(host, { fetch, known, out, endpoint }) asks for every URL archived with a 200 on the
+// waybackPaths(host, { fetch, known, out, endpoint, skip }) asks for every URL archived with a 200 on the
 // host (one request), keeps page-like paths on that host (www or not; query strings dropped;
-// never wp-admin, wp-login, xmlrpc.php or /wp-json/), drops the `known` paths, and returns the
-// rest sorted. With `out`, writes them one per line to <out>/wayback-unverified.txt.
+// never wp-admin, wp-login, xmlrpc.php or /wp-json/), drops the `known` paths and any path
+// `skip(path)` is true for (an --exclude prefix), and returns the rest sorted.
+// With `out`, writes them one per line to <out>/wayback-unverified.txt.
 // Throws when the API cannot be reached or does not answer with JSON.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,7 +24,7 @@ function isPage(pathname) {
   return PAGE_EXTENSIONS.has(extensionOf(pathname)) && !NEVER.test(pathname) && !NOT_PAGES.test(pathname);
 }
 
-export async function waybackPaths(host, { fetch, known = [], out = null, endpoint = CDX_ENDPOINT } = {}) {
+export async function waybackPaths(host, { fetch, known = [], out = null, endpoint = CDX_ENDPOINT, skip = () => false } = {}) {
   const res = await fetch(cdxUrl(host, endpoint), { ...CDX_OPTIONS });
   if (res.status !== 200) {
     throw new Error(`the Wayback CDX API answered ${res.status || 'nothing'}${res.error ? ` (${res.error})` : ''}`);
@@ -39,7 +40,7 @@ export async function waybackPaths(host, { fetch, known = [], out = null, endpoi
     if (!Array.isArray(rows)) throw new Error('the Wayback CDX API did not answer with a JSON list');
   }
   const site = bareHost(host);
-  const skip = new Set(known);
+  const seen = new Set(known);
   const paths = new Set();
   for (const row of rows.slice(1)) {
     let url;
@@ -49,7 +50,7 @@ export async function waybackPaths(host, { fetch, known = [], out = null, endpoi
       continue;
     }
     if (!/^https?:$/.test(url.protocol) || bareHost(url.host) !== site) continue;
-    if (!isPage(url.pathname) || skip.has(url.pathname)) continue;
+    if (!isPage(url.pathname) || seen.has(url.pathname) || skip(url.pathname)) continue;
     paths.add(url.pathname);
   }
   const sorted = [...paths].sort();

@@ -82,6 +82,15 @@ source. Run each step as its own command, in this order:
    as one host) is listed there as `{ url, host, skipped: "other host" }` and never fetched, so
    none of its URLs enter the crawl. Two sitemap URLs with the same file name never overwrite
    each other: the second is saved with a suffix from its directory path (`page-sitemap-es.xml`).
+   `--exclude <prefix>[,<prefix>...]` leaves parts of the host out (a WordPress multisite's
+   sub-sites such as `/president/`, or a section the owner keeps): a URL whose path starts with
+   one is never requested, whether a sitemap, the REST lists, a link or a redirect leads there.
+   A sitemap under one is listed in `sitemaps/index.json` as `{ url, skipped: "excluded" }`; a
+   redirect into one is recorded with that target, unrequested; links to one stay in the saved
+   HTML and are listed in `links.json` `excluded`, not `internal`; `meta.json` `excluded` names
+   the prefixes and the baseline carries them. `--resume` keeps them (more given there are
+   added, and what was queued under them is dropped); `media.mjs` and `assets.mjs` skip files
+   under them too.
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
@@ -220,7 +229,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     inventory.json        one record per page: status, head tags, JSON-LD, headings, forms, links
     pages/  text/         raw HTML and visible text per page
     redirects.json        every redirect, chains collapsed, hops kept; shortlinks marked verified or not
-    links.json            internal and external links, with the pages that carry them
+    links.json            internal and external links, with the pages that carry them; with
+                          --exclude, links under an excluded prefix in "excluded"
     scripts.json          third-party vendors with their ids and pages
     media.json            every media file with sources, pages, status, type and bytes; a size
                           only the REST list names: downloaded: false, "unreferenced size"
@@ -244,7 +254,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)
     sitemaps/             every sitemap robots.txt names, the default index, and their children;
                           index.json: every sitemap URL asked for { url, status, file }, and
-                          { url, host, skipped: "other host" } for one on another host
+                          { url, host, skipped: "other host" } for one on another host,
+                          { url, skipped: "excluded" } for one under an --exclude prefix
     feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 

@@ -29,7 +29,9 @@ Then the one message (`intake.md`) and the answers into state.
 Follow the `capture-site` skill exactly, from `SITE`, with `KIT` paths:
 
     S phase capture
-    node $KIT/skills/capture-site/scripts/capture.mjs $LIVE --out capture
+    node $KIT/skills/capture-site/scripts/capture.mjs $LIVE --out capture --exclude <intake.excludePaths, comma-joined>
+
+`--exclude` takes `intake.excludePaths` joined with commas; leave it off when that is empty.
 
 When `capture/wayback-unverified.txt` is not empty, run the Wayback second pass, then carry on
 (`readme.mjs` runs last below):

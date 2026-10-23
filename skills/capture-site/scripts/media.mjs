@@ -12,6 +12,7 @@ import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, MAX_FILE_BYTES, 
 import { cssUrls, FONT_EXTENSIONS, IMAGE_EXTENSIONS } from './lib/css-urls.mjs';
 import { extensionOf } from './lib/page-rules.mjs';
 import { mediaUrlsOf } from './lib/wp-rest.mjs';
+import { excludedBy, parseExclude } from './lib/exclude.mjs';
 import { srcsetUrls } from '../../parity-gates/scripts/lib/srcset.mjs';
 
 export { srcsetUrls };
@@ -19,7 +20,7 @@ export { srcsetUrls };
 // Media files are many and small: more in flight than the crawl's default.
 const MEDIA_CONCURRENCY = 6;
 
-const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--sizes referenced|all] [--delay <ms>] [--concurrency <n>] [--polite] [--max-file-bytes <n>]
+const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--sizes referenced|all] [--exclude <prefix>[,...]] [--delay <ms>] [--concurrency <n>] [--polite] [--max-file-bytes <n>]
 
 List every media file of a captured site in <capture>/media.json:
   [{ url, path, source[], referencedBy[], status, contentType, bytes }]
@@ -49,6 +50,9 @@ requested and is listed "blocked-address".
   --sizes referenced|all  which REST-only image sizes to fetch (default referenced: none;
                     all: every registered size, for when old emails or other sites may
                     link to them)
+  --exclude <prefix>[,<prefix>...]  also leave out files whose path starts with one of these
+                    (repeatable); the capture's own --exclude prefixes (meta.json excluded)
+                    always apply: a file under one is never listed or requested
   --max-file-bytes <n>  largest file to download or measure (default ${MAX_FILE_BYTES}, 2 GB)
   --delay <ms>      time between request starts on the site (default ${DEFAULT_DELAY_MS})
   --concurrency <n> requests in flight on the site at once (default ${MEDIA_CONCURRENCY})
@@ -94,7 +98,7 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
 
 function parseArgs(argv) {
-  const args = { capture: null, download: null, sizes: 'referenced', delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
+  const args = { capture: null, download: null, sizes: 'referenced', exclude: [], delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i, flag) => {
     if (i >= argv.length || argv[i].startsWith('--')) throw new UsageError(`${flag} needs a value`);
     return argv[i];
@@ -109,7 +113,13 @@ function parseArgs(argv) {
       if (!SIZES.has(args.sizes)) throw new UsageError(`--sizes is referenced or all, got "${args.sizes}"`);
     }
     else if (arg === '--ua') args.ua = value((i += 1), arg);
-    else if (arg === '--delay') {
+    else if (arg === '--exclude') {
+      try {
+        args.exclude = parseExclude([...args.exclude, value((i += 1), arg)]);
+      } catch (err) {
+        throw new UsageError(err.message);
+      }
+    } else if (arg === '--delay') {
       const n = Number(value((i += 1), arg));
       if (!Number.isInteger(n) || n < 0) throw new UsageError('--delay needs a whole number');
       args.delayMs = n;
@@ -188,9 +198,11 @@ function sitemapImages(dir) {
   return urls;
 }
 
-// Every media file the capture points at, keyed by path.
-export function collectMedia(captureDir) {
+// Every media file the capture points at, keyed by path; none under an excluded prefix (the
+// capture's meta.json excluded, plus `exclude`).
+export function collectMedia(captureDir, { exclude = [] } = {}) {
   const meta = existsSync(join(captureDir, 'meta.json')) ? readJson(join(captureDir, 'meta.json')) : {};
+  const prefixes = [...(meta.excluded ?? []), ...exclude];
   const inventory = readJson(join(captureDir, 'inventory.json'));
   const origin = meta.canonicalOrigin ?? meta.origin ?? (inventory[0] ? new URL(inventory[0].url).origin : null);
   if (!origin) throw new UsageError(`${captureDir} has no origin in meta.json and no pages`);
@@ -208,7 +220,7 @@ export function collectMedia(captureDir) {
     url.protocol = site.protocol;
     url.host = site.host;
     url.hash = '';
-    if (url.pathname.endsWith('/')) return;
+    if (url.pathname.endsWith('/') || excludedBy(prefixes, url.pathname)) return;
     const ext = extensionOf(url.pathname);
     if (needsExtension && !MEDIA_EXTENSIONS.has(ext)) return;
     const entry = found.get(url.pathname) ?? { url: url.href, path: url.pathname, source: new Set(), referencedBy: new Set() };
@@ -353,7 +365,7 @@ async function main() {
 
   let media;
   try {
-    media = collectMedia(captureDir);
+    media = collectMedia(captureDir, { exclude: args.exclude });
   } catch (err) {
     console.error(`Cannot read the capture in ${captureDir}: ${err.message}`);
     process.exit(2);
