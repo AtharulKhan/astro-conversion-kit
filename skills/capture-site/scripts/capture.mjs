@@ -42,7 +42,8 @@ meta.json (notFound: the site's 404 page, from one request for a path that canno
 as pages/404.html and text/404.txt; icons: the status /favicon.ico and /apple-touch-icon.png
 answered, one request each), sitemaps/ (every sitemap robots.txt names, and their children;
 index.json lists every sitemap URL asked for with its status and file, and one robots.txt
-names that did not answer 200 is also in meta.json discoveryErrors), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
+names that did not answer 200 is also in meta.json discoveryErrors; one on another host is
+listed with skipped: "other host" and never fetched), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
 on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
 wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
@@ -95,6 +96,8 @@ const PERMANENT_BLOCK = 403;
 const MAX_HOPS = 10;
 // A discovery URL that is a sitemap (saved under sitemaps/ and listed in sitemaps/index.json).
 const SITEMAP_PATH = /sitemap|\.xml(\.gz)?$/i;
+// Why a sitemap on another host is listed in sitemaps/index.json but never fetched.
+const OTHER_HOST = 'other host';
 // The root icons a launch needs, asked for once so a missing one is evidence live lacked it.
 const ROOT_ICONS = ['/favicon.ico', '/apple-touch-icon.png'];
 // HTML responses in a row matching only the tiny-page heuristic that stop the run.
@@ -227,12 +230,22 @@ function writeText(file, content) {
   writeFileSync(file, content);
 }
 
-function sitemapFileName(href) {
+const withSuffix = (name, suffix) => name.replace(/(\.xml(?:\.gz)?)?$/i, (ext) => `-${suffix}${ext}`);
+const fileSafe = (text) => text.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+
+// A sitemap's file under sitemaps/: its base name (plus its query, if any). `taken` maps the
+// file names already used to their URL: a second URL with the same name gets a suffix from its
+// directory path, then a number, so one sitemap never overwrites another.
+function sitemapFileName(href, taken = new Map()) {
   const url = new URL(href);
-  const name = basename(url.pathname) || 'sitemap.xml';
-  if (!url.search) return name;
-  const suffix = url.search.slice(1).toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-  return name.replace(/(\.xml(?:\.gz)?)?$/i, (ext) => `-${suffix}${ext}`);
+  let name = basename(url.pathname) || 'sitemap.xml';
+  if (url.search) name = withSuffix(name, url.search.slice(1).toLowerCase().replace(/[^a-z0-9_-]/g, '-'));
+  const free = (candidate) => !taken.has(candidate) || taken.get(candidate) === href;
+  if (free(name)) return name;
+  const dir = fileSafe(url.pathname.split('/').slice(0, -1).join('-'));
+  const base = dir ? withSuffix(name, dir) : name;
+  if (free(base)) return base;
+  for (let n = 2; ; n += 1) if (free(withSuffix(base, String(n)))) return withSuffix(base, String(n));
 }
 
 const byKey = (key) => (a, b) => (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0);
@@ -304,7 +317,15 @@ class Crawler {
   // answer (noted in meta.json, not fatal); a streak of 429, 503 or network errors on different
   // URLs throws Blocked so the run stops and resumes later.
   discoveryFetch() {
+    const site = bareHost(new URL(this.state.origin));
     return async (url, options) => {
+      // A sitemap on another host (robots.txt may name a sister site's) is never asked for:
+      // its files would collide with the site's own and its URLs are not this site's.
+      const target = new URL(url);
+      if (SITEMAP_PATH.test(target.pathname) && bareHost(target) !== site) {
+        this.noteSitemap(url, null, null, { host: target.host, skipped: OTHER_HOST });
+        return { status: null, skipped: OTHER_HOST, headers: {}, body: '' };
+      }
       for (let attempt = 1; ; attempt += 1) {
         const res = await this.fetch(url, options);
         const verdict = this.judge(res, url);
@@ -316,7 +337,7 @@ class Crawler {
           else if (SITEMAP_PATH.test(path)) {
             let file = null;
             if (res.status === 200) {
-              file = `sitemaps/${sitemapFileName(url)}`;
+              file = this.state.sitemapLog?.[url]?.file ?? `sitemaps/${sitemapFileName(url, this.sitemapFiles())}`;
               writeText(join(this.out, file), res.body);
             }
             this.noteSitemap(url, res.status, file);
@@ -336,18 +357,27 @@ class Crawler {
   }
 
   // Every sitemap the capture asked for, with its answer: sitemaps/index.json.
-  noteSitemap(url, status, file) {
+  // A skipped one (on another host) is { url, host, skipped } and never fetched.
+  noteSitemap(url, status, file, skipped = null) {
     const log = (this.state.sitemapLog ??= {});
-    log[url] = { status, file };
+    log[url] = skipped ?? { status, file };
+  }
+
+  // The file names under sitemaps/ already taken, each with the sitemap URL it holds.
+  sitemapFiles() {
+    const taken = new Map();
+    for (const [url, { file }] of Object.entries(this.state.sitemapLog ?? {})) if (file) taken.set(basename(file), url);
+    return taken;
   }
 
   // A sitemap robots.txt names (or a sitemap index lists) that did not answer 200 is a
-  // discoveryErrors entry with its status, never dropped silently.
+  // discoveryErrors entry with its status, never dropped silently (one skipped as another
+  // host's is not an error: it is listed in sitemaps/index.json).
   noteMissingSitemaps(urls) {
     const errors = (this.state.discoveryErrors ??= []);
     for (const url of urls) {
       const seen = this.state.sitemapLog?.[url];
-      if (seen && seen.status !== 200 && !errors.some((e) => e.url === url)) errors.push({ url, status: seen.status });
+      if (seen && !seen.skipped && seen.status !== 200 && !errors.some((e) => e.url === url)) errors.push({ url, status: seen.status });
     }
   }
 
@@ -366,6 +396,7 @@ class Crawler {
         const { robots, ...rest } = fp;
         this.state.fingerprint = rest;
         this.state.sitemapsDone = [];
+        for (const url of rest.otherHostSitemaps ?? []) this.noteSitemap(url, null, null, { host: new URL(url).host, skipped: OTHER_HOST });
         this.noteMissingSitemaps(rest.robotsSitemaps ?? []);
         this.enqueue('/', 'crawl');
         for (const seed of this.state.options.seeds ?? []) this.enqueue(seed, 'seed');
@@ -988,7 +1019,7 @@ class Crawler {
       icons: this.state.icons ?? {},
     });
     json('sitemaps/index.json', Object.entries(this.state.sitemapLog ?? {})
-      .map(([url, { status, file }]) => ({ url, status, file }))
+      .map(([url, e]) => (e.skipped ? { url, host: e.host, skipped: e.skipped } : { url, status: e.status, file: e.file }))
       .sort(byKey('url')));
     json('css/manifest.json', this.cssManifest());
     json('js/manifest.json', this.jsManifest());

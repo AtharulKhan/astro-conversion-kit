@@ -57,7 +57,11 @@ source. Run each step as its own command, in this order:
    `notFound`; a site that answers 200 or redirects there is recorded with no page), and asks
    for `/favicon.ico` and `/apple-touch-icon.png` once each (`meta.json` `icons`: path to
    status). A sitemap robots.txt names that answers 404 (or any non-200) is listed in
-   `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`.
+   `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`. A sitemap on
+   another host (robots.txt naming a sister site's, or an index listing one; www and apex count
+   as one host) is listed there as `{ url, host, skipped: "other host" }` and never fetched, so
+   none of its URLs enter the crawl. Two sitemap URLs with the same file name never overwrite
+   each other: the second is saved with a suffix from its directory path (`page-sitemap-es.xml`).
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
@@ -187,7 +191,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     lighthouse-live/      Lighthouse reports, when run (gitignored)
     pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)
     sitemaps/             every sitemap robots.txt names, the default index, and their children;
-                          index.json: every sitemap URL asked for { url, status, file }
+                          index.json: every sitemap URL asked for { url, status, file }, and
+                          { url, host, skipped: "other host" } for one on another host
     feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 

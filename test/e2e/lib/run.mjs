@@ -536,11 +536,12 @@ const html = ${js(cut.content)};
 ---
 <Other head={{ title: ${js(record.title)}, description: ${js(record.description ?? undefined)}, robots: 'noindex' }} bodyClass=${js(cut.bodyClass)}><Fragment set:html={html} /></Other>
 `);
-  // robots.txt: the captured file is the indexable body.
+  // robots.txt: the captured file is the indexable body, less the sister site's Sitemap: line
+  // (the fixture names one on other.example.com; the build's sitemaps are its own).
   const robots = join(site, 'src', 'pages', 'robots.txt.js');
   writeFileSync(robots, readFileSync(robots, 'utf8')
     .replace("import { INDEXABLE, ORIGIN } from '../lib/site.mjs';", "import { readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nimport { INDEXABLE } from '../lib/site.mjs';")
-    .replace('? `User-agent: *\\nAllow: /\\n\\nSitemap: ${ORIGIN}/sitemap.xml\\n`', "? readFileSync(join(process.cwd(), 'capture', 'robots.txt'), 'utf8')"));
+    .replace('? `User-agent: *\\nAllow: /\\n\\nSitemap: ${ORIGIN}/sitemap.xml\\n`', "? readFileSync(join(process.cwd(), 'capture', 'robots.txt'), 'utf8').split('\\n').filter((line) => !line.includes('//other.example.com/')).join('\\n')"));
   await writeIcons(site);
 }
 
