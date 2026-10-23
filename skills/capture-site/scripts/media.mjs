@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { parse } from 'parse5';
 import { assertNodeVersion } from './lib/node-version.mjs';
-import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, MAX_FILE_BYTES, MAX_TEXT_BYTES, TOO_LARGE } from './lib/http.mjs';
+import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, MAX_FILE_BYTES, MAX_TEXT_BYTES, pacing, POLITE_DELAY_MS, TOO_LARGE } from './lib/http.mjs';
 import { cssUrls, FONT_EXTENSIONS, IMAGE_EXTENSIONS } from './lib/css-urls.mjs';
 import { extensionOf } from './lib/page-rules.mjs';
 import { mediaUrlsOf } from './lib/wp-rest.mjs';
@@ -16,7 +16,10 @@ import { srcsetUrls } from '../../parity-gates/scripts/lib/srcset.mjs';
 
 export { srcsetUrls };
 
-const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--delay <ms>] [--max-file-bytes <n>]
+// Media files are many and small: more in flight than the crawl's default.
+const MEDIA_CONCURRENCY = 6;
+
+const USAGE = `Usage: node media.mjs --capture <dir> [--download <dir>] [--delay <ms>] [--concurrency <n>] [--polite] [--max-file-bytes <n>]
 
 List every media file of a captured site in <capture>/media.json:
   [{ url, path, source[], referencedBy[], status, contentType, bytes }]
@@ -37,7 +40,10 @@ requested and is listed "blocked-address".
   --download <dir>  also save every file that answers 200 under <dir>/<path>, byte for byte
                     (streamed to disk; a download with no data for 30 s is a network error)
   --max-file-bytes <n>  largest file to download or measure (default ${MAX_FILE_BYTES}, 2 GB)
-  --delay <ms>      wait between requests (default ${DEFAULT_DELAY_MS})
+  --delay <ms>      time between request starts on the site (default ${DEFAULT_DELAY_MS})
+  --concurrency <n> requests in flight on the site at once (default ${MEDIA_CONCURRENCY})
+  --polite          one request at a time, ${POLITE_DELAY_MS} ms apart (for shared hosts with
+                    bot walls); --delay and --concurrency override it
   --ua "<string>"   user agent (default: a desktop Chrome)
   --help            show this help
 
@@ -76,7 +82,7 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
 
 function parseArgs(argv) {
-  const args = { capture: null, download: null, delayMs: DEFAULT_DELAY_MS, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
+  const args = { capture: null, download: null, delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i, flag) => {
     if (i >= argv.length || argv[i].startsWith('--')) throw new UsageError(`${flag} needs a value`);
     return argv[i];
@@ -91,14 +97,19 @@ function parseArgs(argv) {
       const n = Number(value((i += 1), arg));
       if (!Number.isInteger(n) || n < 0) throw new UsageError('--delay needs a whole number');
       args.delayMs = n;
-    } else if (arg === '--max-file-bytes') {
+    } else if (arg === '--concurrency') {
+      const n = Number(value((i += 1), arg));
+      if (!Number.isInteger(n) || n < 1) throw new UsageError('--concurrency needs a whole number of at least 1');
+      args.concurrency = n;
+    } else if (arg === '--polite') args.polite = true;
+    else if (arg === '--max-file-bytes') {
       const n = Number(value((i += 1), arg));
       if (!Number.isInteger(n) || n < 1) throw new UsageError('--max-file-bytes needs a whole number of bytes');
       args.maxFileBytes = n;
     } else throw new UsageError(`unknown argument ${arg}`);
   }
   if (!args.help && !args.capture) throw new UsageError('--capture <dir> is required');
-  return args;
+  return { ...args, ...pacing(args, { delay: DEFAULT_DELAY_MS, inFlight: MEDIA_CONCURRENCY }) };
 }
 
 function readJson(file) {
@@ -285,7 +296,7 @@ async function main() {
   const write = () => writeFileSync(outFile, `${JSON.stringify(media, null, 2)}\n`);
   const meta = existsSync(join(captureDir, 'meta.json')) ? readJson(join(captureDir, 'meta.json')) : {};
   const trusted = [meta.origin, meta.canonicalOrigin, media[0]?.url];
-  const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua, trusted, maxBytes: args.maxFileBytes });
+  const request = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted, maxBytes: args.maxFileBytes });
   const streak = new Set();
 
   // Every entry carries the fields from the start, so a stopped run lists what is left as null.

@@ -13,9 +13,9 @@ import * as csstree from 'css-tree';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { serializeOuter } from 'parse5';
 import { attr, children, findAll, isElement, parseHtml } from '../../parity-gates/scripts/lib/html.mjs';
-import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, MAX_FILE_BYTES } from './lib/http.mjs';
+import { BLOCK_LIMIT, DEFAULT_CONCURRENCY, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, MAX_FILE_BYTES, pacing, POLITE_DELAY_MS } from './lib/http.mjs';
 
-const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--ua "<string>"] [--max-file-bytes <n>]
+const USAGE = `Usage: node assets.mjs --capture <dir> [--delay <ms>] [--concurrency <n>] [--polite] [--ua "<string>"] [--max-file-bytes <n>]
 
 Save the site's logo, favicon, apple-touch-icon and web fonts into <dir>/assets/
 (logo.*, favicon.*, apple-touch-icon.*, fonts/*). The logo is found on the home page inside
@@ -26,7 +26,10 @@ alt, class or id says "logo", else an inline <svg> that does (saved as logo.svg)
 capture.mjs; without it, fonts are reported as not captured).
 
   --capture <dir>   the capture folder written by capture.mjs
-  --delay <ms>      wait between requests (default ${DEFAULT_DELAY_MS})
+  --delay <ms>      time between request starts on a host (default ${DEFAULT_DELAY_MS})
+  --concurrency <n> requests in flight on a host at once (default ${DEFAULT_CONCURRENCY})
+  --polite          one request at a time, ${POLITE_DELAY_MS} ms apart; --delay and
+                    --concurrency override it
   --ua "<string>"   user agent (default: a desktop Chrome)
   --max-file-bytes <n>  largest file to save (default ${MAX_FILE_BYTES}, 2 GB); a larger one is
                     listed with status "too-large"
@@ -191,7 +194,7 @@ function extensionFor(url, contentType) {
 }
 
 function parseArgs(argv) {
-  const args = { capture: null, delayMs: DEFAULT_DELAY_MS, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
+  const args = { capture: null, delayMs: null, concurrency: null, polite: false, ua: DEFAULT_UA, maxFileBytes: MAX_FILE_BYTES, help: false };
   const value = (i) => (i < argv.length && !argv[i].startsWith('--') ? argv[i] : null);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -201,13 +204,16 @@ function parseArgs(argv) {
     else if (arg === '--delay' && value(i + 1)) {
       args.delayMs = Number(argv[(i += 1)]);
       if (!Number.isInteger(args.delayMs) || args.delayMs < 0) return { error: '--delay needs a whole number' };
-    } else if (arg === '--max-file-bytes' && value(i + 1)) {
+    } else if (arg === '--concurrency' && value(i + 1)) {
+      args.concurrency = Number(argv[(i += 1)]);
+      if (!Number.isInteger(args.concurrency) || args.concurrency < 1) return { error: '--concurrency needs a whole number of at least 1' };
+    } else if (arg === '--polite') args.polite = true; else if (arg === '--max-file-bytes' && value(i + 1)) {
       args.maxFileBytes = Number(argv[(i += 1)]);
       if (!Number.isInteger(args.maxFileBytes) || args.maxFileBytes < 1) return { error: '--max-file-bytes needs a whole number of bytes' };
     } else return { error: `unknown or incomplete option ${arg}` };
   }
   if (!args.help && !args.capture) return { error: '--capture <dir> is required' };
-  return args;
+  return { ...args, ...pacing(args) };
 }
 
 async function main() {
@@ -259,7 +265,7 @@ async function main() {
     // Streamed to the known name, or to a temporary one until the type gives the extension.
     const download = known ?? join(out, `.${stem}.download`);
     const res = await fetchPaced(url, {
-      delayMs: args.delayMs, ua: args.ua, redirect: 'follow', trusted: [origin], maxBytes: args.maxFileBytes, toFile: download,
+      delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, redirect: 'follow', trusted: [origin], maxBytes: args.maxFileBytes, toFile: download,
     });
     if (http.blocked >= BLOCK_LIMIT) throw new Blocked();
     if (res.status !== 200) {

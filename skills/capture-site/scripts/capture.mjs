@@ -23,7 +23,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { fingerprint } from './fingerprint.mjs';
-import { BLOCK_LIMIT, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http } from './lib/http.mjs';
+import { BLOCK_LIMIT, DEFAULT_CONCURRENCY, DEFAULT_DELAY_MS, DEFAULT_UA, fetchPaced, http, pacing, POLITE_DELAY_MS } from './lib/http.mjs';
 import { expandSitemaps } from './lib/sitemaps.mjs';
 import { extractPage } from './lib/extract.mjs';
 import { slugFor } from './lib/slug.mjs';
@@ -54,7 +54,10 @@ to list and download the media.
 
   <origin>              the site, e.g. https://www.example.com
   --out <dir>           the capture folder to write (e.g. capture)
-  --delay <ms>          wait between requests (default ${DEFAULT_DELAY_MS})
+  --delay <ms>          time between request starts on the site (default ${DEFAULT_DELAY_MS})
+  --concurrency <n>     requests in flight on the site at once (default ${DEFAULT_CONCURRENCY})
+  --polite              one request at a time, ${POLITE_DELAY_MS} ms apart (for shared hosts with
+                        bot walls); --delay and --concurrency override it
   --max <n>             stop after n page records (resume later with --resume)
   --resume              continue the crawl saved in <dir>/state.json
   --ua "<string>"       user agent (default: a desktop Chrome)
@@ -143,7 +146,7 @@ function readSeedFile(file) {
 
 function parseArgs(argv) {
   const args = {
-    origin: null, out: null, delayMs: DEFAULT_DELAY_MS, max: null, resume: false, ua: DEFAULT_UA,
+    origin: null, out: null, delayMs: null, concurrency: null, polite: false, max: null, resume: false, ua: DEFAULT_UA,
     seeds: [], verifyShortlinks: false, includeQuery: false, noRest: false, noWayback: false, help: false,
   };
   const value = (i, flag) => {
@@ -154,12 +157,13 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--out') args.out = value((i += 1), arg);
-    else if (arg === '--delay' || arg === '--max') {
+    else if (arg === '--delay' || arg === '--max' || arg === '--concurrency') {
       const n = Number(value((i += 1), arg));
-      if (!Number.isInteger(n) || n < (arg === '--max' ? 1 : 0)) throw new UsageError(`${arg} needs a whole number`);
+      if (!Number.isInteger(n) || n < (arg === '--delay' ? 0 : 1)) throw new UsageError(`${arg} needs a whole number`);
       if (arg === '--delay') args.delayMs = n;
+      else if (arg === '--concurrency') args.concurrency = n;
       else args.max = n;
-    } else if (arg === '--ua') args.ua = value((i += 1), arg);
+    } else if (arg === '--polite') args.polite = true; else if (arg === '--ua') args.ua = value((i += 1), arg);
     else if (arg === '--seed') args.seeds.push(value((i += 1), arg));
     else if (arg === '--seed-file') args.seeds.push(...readSeedFile(value((i += 1), arg)));
     else if (arg === '--resume') args.resume = true;
@@ -181,7 +185,7 @@ function parseArgs(argv) {
     throw new UsageError(`${args.origin} is not an http(s) origin`);
   }
   if (!args.out) throw new UsageError('--out <dir> is required');
-  return args;
+  return { ...args, ...pacing(args) };
 }
 
 const bareHost = (url) => url.host.toLowerCase().replace(/^www\./, '');
@@ -1118,7 +1122,7 @@ async function main() {
   mkdirSync(out, { recursive: true });
 
   http.resetBlocked();
-  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
+  const fetch = (url, options) => fetchPaced(url, { ...options, delayMs: args.delayMs, concurrency: args.concurrency, ua: args.ua, trusted: [args.origin, process.env.CAPTURE_WAYBACK_CDX] });
   const crawler = new Crawler(state, { out, fetch, delayMs: args.delayMs });
   // Seeds given on --resume: once the home page is known they join the queue here (before that,
   // discovery queues every seed in the options), and a finished capture crawls again for them.
