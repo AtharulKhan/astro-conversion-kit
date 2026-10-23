@@ -134,6 +134,28 @@ test('an answer slower than slowMs halves the concurrency once', async () => {
   });
 });
 
+test('after a slow answer the host recovers one step per window of clean answers, back to the default', async () => {
+  await withFixture({ delayMs: 60, pathDelays: { '/slow/': 250 } }, async (site) => {
+    const opts = { trusted: [site.origin], delayMs: 0, concurrency: 4, slowMs: 200, windowMs: 600 };
+    await fetchPaced(`${site.origin}/slow/`, opts);
+    site.stats.reset();
+    await burst(site, 8, opts);
+    assert.equal(site.stats.maxInFlight, 2, 'halved from 4');
+    for (let step = 3; step <= 4; step += 1) {
+      await sleep(620);
+      await fetchPaced(`${site.origin}/`, opts);
+      site.stats.reset();
+      await burst(site, 8, opts);
+      assert.equal(site.stats.maxInFlight, step, `step ${step}`);
+    }
+    // Back at the default, a slow answer halves it again.
+    await fetchPaced(`${site.origin}/slow/`, opts);
+    site.stats.reset();
+    await burst(site, 8, opts);
+    assert.equal(site.stats.maxInFlight, 2, 'halved again once recovered');
+  });
+});
+
 test('403 and network errors still count toward the consecutive blocks, and do not back off', async () => {
   await withFixture({ delayMs: 30, alwaysStatus: { '/no/': 403 } }, async (site) => {
     const { http } = await import('../../skills/capture-site/scripts/lib/http.mjs');

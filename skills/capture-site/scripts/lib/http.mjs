@@ -18,8 +18,9 @@
 // - a 429 or 503 doubles that host's delay and drops it to one request in flight; after each
 //   windowMs (default 30 s) with only clean answers it recovers one step (half the delay, one
 //   more in flight) until it is back to the caller's delayMs and concurrency;
-// - an answer whose headers take longer than slowMs (default 5 s) halves the host's concurrency,
-//   once per host (never below 1);
+// - an answer whose headers take longer than slowMs (default 5 s) halves the host's concurrency
+//   (never below 1, and not again while halved), recovering one more in flight after each
+//   windowMs of clean answers;
 // - counts consecutive 403/429/503/network errors in `blocked` (callers stop at 3), in the order
 //   the answers arrive;
 // - never throws: a network error or timeout comes back as status 0 with `error` set.
@@ -61,7 +62,7 @@ const BLOCK_STATUSES = new Set([403, 429, 503]);
 const BACKOFF_STATUSES = new Set([429, 503]);
 const TEXT_TYPE = /^(text\/|application\/(.*\+)?(xml|json|javascript)|image\/svg\+xml)/i;
 
-// host -> { lastStart, inFlight, backoff, cap, slowCap, troubleAt, waiting[], timer }
+// host -> { lastStart, inFlight, backoff, cap, slowCap, troubleAt, slowAt, waiting[], timer }
 const hosts = new Map();
 
 export let blocked = 0;
@@ -108,7 +109,7 @@ function pump(state) {
 function acquire(host, delayMs, concurrency) {
   let state = hosts.get(host);
   if (!state) {
-    state = { lastStart: 0, inFlight: 0, backoff: 1, cap: null, slowCap: null, troubleAt: 0, waiting: [], timer: null };
+    state = { lastStart: 0, inFlight: 0, backoff: 1, cap: null, slowCap: null, troubleAt: 0, slowAt: 0, waiting: [], timer: null };
     hosts.set(host, state);
   }
   return new Promise((start) => {
@@ -123,7 +124,8 @@ function release(state) {
 }
 
 // The limiter's view of one answer: a 429 or 503 backs off, a slow one halves the concurrency
-// once, and a clean one past the window recovers a step.
+// (not again while it is halved; a later slow answer only restarts its window), and a clean one
+// past a window recovers a step of each.
 function adapt(state, { status, waitedMs, concurrency, windowMs, slowMs }) {
   const now = Date.now();
   if (BACKOFF_STATUSES.has(status)) {
@@ -133,12 +135,20 @@ function adapt(state, { status, waitedMs, concurrency, windowMs, slowMs }) {
     state.lastStart = Math.max(state.lastStart, now); // the doubled wait counts from this answer
     return;
   }
-  if (waitedMs > slowMs && state.slowCap === null) state.slowCap = Math.max(1, Math.floor(allowed(state, concurrency) / 2));
+  if (waitedMs > slowMs) {
+    if (state.slowCap === null) state.slowCap = Math.max(1, Math.floor(allowed(state, concurrency) / 2));
+    state.slowAt = now;
+    return;
+  }
   if (status === 0 || BLOCK_STATUSES.has(status)) return;
   if ((state.backoff > 1 || state.cap !== null) && now - state.troubleAt >= windowMs) {
     state.backoff = Math.max(1, state.backoff / 2);
     state.cap = state.cap === null || state.cap + 1 >= concurrency ? null : state.cap + 1;
     state.troubleAt = now;
+  }
+  if (state.slowCap !== null && now - state.slowAt >= windowMs) {
+    state.slowCap = state.slowCap + 1 >= concurrency ? null : state.slowCap + 1;
+    state.slowAt = now;
   }
 }
 

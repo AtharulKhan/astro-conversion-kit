@@ -27,7 +27,8 @@ read in minutes. The pace adapts by itself:
 - a 429 or 503 doubles that host's delay (up to 32 times) and drops it to **one request at a
   time**; after every 30 s of clean answers it recovers one step (half the delay, one more in
   flight) until it is back to the defaults;
-- an answer that takes more than 5 s halves the requests in flight on that host, once;
+- an answer that takes more than 5 s halves the requests in flight on that host (not again while
+  halved), and it recovers the same way, one more in flight per 30 s of clean answers;
 - a 403 or a network error counts towards the 3-in-a-row stop below, as before.
 
 `--polite` is the old pace: one request at a time, 2500 ms apart (`capture`, `media`, `assets`).

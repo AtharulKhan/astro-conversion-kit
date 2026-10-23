@@ -26,7 +26,8 @@ and the run resumes from its state file.
 It already is, by default: 400 ms between request starts and up to four requests in flight per
 host (six for media). The pace adapts on its own: a 429 or 503 doubles the delay and drops the
 host to one request at a time, recovering a step every 30 seconds of clean answers, and an answer
-slower than 5 seconds halves the requests in flight. After three blocks in a row it stops and
+slower than 5 seconds halves the requests in flight until 30 seconds of clean answers step it
+back up. After three blocks in a row it stops and
 saves its place. If it is your own site and your host can take more, `--delay` and
 `--concurrency` raise the pace; on shared hosting with a bot wall, use `--polite` (one request
 at a time, 2.5 s apart) from the start.
