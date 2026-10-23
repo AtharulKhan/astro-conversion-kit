@@ -351,6 +351,9 @@ test('a tiny untitled 200 home page is a challenge named by the site host', asyn
 test('fingerprint reports every sitemap robots.txt names, and lists each one it did not expand', async () => {
   const result = await fingerprint(fixture.origin, { fetch: fast });
   assert.deepEqual(result.robotsSitemaps.map((u) => new URL(u).pathname), ['/sitemap_index.xml']);
+  // A Sitemap: line on another host is listed apart and never fetched or expanded.
+  assert.deepEqual(result.otherHostSitemaps, ['http://other.example.com/sitemap_index.xml']);
+  assert.ok(result.sitemapUrls.every((u) => new URL(u).origin === fixture.origin), result.sitemapUrls.join(' '));
 
   const xml = (body) => (origin) => ({ headers: { 'Content-Type': 'application/xml' }, body: body(origin) });
   const stub = await startStub({

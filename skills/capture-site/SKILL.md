@@ -51,13 +51,18 @@ source. Run each step as its own command, in this order:
    REST; `--no-rest` skips), the link crawl, and `--seed <path>` or `--seed-file <file>` (one
    path or URL per line, `#` comments) for paths the crawl cannot reach (old URLs, an old
    `.htaccess`). After the crawl, Wayback paths it did not find go to `wayback-unverified.txt`
-   (`--no-wayback` skips). `?p=` shortlinks are recorded unverified and never fetched unless you
+   (`--no-wayback` skips; a listing that fails is asked for once more 10 s later before
+   `meta.json` `wayback` records `failed`). `?p=` shortlinks are recorded unverified and never fetched unless you
    pass `--verify-shortlinks`. After the crawl it requests one path that cannot exist
    (`/<32 hex>/`) once, so the site's own 404 page is saved as `pages/404.html` (`meta.json`
    `notFound`; a site that answers 200 or redirects there is recorded with no page), and asks
    for `/favicon.ico` and `/apple-touch-icon.png` once each (`meta.json` `icons`: path to
    status). A sitemap robots.txt names that answers 404 (or any non-200) is listed in
-   `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`.
+   `sitemaps/index.json` with its status and in `meta.json` `discoveryErrors`. A sitemap on
+   another host (robots.txt naming a sister site's, or an index listing one; www and apex count
+   as one host) is listed there as `{ url, host, skipped: "other host" }` and never fetched, so
+   none of its URLs enter the crawl. Two sitemap URLs with the same file name never overwrite
+   each other: the second is saved with a suffix from its directory path (`page-sitemap-es.xml`).
 
        node <skill-dir>/scripts/capture.mjs https://www.example.com --out capture
 
@@ -84,6 +89,18 @@ source. Run each step as its own command, in this order:
 5. **Assets.** Logo, favicon, apple-touch-icon and every `@font-face` font into `capture/assets/`:
 
        node <skill-dir>/scripts/assets.mjs --capture capture
+
+   The logo is looked for on the home page inside the `<header>` first, then inside any other
+   element whose class or id names a logo (`.logo`, `.site-logo`, `#logo-wrap`). In each: an
+   `<img>` whose src, alt, class or id has the word "logo" (not "logout"), then an inline `<svg>`
+   with "logo" in its class, id, aria-label or `<title>` (saved as `logo.svg`, `url: null` in
+   `assets/index.json`; its note says so when it only `<use>`s a symbol defined elsewhere on the
+   page, which renders empty on its own), then the first `<img>` in a link to the home page, then
+   the first `<img>`. Check `assets/logo.*` by eye: an account
+   avatar or a sponsor mark can still win on an unusual header. The favicon and
+   apple-touch-icon are saved as served from their `<link>` href, query string included, so
+   one that points at a resize (`?w=32`, `?w=180`) of an uploads file differs in bytes from
+   that file's entry in `media.json`: keep the saved icon, not the original.
 
 6. **Live screenshots**, one per template at 390, 768 and 1440, with the visual-review shooter:
 
@@ -177,8 +194,11 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
                           one deeper still is listed with status "too-deep", not fetched;
                           a redirected sheet records finalUrl (its url()s and @imports
                           resolve against it)
-    js/                   the site's own <script src> files (theme JavaScript) and manifest.json:
-                          [{ file, src, pages }], or { file: null, src, pages, status } for a file
+    js/                   the site's own script files (theme JavaScript, <script type=module src>,
+                          every URL its <script type=importmap> imports or scopes name, and
+                          <link rel=modulepreload> files) and manifest.json: [{ file, src, kind,
+                          pages }] (kind "script", "module", "importmap" or "modulepreload"),
+                          or { file: null, src, kind, pages, status } for a file
                           not saved (an HTTP status, "off-site" for a redirect off the host,
                           "too-large" over 5 MB); [] when the site has none
     templates.json        template clusters with a representative page each
@@ -187,7 +207,8 @@ redirects to a captcha path. Every page then looks the same, so a capture of it 
     lighthouse-live/      Lighthouse reports, when run (gitignored)
     pages/404.html        the site's own 404 page (meta.json notFound: path, status, snapshot, text)
     sitemaps/             every sitemap robots.txt names, the default index, and their children;
-                          index.json: every sitemap URL asked for { url, status, file }
+                          index.json: every sitemap URL asked for { url, status, file }, and
+                          { url, host, skipped: "other host" } for one on another host
     feeds/ robots.txt wp-rest/ wayback-unverified.txt meta.json state.json
     README.md             the generated summary and its ## Notes
 

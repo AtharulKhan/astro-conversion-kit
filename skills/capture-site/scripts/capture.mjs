@@ -6,9 +6,11 @@
 // hop. Shortlinks (`/?p=N`) are recorded as unverified redirects and only requested with
 // --verify-shortlinks. On WordPress the REST lists are dumped after the sitemaps (their pages and
 // posts join the queue); every stylesheet and <style> block goes to css/, every same-site
-// <script src> to js/ (stylesheets' @import rules are followed, 5 deep); after the crawl the
+// <script src> (classic or module), import map URL and modulepreload file to js/ (stylesheets'
+// @import rules are followed, 5 deep); after the crawl the
 // Wayback Machine's archived paths the crawl did not find go to wayback-unverified.txt.
-// CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in).
+// CAPTURE_WAYBACK_CDX overrides the CDX API address (tests point it at a local stand-in) and
+// CAPTURE_WAYBACK_RETRY_MS the wait before its one retry.
 // A bot challenge (lib/challenge.mjs) on any page or discovery request stops the run at once:
 // the URL is recorded with status "challenge" (never a page) and queued again for --resume.
 // The tiny-untitled-page rule alone stops it only on the capture's first HTML response or on
@@ -42,8 +44,10 @@ meta.json (notFound: the site's 404 page, from one request for a path that canno
 as pages/404.html and text/404.txt; icons: the status /favicon.ico and /apple-touch-icon.png
 answered, one request each), sitemaps/ (every sitemap robots.txt names, and their children;
 index.json lists every sitemap URL asked for with its status and file, and one robots.txt
-names that did not answer 200 is also in meta.json discoveryErrors), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
-on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src> file, manifest.json),
+names that did not answer 200 is also in meta.json discoveryErrors; one on another host is
+listed with skipped: "other host" and never fetched), robots.txt, feeds/, css/ (every stylesheet and the sheets it @imports,
+on any host and up to 5 deep, <style> blocks as inline-<slug>.css, manifest.json), js/ (every same-site <script src>,
+import map and modulepreload file, manifest.json with each one's kind),
 wp-rest/ (WordPress REST lists), wayback-unverified.txt
 (archived paths the crawl did not find) and state.json. Then run media.mjs --capture <dir>
 to list and download the media.
@@ -69,9 +73,11 @@ to list and download the media.
   --help                show this help
 
 Never requests wp-admin, wp-login, xmlrpc.php or ?s= searches, and /wp-json/ only for the
-REST lists. A Wayback failure is noted in meta.json and never fails the capture.
+REST lists. A Wayback listing that fails is asked for once more 10 s later; a second failure
+is noted in meta.json and never fails the capture.
 
-Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address.
+Test hooks: CAPTURE_WAYBACK_CDX=<url> replaces the Wayback CDX API address;
+CAPTURE_WAYBACK_RETRY_MS=<ms> replaces the 10 s wait before the Wayback retry.
 Each URL is tried 3 times; one that still answers 403, 429, 503 or a network error is
 recorded with that status and its attempts, and the crawl moves on.
 An anti-bot challenge (SiteGround's /.well-known/sgcaptcha/, Cloudflare's challenge page, a
@@ -95,11 +101,16 @@ const PERMANENT_BLOCK = 403;
 const MAX_HOPS = 10;
 // A discovery URL that is a sitemap (saved under sitemaps/ and listed in sitemaps/index.json).
 const SITEMAP_PATH = /sitemap|\.xml(\.gz)?$/i;
+// Why a sitemap on another host is listed in sitemaps/index.json but never fetched.
+const OTHER_HOST = 'other host';
 // The root icons a launch needs, asked for once so a missing one is evidence live lacked it.
 const ROOT_ICONS = ['/favicon.ico', '/apple-touch-icon.png'];
 // HTML responses in a row matching only the tiny-page heuristic that stop the run.
 const SUSPECT_LIMIT = 3;
 const MAX_ATTEMPTS = 3;
+// The Wayback listing is asked for at most twice, 10 s apart.
+const WAYBACK_TRIES = 2;
+const WAYBACK_RETRY_MS = 10_000;
 const RETRY_MIN_MS = 500;
 const SAVE_EVERY = 25;
 const SOURCE_ORDER = ['sitemap', 'rest', 'crawl', 'shortlink', 'seed'];
@@ -227,12 +238,22 @@ function writeText(file, content) {
   writeFileSync(file, content);
 }
 
-function sitemapFileName(href) {
+const withSuffix = (name, suffix) => name.replace(/(\.xml(?:\.gz)?)?$/i, (ext) => `-${suffix}${ext}`);
+const fileSafe = (text) => text.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+
+// A sitemap's file under sitemaps/: its base name (plus its query, if any). `taken` maps the
+// file names already used to their URL: a second URL with the same name gets a suffix from its
+// directory path, then a number, so one sitemap never overwrites another.
+function sitemapFileName(href, taken = new Map()) {
   const url = new URL(href);
-  const name = basename(url.pathname) || 'sitemap.xml';
-  if (!url.search) return name;
-  const suffix = url.search.slice(1).toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-  return name.replace(/(\.xml(?:\.gz)?)?$/i, (ext) => `-${suffix}${ext}`);
+  let name = basename(url.pathname) || 'sitemap.xml';
+  if (url.search) name = withSuffix(name, url.search.slice(1).toLowerCase().replace(/[^a-z0-9_-]/g, '-'));
+  const free = (candidate) => !taken.has(candidate) || taken.get(candidate) === href;
+  if (free(name)) return name;
+  const dir = fileSafe(url.pathname.split('/').slice(0, -1).join('-'));
+  const base = dir ? withSuffix(name, dir) : name;
+  if (free(base)) return base;
+  for (let n = 2; ; n += 1) if (free(withSuffix(base, String(n)))) return withSuffix(base, String(n));
 }
 
 const byKey = (key) => (a, b) => (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0);
@@ -304,7 +325,15 @@ class Crawler {
   // answer (noted in meta.json, not fatal); a streak of 429, 503 or network errors on different
   // URLs throws Blocked so the run stops and resumes later.
   discoveryFetch() {
+    const site = bareHost(new URL(this.state.origin));
     return async (url, options) => {
+      // A sitemap on another host (robots.txt may name a sister site's) is never asked for:
+      // its files would collide with the site's own and its URLs are not this site's.
+      const target = new URL(url);
+      if (SITEMAP_PATH.test(target.pathname) && bareHost(target) !== site) {
+        this.noteSitemap(url, null, null, { host: target.host, skipped: OTHER_HOST });
+        return { status: null, skipped: OTHER_HOST, headers: {}, body: '' };
+      }
       for (let attempt = 1; ; attempt += 1) {
         const res = await this.fetch(url, options);
         const verdict = this.judge(res, url);
@@ -316,7 +345,7 @@ class Crawler {
           else if (SITEMAP_PATH.test(path)) {
             let file = null;
             if (res.status === 200) {
-              file = `sitemaps/${sitemapFileName(url)}`;
+              file = this.state.sitemapLog?.[url]?.file ?? `sitemaps/${sitemapFileName(url, this.sitemapFiles())}`;
               writeText(join(this.out, file), res.body);
             }
             this.noteSitemap(url, res.status, file);
@@ -336,18 +365,27 @@ class Crawler {
   }
 
   // Every sitemap the capture asked for, with its answer: sitemaps/index.json.
-  noteSitemap(url, status, file) {
+  // A skipped one (on another host) is { url, host, skipped } and never fetched.
+  noteSitemap(url, status, file, skipped = null) {
     const log = (this.state.sitemapLog ??= {});
-    log[url] = { status, file };
+    log[url] = skipped ?? { status, file };
+  }
+
+  // The file names under sitemaps/ already taken, each with the sitemap URL it holds.
+  sitemapFiles() {
+    const taken = new Map();
+    for (const [url, { file }] of Object.entries(this.state.sitemapLog ?? {})) if (file) taken.set(basename(file), url);
+    return taken;
   }
 
   // A sitemap robots.txt names (or a sitemap index lists) that did not answer 200 is a
-  // discoveryErrors entry with its status, never dropped silently.
+  // discoveryErrors entry with its status, never dropped silently (one skipped as another
+  // host's is not an error: it is listed in sitemaps/index.json).
   noteMissingSitemaps(urls) {
     const errors = (this.state.discoveryErrors ??= []);
     for (const url of urls) {
       const seen = this.state.sitemapLog?.[url];
-      if (seen && seen.status !== 200 && !errors.some((e) => e.url === url)) errors.push({ url, status: seen.status });
+      if (seen && !seen.skipped && seen.status !== 200 && !errors.some((e) => e.url === url)) errors.push({ url, status: seen.status });
     }
   }
 
@@ -366,6 +404,7 @@ class Crawler {
         const { robots, ...rest } = fp;
         this.state.fingerprint = rest;
         this.state.sitemapsDone = [];
+        for (const url of rest.otherHostSitemaps ?? []) this.noteSitemap(url, null, null, { host: new URL(url).host, skipped: OTHER_HOST });
         this.noteMissingSitemaps(rest.robotsSitemaps ?? []);
         this.enqueue('/', 'crawl');
         for (const seed of this.state.options.seeds ?? []) this.enqueue(seed, 'seed');
@@ -682,7 +721,8 @@ class Crawler {
     );
   }
 
-  // Same-site script files (the theme's own JavaScript) in first-seen order, each fetched once
+  // Same-site script files (the theme's own JavaScript, module scripts, import map URLs and
+  // modulepreload files, each with the kind it was first seen as) in first-seen order, each fetched once
   // after the crawl (js/<n>.js). Vendor tags and inline code stay in the page HTML. Redirects are
   // followed by hand while they stay on the site's host; one that leaves it is recorded
   // "off-site" and not requested. A file over JS_MAX_BYTES is recorded "too-large", not saved.
@@ -700,7 +740,8 @@ class Crawler {
       if (!/^https?:$/.test(url.protocol) || bareHost(url) !== site || forbidden(url)) continue;
       let entry = js.entries.find((e) => e.src === script.src);
       if (!entry) {
-        entry = { file: `${js.entries.length + 1}.js`, src: script.src, pages: [], status: null };
+        const kind = script.kind ?? 'script';
+        entry = { file: `${js.entries.length + 1}.js`, src: script.src, kind, pages: [], status: null };
         js.entries.push(entry);
         js.queue.push({ url: script.src, attempts: 0 });
       }
@@ -747,7 +788,8 @@ class Crawler {
   jsManifest() {
     return (this.state.js?.entries ?? []).map((e) => {
       const pages = [...e.pages].sort();
-      return e.status === 200 ? { file: e.file, src: e.src, pages } : { file: null, src: e.src, pages, status: e.status };
+      const kind = e.kind ?? 'script';
+      return e.status === 200 ? { file: e.file, src: e.src, kind, pages } : { file: null, src: e.src, kind, pages, status: e.status };
     });
   }
 
@@ -763,17 +805,24 @@ class Crawler {
     });
   }
 
-  // Archived paths on this host that the crawl never saw. Never fatal: a failure is noted and
-  // the file is written empty.
-  async wayback(endpoint) {
+  // Archived paths on this host that the crawl never saw. The archive is often slow or briefly
+  // down, so a failed listing is asked for once more after `retryMs`. Never fatal: a second
+  // failure is noted and the file is written empty.
+  async wayback(endpoint, retryMs = WAYBACK_RETRY_MS) {
     const known = new Set([...this.state.seen.map(pathOf), ...this.state.records.map((r) => r.path)]);
     const host = new URL(this.state.canonicalOrigin).host.replace(/^www\./i, '');
-    try {
-      const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint });
-      return { status: 'ok', paths: paths.length };
-    } catch (err) {
-      writeText(join(this.out, WAYBACK_FILE), '');
-      return { status: 'failed', error: err.message };
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const paths = await waybackPaths(host, { fetch: this.fetch, known, out: this.out, endpoint });
+        return { status: 'ok', paths: paths.length };
+      } catch (err) {
+        if (attempt < WAYBACK_TRIES) {
+          await sleep(retryMs);
+          continue;
+        }
+        writeText(join(this.out, WAYBACK_FILE), '');
+        return { status: 'failed', error: err.message };
+      }
     }
   }
 
@@ -988,7 +1037,7 @@ class Crawler {
       icons: this.state.icons ?? {},
     });
     json('sitemaps/index.json', Object.entries(this.state.sitemapLog ?? {})
-      .map(([url, { status, file }]) => ({ url, status, file }))
+      .map(([url, e]) => (e.skipped ? { url, host: e.host, skipped: e.skipped } : { url, status: e.status, file: e.file }))
       .sort(byKey('url')));
     json('css/manifest.json', this.cssManifest());
     json('js/manifest.json', this.jsManifest());
@@ -1122,7 +1171,8 @@ async function main() {
   if (outcome === 'done' && verify) outcome = await crawler.verifyShortlinks();
   if (args.noWayback) state.options.noWayback = true;
   if (outcome === 'done' && !state.options.noWayback && !state.wayback) {
-    state.wayback = await crawler.wayback(process.env.CAPTURE_WAYBACK_CDX || CDX_ENDPOINT);
+    const retryMs = Number(process.env.CAPTURE_WAYBACK_RETRY_MS);
+    state.wayback = await crawler.wayback(process.env.CAPTURE_WAYBACK_CDX || CDX_ENDPOINT, Number.isFinite(retryMs) && retryMs >= 0 ? retryMs : undefined);
   }
   if (outcome === 'challenge') stopChallenge();
   const inventory = crawler.writeOutputs({ finished: outcome === 'done' });

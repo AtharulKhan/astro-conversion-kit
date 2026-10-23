@@ -46,8 +46,10 @@ Requests carry a browser user agent and ask for identity encoding. A 403, 429, 5
 error is retried after twice the delay, doubling each time; three in a row stop the run. A
 request with no full response within 30 s is that check's failure (field "timeout"), not a
 block: the run goes on. A redirect to vercel.com/sso-api is Vercel's deployment protection, not
-the site: the run stops at the first one and says to pass --bypass, or to have the bypass secret
-created (Settings, Deployment Protection, Protection Bypass for Automation) and run it again.
+the site: the run stops at the first one. On a public staging (the default) that means the
+wrong URL: run it against the project's production alias, not the raw deployment URL. Only
+when staging was deliberately protected, pass --bypass with the bypass secret a person created
+(Settings, Deployment Protection, Protection Bypass for Automation).
 
 Exit codes: 0 every check passed, 1 a check failed, 2 usage or missing input, 3 stopped after
 three consecutive blocked responses (run it again later) or at deployment protection.`;
@@ -174,12 +176,9 @@ export function createVerifier({ base, bypass, delay = 500, timeout = REQUEST_TI
         blocks = 0;
         const location = response.headers.get('location');
         if (isVercelProtection(response.status, location)) {
-          const where = new URL(url);
-          const path = where.origin === baseUrl.origin ? `${where.pathname}${where.search}` : url;
           throw new Stopped(
-            `deployment protection: ${path} answered ${response.status} to ${new URL(location).origin}/sso-api; ` +
-              'pass --bypass <secret>, or have the person create the bypass secret (Settings, Deployment Protection, ' +
-              'Protection Bypass for Automation) and run it again',
+            `deployment protection: ${url} redirected to vercel.com/sso-api; use the project's production alias ` +
+              '(public by default), or pass --bypass if staging was deliberately protected',
           );
         }
         return { status: response.status, headers: response.headers, body };

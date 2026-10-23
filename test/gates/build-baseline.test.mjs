@@ -203,11 +203,19 @@ test('media, forms, scripts and text', () => {
 
 test('js.json lists the saved same-origin scripts from capture/js/, [] when the capture has none', async (t) => {
   const origin = readJson(baseline, 'meta.json').origin;
-  assert.deepEqual(readJson(baseline, 'js.json'), [{
-    src: `${origin}/wp-content/themes/fixture/js/reveal.js?ver=1.4.2`,
-    file: 'js/1.js',
-    pages: readJson(baseline, 'routes.json').filter((r) => r.status === 200 && ['page', 'post', 'archive'].includes(r.kind)).map((r) => r.path).sort(),
-  }]);
+  const modules = `${origin}/wp-includes/js/script-modules`;
+  const home = (src, n) => ({ src, file: `js/${n}.js`, pages: ['/'] });
+  assert.deepEqual(readJson(baseline, 'js.json'), [
+    home(`${modules}/interactivity/index.min.js?ver=6.6.2`, 1),
+    home(`${origin}/wp-content/themes/fixture/js/util.js`, 2),
+    home(`${origin}/wp-content/themes/fixture/js/view.js?ver=1.4.2`, 3),
+    {
+      src: `${origin}/wp-content/themes/fixture/js/reveal.js?ver=1.4.2`,
+      file: 'js/4.js',
+      pages: readJson(baseline, 'routes.json').filter((r) => r.status === 200 && ['page', 'post', 'archive'].includes(r.kind)).map((r) => r.path).sort(),
+    },
+    home(`${modules}/a11y/index.min.js?ver=6.6.2`, 5),
+  ]);
   const copy = join(root, 'no-js');
   const out = join(root, 'no-js-out', 'baseline');
   t.after(() => {
