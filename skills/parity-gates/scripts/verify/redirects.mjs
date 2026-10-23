@@ -47,7 +47,7 @@ redirect away fails as "built page redirected by rule <rule>" (a slash rule that
 correct the redirects.csv row that catches the page) instead.
 A redirect exception (field "redirect", path = the source, from = the baseline target, to = the
 new target) approves a changed target. Write the host config with build-redirects.mjs first.
-A "no redirect" exception { kind: "redirect", path, reason, action: "none" } says the path has
+A "no redirect" exception { kind: "redirect", path, reason, action: "none", approvedBy, date } says the path has
 no redirect on purpose: it is requested and passes only when the rules do not redirect it.
 A source with no valid form (no leading /, whitespace, a control character) that build-redirects
 dropped and listed with a reason in ${SKIPPED_JSON} beside the csv is skipped (${SKIP_NOT_COMPILED}).

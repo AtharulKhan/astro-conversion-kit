@@ -289,7 +289,7 @@ test('a source with a bare ":" compiles to its escaped form and the gate passes 
 });
 
 const SPACED = '/two words/';
-const NO_REDIRECT = { kind: 'redirect', path: SPACED, reason: 'a broken live href; nothing to redirect', action: 'none' };
+const NO_REDIRECT = { kind: 'redirect', path: SPACED, reason: 'a broken live href; nothing to redirect', action: 'none', approvedBy: 'client', date: '2026-10-23' };
 
 for (const host of ['vercel', 'cloudflare']) {
   test(`${host}: a source with no valid form passes only when redirects-skipped.json lists it or an exception says no redirect`, async () => {

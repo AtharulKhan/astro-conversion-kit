@@ -1,6 +1,6 @@
 // Approved differences between the baseline and the build. No side effects on import.
 // exceptions.json is an array of { path, field, from, to, reason, approvedBy, date }, and of
-// { kind: "redirect", path, reason, action: "none" } (see isNoRedirect).
+// { kind: "redirect", path, reason, action: "none", approvedBy, date } (see isNoRedirect).
 // `from: ""` records a field the build adds, `to: ""` a field the build removes.
 // With PROPOSALS=on, proposals.json (same record shape) is loaded after it.
 import { existsSync, readFileSync } from 'node:fs';
@@ -17,13 +17,14 @@ export const EXCEPTION_FIELDS = [
 ];
 const MAY_BE_EMPTY = new Set(['from', 'to']);
 
-// A record with a `kind` instead of a `field`: { kind: "redirect", path, reason, action: "none" }
+// A record with a `kind` instead of a `field`: { kind: "redirect", path, reason, action: "none", approvedBy, date }
 // means "no redirect for this path, on purpose" (a broken live href with nothing to redirect).
 // The redirects gate reads it; every other gate ignores it.
 export const isNoRedirect = (record) => record.kind === 'redirect' && record.action === 'none';
 function checkKindRecord(record, where) {
   if (record.kind !== 'redirect') throw new Error(`${where}: kind "${record.kind}" is not redirect`);
-  for (const key of ['path', 'reason']) {
+  // approvedBy and date as on every record: it removes a live behaviour, so somebody signs it off.
+  for (const key of ['path', 'reason', 'approvedBy', 'date']) {
     if (typeof record[key] !== 'string' || record[key] === '') throw new Error(`${where}: missing "${key}"`);
   }
   if (record.action !== 'none') throw new Error(`${where}: action must be "none" for kind "redirect", got ${JSON.stringify(record.action)}`);

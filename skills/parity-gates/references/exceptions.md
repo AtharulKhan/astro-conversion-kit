@@ -96,12 +96,15 @@ A `redirect` exception changes a target; it cannot say "this source has no redir
 record has a `kind` instead of a `field`:
 
     { "kind": "redirect", "path": "/trackshttps://www.example.com/exhibitor-contact/",
-      "reason": "a broken live href; nothing should redirect it", "action": "none" }
+      "reason": "a broken live href; nothing should redirect it", "action": "none",
+      "approvedBy": "client", "date": "2026-10-23" }
 
-`kind` (`"redirect"`), `path` (the redirect source), `reason` and `action` (`"none"`) are
-required; `approvedBy` and `date` may be added like on any record. The redirects gate requests
-the path through the compiled rules and passes it only when nothing redirects it; on a path it
-does not check, it fails as `path not checked`. The other gates ignore the record. Use it for a
+Every key is required and non-empty: `kind` (`"redirect"`), `path` (the redirect source),
+`reason`, `action` (`"none"`), `approvedBy` and `date`. It removes a live behaviour, so it is
+signed off like any other exception (`"default, <decision id>"` until a person does). The
+redirects gate requests the path through the compiled rules and passes it only when nothing
+redirects it; on a path it does not check, it fails as `path not checked`. `verify-live` skips
+the path, counted with the reason. The other gates ignore the record. Use it for a
 redirect the capture recorded that the new site should not carry, such as a source
 build-redirects dropped into `redirects-skipped.json` because no host rule can hold it (the
 listing alone already makes the gate skip that row; the exception turns the skip into an

@@ -89,15 +89,17 @@ test('loadExceptions validates every record', (t) => {
   assert.throws(() => loadExceptions(badField, { env: {} }), /field/);
 });
 
-test('loadExceptions accepts a "no redirect" record { kind: "redirect", path, reason, action: "none" } and validates it', (t) => {
+test('loadExceptions accepts a "no redirect" record { kind: "redirect", path, reason, action: "none", approvedBy, date } and validates it', (t) => {
   const dir = tempDir(t);
-  const none = { kind: 'redirect', path: '/two words/', reason: 'a broken live href', action: 'none' };
+  const none = { kind: 'redirect', path: '/two words/', reason: 'a broken live href', action: 'none', approvedBy: 'client', date: '2026-10-23' };
   const good = join(dir, 'none.json');
   writeFileSync(good, JSON.stringify([none, H1]));
   assert.deepEqual(loadExceptions(good, { env: {} }), [none, H1]);
   const bad = [
     [{ ...none, reason: '' }, /reason/],
     [{ ...none, path: undefined }, /path/],
+    [{ ...none, approvedBy: undefined }, /approvedBy/],
+    [{ ...none, date: '' }, /date/],
     [{ ...none, action: 'redirect' }, /action/],
     [{ ...none, kind: 'link' }, /kind/],
   ];

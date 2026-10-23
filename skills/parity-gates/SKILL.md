@@ -74,7 +74,7 @@ the gates' simulation of it), and `//` is kept. A source with no valid form (no 
 whitespace, a control character) is dropped, named on stderr and listed as `{ source, reason }`
 in `redirects-skipped.json` beside the csv; the redirects gate counts a listed row as skipped,
 never passed. When the path should simply have no redirect, record a "no redirect" exception
-instead (section 4): `{ "kind": "redirect", "path": "<source>", "reason": "...", "action": "none" }`.
+instead (section 4): `{ "kind": "redirect", "path": "<source>", "reason": "...", "action": "none", "approvedBy": "...", "date": "..." }`.
 
 ## 3. Verify
 
@@ -117,10 +117,12 @@ broken link) is reproduced by default and gets a decision row (id, topic, choice
 reason, cost if wrong) saying so and what the fix would be.
 
 One record has a `kind` instead of a `field`: `{ "kind": "redirect", "path": "<source>",
-"reason": "...", "action": "none" }` means "no redirect for this path, on purpose" (a live
-redirect recorded for a broken href that nothing should redirect). The redirects gate requests
-the path and passes it only when the rules do not redirect it; on a path the gate does not check
-it fails as `path not checked`. Every other gate ignores it.
+"reason": "...", "action": "none", "approvedBy": "...", "date": "..." }` means "no redirect for
+this path, on purpose" (a live redirect recorded for a broken href that nothing should
+redirect). Every key is required: it removes a live behaviour, so it is signed off like any
+exception. The redirects gate requests the path and passes it only when the rules do not
+redirect it; on a path the gate does not check it fails as `path not checked`; `verify-live`
+skips it with the reason. Every other gate ignores it.
 
 ## 5. Staging, proposals and release builds
 
