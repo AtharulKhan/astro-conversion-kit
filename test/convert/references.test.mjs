@@ -45,8 +45,10 @@ test('intake.md: the message asks only what the owner knows, the Vercel team inc
   const template = read('references/intake.md').split('## The template')[1].split('\n## ')[0];
   assert.match(template.replace(/\s+/g, ' '), /Default: your default team \(<preflight.s vercel\.scope>\)/);
   assert.match(read('references/intake.md').replace(/\s+/g, ' '), /`intake\.vercelScope` is preflight.s `vercel\.scope`/);
-  assert.match(template.replace(/\s+/g, ' '), /May the staging deployments be public before launch\? Default: no/);
-  assert.match(read('references/intake.md'), /"publicStaging":false/);
+  assert.match(template.replace(/\s+/g, ' '), /Staging stays public \(noindexed\) unless you say otherwise\. Protect it behind Vercel Authentication\? Default: no/);
+  assert.match(read('references/intake.md'), /"publicStaging":true/);
+  assert.doesNotMatch(read('references/intake.md'), /"publicStaging":false/);
+  assert.match(read('references/intake.md').replace(/\s+/g, ' '), /\| Vercel protection bypass secret \(only when you chose protection\) \|/);
   for (const asked of [/Repository\./, /Hosting\./, /Vercel team/, /`npx vercel teams ls`/, /Domain\./, /Test address\./, /Search Console\./, /Consent/]) {
     assert.match(template, asked);
   }
@@ -54,16 +56,20 @@ test('intake.md: the message asks only what the owner knows, the Vercel team inc
   assert.doesNotMatch(template, /<n> found|Found: <GA4|Out of scope \(needs a server\)|Large media/);
 });
 
-test('hosting-vercel.md: link with the team slug, protect every deployment, deploy, and the needs-you line when a step fails', () => {
+test('hosting-vercel.md: link with the team slug, deploy, protection only when the owner opted in, and the needs-you line when a step fails', () => {
   const vercel = read('references/hosting-vercel.md');
+  // The default path: link, then deploy, nothing in between.
+  assert.ok(vercel.includes('    npx vercel link --yes --project <slug> --scope <scope>\n    npx vercel deploy --yes --scope <scope>\n'), 'the default two steps');
+  const optIn = vercel.split('**Protection, only when the owner opted in.**')[1];
+  assert.ok(optIn, 'the opt-in paragraph');
   const steps = [
     'npx vercel link --yes --project <slug> --scope <scope>',
     'npx vercel api /v9/projects/<slug> --method PATCH --input <body> --scope <scope>',
     'npx vercel api /v9/projects/<slug> --scope <scope>',
     'npx vercel deploy --yes --scope <scope>',
   ];
-  const at = steps.map((s) => vercel.indexOf(`    ${s}\n`));
-  assert.ok(at.every((i) => i > 0) && at.every((i, n) => n === 0 || at[n - 1] < i), 'the four steps in order');
+  const at = steps.map((s) => optIn.indexOf(`    ${s}\n`));
+  assert.ok(at.every((i) => i > 0) && at.every((i, n) => n === 0 || at[n - 1] < i), 'the four opt-in steps in order');
   const flat = vercel.replace(/\s+/g, ' ');
   assert.match(flat, /never the username/);
   assert.match(flat, /preflight.s `vercel\.scope`/);
@@ -71,7 +77,8 @@ test('hosting-vercel.md: link with the team slug, protect every deployment, depl
   assert.match(flat, /`\.env\.local` holding a `VERCEL_OIDC_TOKEN`/);
   assert.match(flat, /`vercel git connect` is not needed after `link`/);
   assert.match(flat, /first deploy of a new project is a production deploy/);
-  assert.match(flat, /read `deployment\.url` \(the staging URL\) and `deployment\.target`/);
+  assert.match(flat, /read `deployment\.url` and `deployment\.target`/);
+  assert.match(flat, /Record the alias: `S set staging '"https:\/\/<slug>\.vercel\.app"'`/);
   assert.match(flat, /does not read `\.gitignore`/);
   assert.match(flat, /`\/dist\/`, `\/\.conversion\/`/);
   assert.match(flat, /`302` to `https:\/\/vercel\.com\/sso-api\?\.\.\.`, not a 401/);
@@ -81,19 +88,39 @@ test('hosting-vercel.md: link with the team slug, protect every deployment, depl
   assert.match(flat, /npx vercel storage connect <store id> --project <slug> -e development --auth token --add-rw-token/);
   assert.match(flat, /never rely on a prefix/);
   assert.match(flat, /flagless wrapper/);
-  assert.match(vercel, /`false` \(default\) \| `\{"ssoProtection":\{"deploymentType":"all"\}\}`/);
-  assert.match(vercel, /`true` \| `\{"ssoProtection":null\}`/);
+  const rows = vercel.split('\n').filter((l) => /^\| `(true|false)`/.test(l));
+  assert.match(rows[0], /^\| `true` \(default\) \| none: no PATCH \|/, 'the default row comes first');
+  assert.match(rows[1], /^\| `false` \(opted in\) \| `\{"ssoProtection":\{"deploymentType":"all"\}\}` \|/);
+  assert.doesNotMatch(vercel, /\{"ssoProtection":null\}/);
+  assert.match(flat, /default Deployment Protection covers preview deployments and raw deployment URLs but leaves the production alias public/);
+  assert.match(flat, /never the raw `\*-<hash>\.vercel\.app` deployment URL/);
+  assert.match(vercel, /^## Deployment protection \(only when the owner opted in\)$/m);
   assert.match(vercel, /"ssoProtection":\{"deploymentType":"preview"\}/);
   assert.doesNotMatch(vercel, /--body/);
   assert.match(vercel, /`link` fails[^\n]*`npx vercel teams ls`/);
 });
 
-test('runbook.md launch day sets protection back to preview before the production deploy', () => {
+test('runbook.md launch day sets protection back to preview before the production deploy, only when the owner opted in', () => {
   const launch = read('references/runbook.md').split('## C. Launch day')[1].split('\n## ')[0];
   assert.match(launch, /--method PATCH --input <that file>/);
   const patch = launch.indexOf('"deploymentType":"preview"');
   assert.ok(patch > 0, 'the PATCH back to preview');
   assert.ok(patch < launch.indexOf('npx vercel deploy --prod'), 'before the production deploy');
+  const flat = launch.replace(/\s+/g, ' ');
+  const opted = flat.indexOf('only when the owner opted in to protecting staging');
+  const flatPatch = flat.indexOf('"deploymentType":"preview"');
+  assert.ok(opted > 0 && opted < flatPatch, 'the PATCH sits inside the opt-in conditional');
+  assert.doesNotMatch(flat.slice(opted, flatPatch), / \d+\. [A-Z]/, 'in the same step');
+  assert.match(flat, /[Ww]ith the default public staging there is no protection step/);
+  const sectionA = read('references/runbook.md').split('## A.')[1].split('\n## ')[0].replace(/\s+/g, ' ');
+  assert.match(sectionA, /Vercel, only when the owner opted in to protecting staging: create the Protection Bypass for Automation secret/);
+});
+
+test('phases.md: the staging deploy links, deploys and takes the alias; the protection PATCH only in the opt-in branch', () => {
+  const prelaunch = read('references/phases.md').split(/^## /m).find((s) => s.startsWith('10. ')).replace(/\s+/g, ' ');
+  assert.match(prelaunch, /on Vercel: link with the team slug, deploy, take the URL from the deploy JSON/);
+  assert.match(prelaunch, /only when the owner opted in to protection \(`publicStaging` `false`\), the protection PATCH comes between link and deploy/);
+  assert.match(prelaunch, /never the raw deployment URL/);
 });
 
 test('a protected site ends the run with the resume command; SKILL.md has the nvm line and the scaffold exception', () => {

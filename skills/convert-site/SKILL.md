@@ -193,7 +193,7 @@ capture resumes with `--resume`. Never repeat the intake. Applying a suggestion 
 | `references/build-rules.md` | How layouts, content, CSS, media, fonts, lazy images and redirects are built |
 | `references/forms.md` | Formspree wiring, field names, honeypot, thank-you, the form id, the one test submission |
 | `references/third-party.md` | The `keep` allowlist in `baseline/scripts.json` and `docs/third-party.md` |
-| `references/hosting-vercel.md` | Project, previews, indexing, Blob media, protection bypass |
+| `references/hosting-vercel.md` | Project, public noindexed staging, indexing, Blob media, opt-in protection |
 | `references/hosting-cloudflare.md` | Pages project, `_redirects`, `_headers`, R2 media function, query redirects |
 | `references/runbook.md` | `docs/LAUNCH.md`: A needs you, B closeout, C launch day, D 30-day watch |
 | `references/components-optional.md` | The optional component pass |

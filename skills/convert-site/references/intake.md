@@ -37,9 +37,11 @@ opening explaining what a repository, a staging deploy and a pull request are.
        <Vercel: "Which Vercel team should the project live in? Default: your default team
        (<preflight's vercel.scope>). A personal account is its own team slug, not your
        username." When preflight's `vercel.scope` is null: "Default: none; name the team slug
-       from `npx vercel teams ls`, or the deploy goes on your list." And: "May the staging deployments be public before launch? Default: no;
-       every deployment stays behind Vercel's login, and you create a bypass secret so I can
-       check it. Yes: anyone with the link can open it (it stays noindexed).">
+       from `npx vercel teams ls`, or the deploy goes on your list." And: "Staging stays public
+       (noindexed) unless you say otherwise. Protect it behind Vercel Authentication? Default:
+       no; anyone with the staging link can open it, and every page tells search engines not to
+       index it. Yes: every deployment stays behind Vercel's login, and you create a bypass
+       secret so I can check it.">
     3. Domain. Default: <host of LIVE> stays the domain; the new site replaces the old one there
        on launch day (you move DNS, not me).
     4. Forms that send a message (contact, quote). Default: they post to Formspree, with the
@@ -77,7 +79,7 @@ Include each line that applies, worded for this run. Each becomes a `state.needs
 | No form id yet (asked at the forms step, never here; only when the capture found a POST form) | Forms post to `https://formspree.io/f/REPLACE`; `pre-launch` fails on `placeholders.form-id` until you give the id; the PR opens as a draft; "create the form, send me the id" goes on your list |
 | No test address | No test submission; the `forms` launch check waits on you |
 | No store credentials and media over the limits | Media is served from the live site on staging only (`live-temporary`); "create the store, upload, regenerate rewrites" goes on your list and must be done before DNS moves |
-| Vercel protection bypass secret (staging not public) | The project is protected before its first deploy, so `launch-audit` and `verify-live` cannot reach staging and are "Not covered" until you create the Protection Bypass for Automation secret and put it in the environment |
+| Vercel protection bypass secret (only when you chose protection) | The project is protected before its first deploy, so `launch-audit` and `verify-live` cannot reach staging and are "Not covered" until you create the Protection Bypass for Automation secret and put it in the environment |
 | Cloudflare query redirects (`?p=` shortlinks) | Created by you as Single Redirects from `cloudflare-query-redirects.csv` |
 | Search Console access | The baseline export before DNS moves is yours (`gsc-baseline`) |
 | DNS access | The cutover is yours; the runbook names the two records to change |
@@ -90,14 +92,15 @@ lives in `$SITE/.conversion/` from the start; `init-site.mjs` scaffolds around i
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set site '"<LIVE>"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set hosting '"vercel"'
     node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set repo '"<owner>/<slug>"'
-    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":"<team slug>","publicStaging":false,"consent":[],"keepPages":[],"components":false}'
+    node $KIT/skills/convert-site/scripts/state.mjs --dir $SITE set intake '{"forms":{"service":"formspree"},"testAddress":"you@example.com","domain":"<host>","vercelScope":"<team slug>","publicStaging":true,"consent":[],"keepPages":[],"components":false}'
 
 `intake.vercelScope` is preflight's `vercel.scope` (the default team's slug) unless the person
 named another team slug; never the username, which the CLI refuses ("You cannot set your
 Personal Account as the scope"), and never a team you picked yourself. With no scope from
 either, it is `null` and the link goes on the needs-you list. `publicStaging` is the staging-protection
-answer (`false` unless the person said yes); record it as a decision too (topic "staging
-protection"), so `docs/plan.md` and the PR show it.
+answer: `true` (public and noindexed, the default) unless the person asked for protection, then
+`false`. Record it as a decision too (topic "staging protection"), so `docs/plan.md` and the PR
+show it.
 
 Every default you applied is also a decision (`state.mjs decision`), so the PR shows it. Add each
 missing item to `needsYou` as `{ "item": "...", "command": "...", "before": "<phase or DNS>" }`:

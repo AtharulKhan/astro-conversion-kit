@@ -377,8 +377,10 @@ accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`for
 `analytics`, `hosting`, `payments`, `legal`, `gsc-baseline`, `dns`, `signoff`, `rollback`) go to
 `docs/LAUNCH.md` section A for the person.
 
-Then the staging deploy (host file; on Vercel: link with the team slug, set the protection
-the intake chose (`publicStaging`), then deploy, and take the URL from the deploy's JSON `deployment.url`), and:
+Then the staging deploy (host file; on Vercel: link with the team slug, deploy, take the URL
+from the deploy JSON: the first deploy's production alias `https://<slug>.vercel.app`, never the
+raw deployment URL; only when the owner opted in to protection (`publicStaging` `false`), the
+protection PATCH comes between link and deploy), and:
 
     npm run verify:live -- --base <staging url> --expect-noindex
     node $KIT/skills/launch-audit/scripts/launch-audit.mjs --url <staging url> --staging --ignore-robots --old-url $LIVE --out $SITE/review/launch-audit
@@ -388,10 +390,13 @@ blocks everything, and without it the audit crawls no page. Links the captured c
 absolute to the live origin (as WordPress does) are off-origin on staging, so the audit crawls
 only what is linked relatively and lists the rest as dropped: copy that line into the PR's Not
 covered.
-On Vercel add `--bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"` to `verify:live` when that variable is
-set in your environment (a new project has none until a person creates it; without it
-`verify-live` stops with exit 3, `deployment protection: ...`, and the staging check goes under
-"Not covered" with the needs-you line from the host file); with media in a store add `--media-manifest media-manifest.json`. Copy
+On Vercel with the default public staging, no `--bypass` is needed; an exit 3 with
+`deployment protection: ...` there means the run was pointed at the raw deployment URL: rerun
+on the alias. Only when the owner opted in to protection, add
+`--bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"` to `verify:live` when that variable is set in your
+environment (a new project has none until a person creates it; without it `verify-live` stops
+with exit 3, `deployment protection: ...`, and the staging check goes under "Not covered" with
+the needs-you line from the host file); with media in a store add `--media-manifest media-manifest.json`. Copy
 the audit's `baseline.json` and `redirects.csv` to `docs/launch/audit-baseline.json` and
 `docs/launch/audit-redirects.csv` (the cutover reads them). Fix every audit blocker on the
 branch, or list it in the PR with why it cannot be fixed. Then the one test submission
