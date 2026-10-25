@@ -408,6 +408,15 @@ accepted lines for the PR. Never pass `--confirm`: the human checklist ids (`for
 `analytics`, `hosting`, `payments`, `legal`, `gsc-baseline`, `dns`, `signoff`, `rollback`) go to
 `docs/LAUNCH.md` section A for the person.
 
+Three artifact false positives also need an explicit decision naming the check id and complete,
+uncapped evidence. `placeholders.copy` accepts a full-line JavaScript comment only in a
+byte-identical captured vendor script with verified syntax and no ambiguous multiline strings.
+`placeholders.dev-host` accepts only occurrences inside exact iframe `src` values present on the
+same captured page; new preview URLs in copy, links or scripts still block.
+`framework.trailing-slash` accepts exact 200 feed-to-`index.xml` rewrites only when captured and
+built XML bytes match and no earlier wildcard can intercept them. None of these rules changes
+the raw pre-launch report or permits a changed baseline. Include every accepted proof in the PR.
+
 Then the staging deploy (host file; on Vercel: link with the team slug, deploy, take the URL
 from the deploy JSON: the production alias from `deployment.productionUrl`,
 `https://<slug>.vercel.app` when the field is missing, confirmed with one GET that answers 200 with the staging noindex,
