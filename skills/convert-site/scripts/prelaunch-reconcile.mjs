@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNodeVersion } from './lib/node-version.mjs';
 import { pageHead } from './lib/page-head.mjs';
+import { artifactEvidence, capturedFile } from './lib/prelaunch-artifacts.mjs';
 
 const HELP = `Usage: node prelaunch-reconcile.mjs --findings <pre-launch bundle>/gate.json
                                   --baseline baseline --plan docs/plan.md
@@ -53,6 +54,13 @@ Narrow rules that need no decision:
                                   absolute URL, a _redirects line (<dist> or <dir>/public)
                                   "<prefix>* <absolute URL> 200|302", or a Pages Function
                                   under <dir>/functions/: the rewrite serves it
+Additional artifact rules require a decision naming the exact check id and complete evidence:
+  placeholders.copy              a full-line // comment in an unchanged captured vendor script;
+                                  verified syntax, no multiline string/template context
+  placeholders.dev-host          each reported host occurrence is inside an iframe src retained
+                                  exactly from that same captured page (never a new app/script URL)
+  framework.trailing-slash       exact 200 feed/index.xml rewrites serving captured XML bytes;
+                                  redirects, changed feeds and ambiguous rule ordering still block
 output.noindex-utility-pages rows are pages: accepted when live had the same page indexable
 (no noindex in baseline/seo.json) and a decision names the check, or the page and "noindex",
 "robots" or "indexable".
@@ -183,7 +191,21 @@ export function loadBaseline(dir, captureDir = null) {
   const notFoundFile = meta.notFound?.snapshot ? join(captureDir, meta.notFound.snapshot) : null;
   const notFound = notFoundFile && existsSync(notFoundFile) ? pageHead(readFileSync(notFoundFile, 'utf8')) : null;
   const allSeo = notFound ? { ...seo, [NOT_FOUND]: notFound } : seo;
+  const scripts = captured('js/manifest.json', []);
+  const feeds = captured('feeds/index.json', []);
   return {
+    html(path) {
+      const page = byNormal.get(normalizePath(path));
+      return capturedFile(captureDir, page ? snapshots.get(page) : path === '/404.html' ? meta.notFound?.snapshot : null)?.toString('utf8') ?? null;
+    },
+    assetBytes(path) {
+      const script = scripts.find((s) => pathnameOf(s.src) === path && s.file);
+      return script ? capturedFile(captureDir, `js/${script.file}`) : null;
+    },
+    feedBytes(path) {
+      const feed = feeds.find((f) => f.path === path && f.status === 200 && f.file);
+      return feed ? capturedFile(captureDir, feed.file) : null;
+    },
     // The baseline's own spelling of a build path, or null when live had no such page. The build's
     // 404.html is the captured 404 page.
     page(path) {
@@ -489,6 +511,8 @@ function needsYou(stateFile) {
 }
 
 function narrow(check, env, base, decisions) {
+  const artifact = artifactEvidence(check, env, base, decisionNaming(decisions, [check.id]));
+  if (artifact !== undefined) return artifact;
   const values = check.evidence.map((e) => String(e.value));
   if (check.id === 'hygiene.pushed') {
     const text = values[0] ?? check.detail;
